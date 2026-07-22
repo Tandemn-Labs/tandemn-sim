@@ -1,0 +1,16 @@
+schemaVersion: "2.0"
+random_seed: 104
+
+benchmark:
+  model: ${MODEL_NAME:simulated-chat-model}
+  endpoint: {url: http://preview.invalid/v1/chat/completions, type: chat, streaming: true}
+  tokenizer:
+    name: ${TOKENIZER_NAME:builtin}
+  dataset:
+    type: synthetic
+    entries: 125
+    prompts:
+      isl: {mean: 1024, stddev: 256, min: 256, max: 2048}
+      osl: {mean: 768, stddev: 192, min: 128, max: 1536}
+  phases:
+    - {name: profiling, type: concurrency, concurrency: 1, requests: 1}

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-generation"
+version = "0.1.0"
+description = "Generate request previews from AIPerf workload definitions."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "aiperf==0.11.0",
+]
+
+[project.scripts]
+workloads = "data_generation.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.16",
+  "pre-commit>=4.2",
+  "ruff>=0.12",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = "aiperf.*"
+ignore_missing_imports = true
