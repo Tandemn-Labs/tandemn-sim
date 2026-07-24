@@ -1,0 +1,34 @@
+# Benchmark job: job-benchmark_timing_3hr-32-2
+# Benchmark window: T+32 through T+152. Diurnal traffic with a 2x peak/mean ratio.
+# Priority: STANDARD. SLO: p99 TTFT 500 ms; p99 TPOT 42 ms.
+# Traffic hypothesis: ramp to 88.203 RPS; the full-window ramp yields a 2x peak/mean ratio.
+schemaVersion: "2.0"
+randomSeed: 102
+
+benchmark:
+  model: microsoft/phi-4
+  endpoint:
+    url: http://preview.invalid/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 180
+    connectionReuse: sticky-user-sessions
+  tokenizer:
+    name: ${TOKENIZER_NAME:microsoft/phi-4}
+  dataset:
+    type: synthetic
+    entries: 1000
+    sampling: random
+    prompts:
+      isl: {mean: 1125, median: 844, min: 1, max: 5125}
+      osl: {mean: 420, median: 315, min: 105, max: 1200}
+    prefixPrompts: {poolSize: 32, length: 375}
+    turns: {peaks: [{value: 1, weight: 30}, {value: 4, weight: 70}]}
+  phases:
+    - name: profiling
+      type: poisson
+      duration: 7200
+      rate: 88.203
+      concurrency: 1600
+      rateRamp: 7200
+      gracePeriod: 180

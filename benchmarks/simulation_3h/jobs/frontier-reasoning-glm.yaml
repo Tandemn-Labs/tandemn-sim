@@ -1,0 +1,33 @@
+# Benchmark job: job-benchmark_timing_3hr-67-2
+# Benchmark window: T+67 through T+142. Bursty traffic with a 5x peak/mean ratio.
+# Priority: STANDARD. SLO: p99 TTFT 2200 ms; p99 TPOT 50 ms.
+# Traffic hypothesis: 0.472 mean RPS with highly clustered Gamma arrivals.
+schemaVersion: "2.0"
+randomSeed: 102
+
+benchmark:
+  model: zai-org/GLM-4.5-Air
+  endpoint:
+    url: http://preview.invalid/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 600
+    connectionReuse: pooled
+  tokenizer:
+    name: ${TOKENIZER_NAME:zai-org/GLM-4.5-Air}
+  dataset:
+    type: synthetic
+    entries: 256
+    sampling: random
+    prompts:
+      isl: {mean: 1800, median: 1350, min: 450, max: 6000}
+      osl: {mean: 2500, median: 1875, min: 625, max: 9000}
+    turns: 1
+  phases:
+    - name: profiling
+      type: gamma
+      duration: 4500
+      rate: 0.472
+      smoothness: 0.0625
+      concurrency: 300
+      gracePeriod: 600

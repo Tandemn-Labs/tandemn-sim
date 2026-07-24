@@ -1,0 +1,3 @@
+# Benchmark job: job-benchmark_timing_3hr-160-1
+# Placeholder only: external mock data will drive this batch campaign.
+# T+160 to deadline T+180; Qwen3 30B-A3B; 48 shards x 500 requests.

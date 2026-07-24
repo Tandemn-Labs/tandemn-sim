@@ -1,0 +1,31 @@
+# Benchmark job: job-benchmark_timing_3hr-0-5
+# Benchmark window: T+0 through T+180. Constant traffic with a 1x peak/mean ratio.
+# Priority: STANDARD. SLO: p99 TTFT 120 ms; p99 TPOT 1 ms.
+# Traffic hypothesis: maintain the declared 40,000-request concurrency.
+schemaVersion: "2.0"
+randomSeed: 105
+
+benchmark:
+  model: BAAI/bge-m3
+  endpoint:
+    url: http://preview.invalid/v1/embeddings
+    type: embeddings
+    streaming: false
+    timeout: 120
+    connectionReuse: pooled
+  tokenizer:
+    name: ${TOKENIZER_NAME:BAAI/bge-m3}
+  dataset:
+    type: synthetic
+    entries: 5000
+    sampling: random
+    prompts:
+      isl: {mean: 384, median: 288, min: 96, max: 1024}
+      osl: 0
+      batchSize: 1
+  phases:
+    - name: profiling
+      type: concurrency
+      duration: 10800
+      concurrency: 40000
+      gracePeriod: 120

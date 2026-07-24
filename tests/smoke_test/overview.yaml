@@ -1,0 +1,169 @@
+# Three-minute, low-volume version of the three-hour online simulation.
+schema_version: "benchmark/v1"
+
+benchmark:
+  id: simulation_3h_smoke
+  source_overview: ../../workload_overviews/simulation/benchmark_timing_3hr.md
+  poll_interval_seconds: 1
+  shutdown_grace_seconds: 5
+  hard_stop_at_offset_minutes: 3.25
+
+jobs:
+  terminal-request-sink:
+    enabled: true
+    output_to_terminal: true
+    kind: online
+    driver: external_mock_data
+    config: print_sink.py
+    command:
+      - .venv/bin/python
+      - tests/smoke_test/print_sink.py
+    start_at_offset_minutes: 0
+    stop_at_offset_minutes: 3.1
+
+  job-benchmark_timing_3hr-0-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/chat-free-core.yaml
+    start_at_offset_minutes: 0.05
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-0-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/chat-premium-core.yaml
+    start_at_offset_minutes: 0.05
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-0-3:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/code-autocomplete-core.yaml
+    start_at_offset_minutes: 0.05
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-0-4:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/safety-moderation-core.yaml
+    start_at_offset_minutes: 0.05
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-0-5:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/embeddings-core.yaml
+    start_at_offset_minutes: 0.05
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-7-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/search-rag.yaml
+    start_at_offset_minutes: 0.1667
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-7-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/search-rerank.yaml
+    start_at_offset_minutes: 0.1667
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-7-3:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/support-assistant.yaml
+    start_at_offset_minutes: 0.1667
+    stop_at_offset_minutes: 3.05
+
+  job-benchmark_timing_3hr-32-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/code-morning-burst.yaml
+    parent_job_id: job-benchmark_timing_3hr-0-3
+    start_at_offset_minutes: 0.5833
+    stop_at_offset_minutes: 1.5
+
+  job-benchmark_timing_3hr-32-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/enterprise-chat.yaml
+    start_at_offset_minutes: 0.5833
+    stop_at_offset_minutes: 2.5833
+
+  job-benchmark_timing_3hr-49-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/product-launch-chat.yaml
+    parent_job_id: job-benchmark_timing_3hr-0-1
+    start_at_offset_minutes: 0.8667
+    stop_at_offset_minutes: 1.45
+
+  job-benchmark_timing_3hr-49-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/product-launch-moderation.yaml
+    parent_job_id: job-benchmark_timing_3hr-0-4
+    start_at_offset_minutes: 0.8667
+    stop_at_offset_minutes: 1.45
+
+  job-benchmark_timing_3hr-67-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/premium-agents-kimi.yaml
+    start_at_offset_minutes: 1.1667
+    stop_at_offset_minutes: 2.6667
+
+  job-benchmark_timing_3hr-67-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/frontier-reasoning-glm.yaml
+    start_at_offset_minutes: 1.1667
+    stop_at_offset_minutes: 2.4167
+
+  job-benchmark_timing_3hr-67-3:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/moe-routing-qwen3.yaml
+    start_at_offset_minutes: 1.1667
+    stop_at_offset_minutes: 2.4167
+
+  job-benchmark_timing_3hr-100-2:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/safety-p0-live.yaml
+    start_at_offset_minutes: 1.7167
+    stop_at_offset_minutes: 2.55
+
+  job-benchmark_timing_3hr-125-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/meeting-summary.yaml
+    start_at_offset_minutes: 2.1333
+    stop_at_offset_minutes: 2.8833
+
+  job-benchmark_timing_3hr-145-1:
+    enabled: true
+    kind: online
+    driver: aiperf
+    config: jobs/legal-finance-review.yaml
+    start_at_offset_minutes: 2.4667
+    stop_at_offset_minutes: 3.05

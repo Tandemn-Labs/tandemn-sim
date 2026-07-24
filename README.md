@@ -1,117 +1,95 @@
-# AIPerf workload generator
+# AIPerf benchmark controller
 
-This project uses AIPerf to generate mock chat requests and logs them as JSON.
-It does not send requests to an endpoint yet.
+The controller runs one benchmark. A benchmark is an overview YAML plus the job
+YAMLs it references.
 
-## First-time setup
+## Structure
 
-Run these commands from the `data-generation` folder:
-
-```bash
-uv sync
+```text
+src/data_generation/controller.py
+benchmarks/
+  simulation_3h/
+    overview.yaml
+    jobs/
+      chat-free-core.yaml
+      ...
 ```
 
-`uv sync` creates the virtual environment and installs AIPerf and the project.
-You do not need to run `source .venv/bin/activate` when using `uv run`.
+`controller.py` is the only entrypoint. It starts the benchmark clock, reads the
+overview, launches each job at its scheduled offset, stops jobs at their end
+offset, and owns every child process.
 
-## Generate requests
+`overview.yaml` defines the benchmark ID, timing, and complete job list. Each
+job points to one YAML under that benchmark's `jobs/` directory. Online job
+files are AIPerf configurations. Batch job files remain placeholders until
+their dataset senders are supplied.
 
-Generate five requests from workload 1:
+Adding another benchmark follows the same layout:
 
-```bash
-uv run workloads generate chat-job-1
+```text
+benchmarks/simulation_6h/overview.yaml
+benchmarks/simulation_6h/jobs/*.yaml
 ```
 
-Generate a specific number:
+No Python changes are required when the new overview follows the
+`benchmark/v1` schema.
 
-```bash
-uv run workloads generate chat-job-1 --count 100
+## Runtime state
+
+Every controller tick writes:
+
+```text
+artifacts/<benchmark-id>/runs.json
+artifacts/<benchmark-id>/<run-id>/benchmark_state.json
 ```
 
-Show complete prompts instead of 200-character previews:
+`runs.json` is the lightweight index of runs for that benchmark.
+`benchmark_state.json` is the durable snapshot of the controller's in-memory
+Python state. It contains benchmark
+elapsed time, benchmark milestones, and a `jobs` array containing each job's
+state, start, pause, resume, completion, launch count, runtime, and exit code.
+
+## Run
+
+Validate the default `simulation_3h` benchmark:
 
 ```bash
-uv run workloads generate chat-job-1 --count 5 --full-prompt
+uv run controller --validate-only
 ```
 
-Use another workload by changing the job name:
+Run it:
 
 ```bash
-uv run workloads generate chat-job-2
-uv run workloads generate chat-job-3
-uv run workloads generate chat-job-4
-uv run workloads generate chat-job-5
+uv run controller simulation_3h
 ```
 
-Stop generation with `Ctrl+C`.
-
-## Help and validation
-
-Show the available command:
+Run the smoke benchmark:
 
 ```bash
-uv run workloads --help
+uv run controller tests/smoke_test/overview.yaml
 ```
 
-Show the options for `generate`:
+Stop with `Ctrl+C`. The controller sends `SIGINT` to every active process group,
+waits for the benchmark's shutdown grace period, then force-stops anything
+remaining. Active jobs are recorded as paused.
+
+Resume using the run ID printed at startup:
 
 ```bash
-uv run workloads generate --help
+uv run controller simulation_3h --resume <run-id>
 ```
 
-Validate a workload after editing it:
+Paused wall-clock time does not advance the benchmark. Completed jobs are not
+replayed, paused jobs restart for their remaining scheduled window, and future
+jobs remain pending. AIPerf restarts a paused generator; it does not restore an
+individual in-memory request or session midway through generation.
+
+## Checks
 
 ```bash
-uv run aiperf config validate workloads/chat-job-1.yaml
-```
-
-Run the code-quality checks:
-
-```bash
-uv run ruff check src
-uv run ruff format --check src
+uv run ruff check src tests
+uv run ruff format --check src tests
 uv run mypy src
+uv run python -m unittest discover -s tests
 uv run pre-commit run --all-files
 ```
-
-## KV-cache-oriented requests
-
-`workloads/chat-job-1.yaml` includes request-shape settings that encourage KV
-cache reuse:
-
-```yaml
-connectionReuse: sticky-user-sessions
-
-prefixPrompts:
-  sharedSystemLength: 512
-  userContextLength: 256
-
-turns: {mean: 6, stddev: 2, min: 2, max: 12}
-```
-
-- `sharedSystemLength` gives every session the same 512-token starting prefix.
-- `userContextLength` gives each session a 256-token context reused by its turns.
-- `turns` creates multi-turn sessions with recurring context.
-- `sticky-user-sessions` asks AIPerf to keep a session on the same connection
-  when it eventually sends traffic.
-
-These settings create cacheable similarity; they do not enable a KV cache.
-Cache capacity, eviction, TTL, and hit behavior belong to the active endpoint or
-simulator.
-
-The current command prints request shapes immediately. The three-hour traffic
-phase in the YAML is retained for a future sender, but this preview command does
-not wait three hours or reproduce its arrival timing.
-
-## Use from Python
-
-The same generator can be called without the CLI:
-
-```python
-from data_generation import generate
-
-generate("chat-job-1", count=100, full_prompt=False)
-```
-
-Edit the workload behavior in `workloads/chat-job-1.yaml`. The full parameter
-reference is in `workloads/00-PARAMETERS.md`.

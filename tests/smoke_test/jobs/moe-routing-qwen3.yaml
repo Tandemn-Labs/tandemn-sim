@@ -1,0 +1,33 @@
+# Benchmark job: job-benchmark_timing_3hr-67-3
+# Benchmark window: T+67 through T+142. Bursty traffic with a 5x peak/mean ratio.
+# Priority: STANDARD. SLO: p99 TTFT 1000 ms; p99 TPOT 45 ms.
+# Smoke traffic: 1 mean RPS with the production Gamma burst shape.
+schemaVersion: "2.0"
+randomSeed: 103
+
+benchmark:
+  model: Qwen/Qwen3-30B-A3B-Instruct
+  endpoint:
+    url: http://127.0.0.1:8765/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 300
+    connectionReuse: pooled
+  tokenizer:
+    name: builtin
+  dataset:
+    type: synthetic
+    entries: 512
+    sampling: random
+    prompts:
+      isl: {mean: 1200, median: 900, min: 300, max: 4096}
+      osl: {mean: 900, median: 675, min: 225, max: 3000}
+    turns: 1
+  phases:
+    - name: profiling
+      type: gamma
+      duration: 75
+      rate: 1.0
+      smoothness: 0.0625
+      concurrency: 2
+      gracePeriod: 5

@@ -1,0 +1,33 @@
+# Benchmark job: job-benchmark_timing_3hr-100-2
+# Benchmark window: T+100 through T+150. Bursty traffic with a 3x peak/mean ratio.
+# Priority: HIGH. SLO: p99 TTFT 350 ms; p99 TPOT 40 ms.
+# Traffic hypothesis: 123.457 mean RPS with clustered Gamma arrivals.
+schemaVersion: "2.0"
+randomSeed: 102
+
+benchmark:
+  model: microsoft/phi-4
+  endpoint:
+    url: http://preview.invalid/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 180
+    connectionReuse: pooled
+  tokenizer:
+    name: ${TOKENIZER_NAME:microsoft/phi-4}
+  dataset:
+    type: synthetic
+    entries: 1500
+    sampling: random
+    prompts:
+      isl: {mean: 900, median: 675, min: 225, max: 3000}
+      osl: {mean: 160, median: 120, min: 40, max: 600}
+    turns: 1
+  phases:
+    - name: profiling
+      type: gamma
+      duration: 3000
+      rate: 123.457
+      smoothness: 0.25
+      concurrency: 2500
+      gracePeriod: 180

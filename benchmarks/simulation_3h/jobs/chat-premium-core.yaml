@@ -1,0 +1,34 @@
+# Benchmark job: job-benchmark_timing_3hr-0-2
+# Benchmark window: T+0 through T+180. Diurnal traffic with a 2x peak/mean ratio.
+# Priority: HIGH. SLO: p99 TTFT 600 ms; p99 TPOT 38 ms.
+# Traffic hypothesis: ramp to 45.918 RPS; the full-window ramp yields a 2x peak/mean ratio.
+schemaVersion: "2.0"
+randomSeed: 102
+
+benchmark:
+  model: meta-llama/Llama-3.3-70B-Instruct
+  endpoint:
+    url: http://preview.invalid/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 300
+    connectionReuse: sticky-user-sessions
+  tokenizer:
+    name: ${TOKENIZER_NAME:meta-llama/Llama-3.3-70B-Instruct}
+  dataset:
+    type: synthetic
+    entries: 1000
+    sampling: random
+    prompts:
+      isl: {mean: 900, median: 675, min: 1, max: 3796}
+      osl: {mean: 500, median: 375, min: 125, max: 1400}
+    prefixPrompts: {poolSize: 32, length: 300}
+    turns: {peaks: [{value: 1, weight: 30}, {value: 4, weight: 70}]}
+  phases:
+    - name: profiling
+      type: poisson
+      duration: 10800
+      rate: 45.918
+      concurrency: 900
+      rateRamp: 10800
+      gracePeriod: 300

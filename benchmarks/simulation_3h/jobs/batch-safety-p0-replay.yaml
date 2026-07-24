@@ -1,0 +1,3 @@
+# Benchmark job: job-benchmark_timing_3hr-100-1
+# Placeholder only: external mock data will drive this batch campaign.
+# T+100 to deadline T+160; Llama 3.3 70B; 40 shards x 200 requests.

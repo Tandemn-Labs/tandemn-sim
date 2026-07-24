@@ -1,0 +1,33 @@
+# Benchmark job: job-benchmark_timing_3hr-7-2
+# Benchmark window: T+7 through T+180. Bursty traffic with a 3.5x peak/mean ratio.
+# Priority: STANDARD. SLO: p99 TTFT 160 ms; p99 TPOT 1 ms.
+# Traffic hypothesis: 17,746.229 mean RPS with clustered Gamma arrivals.
+schemaVersion: "2.0"
+randomSeed: 102
+
+benchmark:
+  model: BAAI/bge-reranker-v2-m3
+  endpoint:
+    url: http://preview.invalid/rerank
+    type: hf_tei_rankings
+    streaming: false
+    timeout: 120
+    connectionReuse: pooled
+  tokenizer:
+    name: ${TOKENIZER_NAME:BAAI/bge-reranker-v2-m3}
+  dataset:
+    type: synthetic
+    entries: 2000
+    sampling: random
+    rankings:
+      passages: 8
+      passageTokens: {mean: 60, median: 45, min: 12, max: 252}
+      queryTokens: 32
+  phases:
+    - name: profiling
+      type: gamma
+      duration: 10380
+      rate: 17746.229
+      smoothness: 0.16
+      concurrency: 10000
+      gracePeriod: 120

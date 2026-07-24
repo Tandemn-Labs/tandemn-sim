@@ -1,0 +1,33 @@
+# Benchmark job: job-benchmark_timing_3hr-67-1
+# Benchmark window: T+67 through T+157. Bursty traffic with a 5x peak/mean ratio.
+# Priority: HIGH. SLO: p99 TTFT 2500 ms; p99 TPOT 45 ms.
+# Smoke traffic: keep the production 0.300 mean RPS and Gamma burst shape.
+schemaVersion: "2.0"
+randomSeed: 101
+
+benchmark:
+  model: moonshotai/Kimi-K2-Instruct
+  endpoint:
+    url: http://127.0.0.1:8765/v1/chat/completions
+    type: chat
+    streaming: true
+    timeout: 900
+    connectionReuse: sticky-user-sessions
+  tokenizer:
+    name: builtin
+  dataset:
+    type: synthetic
+    entries: 256
+    sampling: random
+    prompts:
+      isl: {mean: 1400, median: 1050, min: 350, max: 4096}
+      osl: {mean: 4096, median: 3072, min: 1024, max: 12000}
+    turns: 1
+  phases:
+    - name: profiling
+      type: gamma
+      duration: 90
+      rate: 0.300
+      smoothness: 0.0625
+      concurrency: 2
+      gracePeriod: 5
