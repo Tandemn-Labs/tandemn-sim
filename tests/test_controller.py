@@ -11,9 +11,13 @@ from unittest import mock
 import yaml
 
 from data_generation.controller import (
+    Job,
+    JobKind,
     JobState,
+    RunningJob,
     load_benchmark,
     run_benchmark,
+    sync_job_records,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,10 +122,12 @@ class ControllerTests(unittest.TestCase):
             checkpoint_path = (
                 root
                 / "artifacts"
+                / "benchmarks"
                 / "test-benchmark"
                 / "resume-test"
                 / "benchmark_state.json"
             )
+            job_path = checkpoint_path.parent / "jobs" / "test-job"
             state = json.loads(checkpoint_path.read_text())
             saved_job = state["jobs"][0]
 
@@ -131,6 +137,63 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(saved_job["launch_count"], 2)
             self.assertIsNotNone(saved_job["paused_at"])
             self.assertIsNotNone(saved_job["resumed_at"])
+            self.assertTrue((job_path / "prompts.jsonl").is_file())
+            self.assertTrue((job_path / "responses.jsonl").is_file())
+
+    def test_aiperf_raw_records_are_split_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            run_directory = Path(temporary_directory)
+            job_path = run_directory / "jobs" / "online-job"
+            raw_path = job_path / "raw_records" / "raw_records_worker.jsonl"
+            raw_path.parent.mkdir(parents=True)
+            raw_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {
+                            "x_request_id": "request-1",
+                            "request_start_ns": 1_750_000_000_000_000_000,
+                            "request_end_ns": 1_750_000_001_000_000_000,
+                        },
+                        "payload": {"messages": [{"content": "hello"}]},
+                        "status": 200,
+                        "responses": [{"content": "world"}],
+                        "error": None,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            item = RunningJob(
+                job=Job(
+                    job_id="online-job",
+                    enabled=True,
+                    output_to_terminal=False,
+                    kind=JobKind.ONLINE,
+                    driver="aiperf",
+                    config=run_directory / "job.yaml",
+                    command=None,
+                    start_minute=0,
+                    stop_minute=1,
+                    deadline_minute=None,
+                    hard_stop_minute=1,
+                    parent_job_id=None,
+                ),
+                state=JobState.RUNNING,
+            )
+
+            sync_job_records(item, run_directory)
+            sync_job_records(item, run_directory)
+            resumed_item = RunningJob(job=item.job, state=JobState.RUNNING)
+            sync_job_records(resumed_item, run_directory)
+
+            prompts = read_jsonl(job_path / "prompts.jsonl")
+            responses = read_jsonl(job_path / "responses.jsonl")
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(prompts[0]["request_id"], "request-1")
+            self.assertEqual(responses[0]["request_id"], "request-1")
+            self.assertEqual(prompts[0]["request"]["messages"][0]["content"], "hello")
+            self.assertEqual(responses[0]["response"][0]["content"], "world")
 
 
 def write_benchmark(
@@ -175,6 +238,15 @@ def write_benchmark(
         )
     )
     return overview_path
+
+
+def read_jsonl(path: Path) -> list[dict[str, object]]:
+    """Read a JSONL artifact into records."""
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
 
 
 if __name__ == "__main__":

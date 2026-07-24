@@ -1,3 +1,28 @@
-# Benchmark job: job-benchmark_timing_3hr-15-3
-# Placeholder only: external mock data will drive this batch campaign.
-# T+15 to deadline T+120; Phi-4; 36 shards x 500 requests.
+# job-benchmark_timing_3hr-15-3
+schema_version: "batch-dataset/v1"
+
+dataset:
+  id: quant_probe_phi4
+  model: microsoft/phi-4
+  endpoint: /v1/chat/completions
+  request_format: chat
+  record_count: 18000
+  seed: 203
+
+  partitioning:
+    shard_count: 36
+    requests_per_shard: 500
+
+  io:
+    input_tokens:
+      distribution: lognormal
+      minimum: 250
+      average: 1000
+      maximum: 4096
+      sigma: 0.8
+    output_tokens:
+      distribution: lognormal
+      minimum: 128
+      average: 512
+      maximum: 2048
+      sigma: 0.8

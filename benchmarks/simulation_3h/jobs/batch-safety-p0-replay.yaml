@@ -1,3 +1,28 @@
-# Benchmark job: job-benchmark_timing_3hr-100-1
-# Placeholder only: external mock data will drive this batch campaign.
-# T+100 to deadline T+160; Llama 3.3 70B; 40 shards x 200 requests.
+# job-benchmark_timing_3hr-100-1
+schema_version: "batch-dataset/v1"
+
+dataset:
+  id: abuse_incident_replay
+  model: meta-llama/Llama-3.3-70B-Instruct
+  endpoint: /v1/chat/completions
+  request_format: chat
+  record_count: 8000
+  seed: 205
+
+  partitioning:
+    shard_count: 40
+    requests_per_shard: 200
+
+  io:
+    input_tokens:
+      distribution: lognormal
+      minimum: 550
+      average: 2200
+      maximum: 8000
+      sigma: 0.8
+    output_tokens:
+      distribution: lognormal
+      minimum: 175
+      average: 700
+      maximum: 2500
+      sigma: 0.8

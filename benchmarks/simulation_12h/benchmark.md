@@ -1,23 +1,62 @@
-# benchmark_timing_real_12hr_160gpu_tpu.md
+# Simulation 12-hour benchmark
 
-Benchmark name: `KoiBench-Real-12h-160GPU-TPU-Mid`
+Benchmark ID: `simulation_12h`
 
-Purpose: synthetic workload replay on a real-cluster mid-length benchmark for the 160 GPU + TPU fleet. This run is long enough to show persistent APIs, regional ramps, batch deadlines, frontier arrivals, quantization choices, LMCache behavior, and low-churn adaptation.
+Purpose: mid-size Koi/Tandemn benchmark for iteration before the paper trace. This 12 hour trace has persistent online APIs, regional ramps, deadline batch campaigns, a canary/regression probe, quantization profiling, a product-launch burst, a P0 incident, and frontier/MoE arrivals.
+
+Benchmark name: `KoiBench-12h-ReservedFleet-Mid`
 
 Horizon: 720 minutes
 
 Tick: 5 minutes
 
-Engine: `vllm` behind Dynamo-style serving
-
 Markets: `reserved`, `on_demand`
+
+Engine: `vllm` behind Dynamo-style serving
 
 Serving mode: aggregate serving with LMCache, no prefill/decode disaggregation
 
-Real fleet target: 160 GPUs + 32 TPU chips = 192 accelerator units
+Regions: `us-east`, `eu-west`, `apac`
+
+Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`, `TPU-v5e`
+
+Model catalog: `Qwen/Qwen2.5-1.5B-Instruct`, `meta-llama/Llama-3.1-8B-Instruct`, `microsoft/phi-4`, `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen2.5-72B-Instruct`, `Qwen/Qwen3-30B-A3B-Instruct`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-m3`, `BAAI/bge-reranker-v2-m3`
+
+## Frozen Cluster Resources
+
+Maximum provisioned capacity: **368 GPUs + 32 TPU chips = 400 typed accelerator devices**. This is exactly 2x the 3-hour simulation fleet.
+
+| Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
+|---|---:|---:|---:|---:|---:|
+| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 8 | 48 | 16 | 64 |
+| `A100-SXM-80GB` | 8 GPUs, NVLink | 8 | 48 | 16 | 64 |
+| `A100-PCIe-40GB` | 8 GPUs, PCIe | 4 | 16 | 16 | 32 |
+| `A10G-24GB` | 8 GPUs, PCIe | 12 | 64 | 32 | 96 |
+| `L40S-48GB` | 8 GPUs, PCIe | 10 | 64 | 16 | 80 |
+| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 4 | 16 | 16 | 32 |
+| `TPU-v5e` | 8-chip slice, ICI | 4 | 16 | 16 | 32 |
+| **Total** |  | **50** | **272** | **128** | **400** |
+
+| Accelerator | `us-east` | `eu-west` | `apac` | Total |
+|---|---:|---:|---:|---:|
+| H100 | 32 | 16 | 16 | 64 |
+| A100-SXM | 32 | 16 | 16 | 64 |
+| A100-PCIe | 16 | 16 | 0 | 32 |
+| A10G | 48 | 32 | 16 | 96 |
+| L40S | 32 | 32 | 16 | 80 |
+| MI300X | 16 | 16 | 0 | 32 |
+| TPU-v5e | 16 | 0 | 16 | 32 |
+| **Region total** | **192** | **128** | **80** | **400** |
+
+Network caps: 400 Gbps RDMA between H100/A100-SXM/MI300X nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes; TPU ICI inside each slice. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
+
+Inactive in this manifest: TPU-v5p, Inferentia2, and Trainium2.
 
 
 
+## Simulation Independence Gate
+
+The environment emulator used to realize latency and throughput must be independently calibrated from the surrogate exposed to Koi. Test residuals, perturbations, and held-out model/engine shifts must remain hidden from every planner.
 ## Canonical Lifecycle Contract
 
 Schema: `koibench/v1`
@@ -26,11 +65,11 @@ Dispatch: releases occur at their exact offset. A job arrival triggers the admis
 
 Online lifecycle: `active_start_at_offset_minutes` and `active_end_at_offset_minutes` define a half-open traffic window. `duration_minutes` is retained only as a consistency check. At the end offset the load generator stops new requests, drains in-flight requests, and the executor records `terminal_at`.
 
-Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the workload.
+Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
 
 Overlap: `base_service` remains active, `additive_stream` adds demand to an existing service, and `replace_service` identifies a model/service replacement. Overlap is intentional and additive unless explicitly marked as replacement.
 
-Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized workload features. Hardware placement and market preferences are deliberately absent from job inputs.
+Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized job features. Hardware placement and market preferences are deliberately absent from job inputs.
 
 Traffic: `max_concurrent_streaming` is the sole authoritative submitted traffic field. `request_arrival_rate` is omitted so Orca selects concurrency mode and derives request rate. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
 
@@ -38,51 +77,14 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Drain: after minute 720, no new work arrives. A 60-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 
-Exact manifest counts: **20 online jobs**, **13 batch campaigns**, **858 expanded shards**.
+Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expanded shards**.
 
-## Real-Run Capacity Gate
-
-The listed concurrency caps are frozen only after an isolated preflight on the exact engine/model build. Apply one global concurrency multiplier per run so normal offered load consumes 55-65% of measured qualified capacity, business peaks consume 80-90%, and the designated overload burst reaches 105-120%. Freeze that multiplier before comparing systems. TPU results require a validated vLLM-TPU path; otherwise report TPU separately.
-## Frozen Real Cluster Resources
-
-Maximum provisioned capacity: **160 GPUs + 32 TPU chips = 192 typed accelerator devices**. Reserved capacity is pre-provisioned; on-demand capacity is a hard launch quota.
-
-| Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
-|---|---:|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
-| `A100-SXM-80GB` | 8 GPUs, NVLink | 4 | 24 | 8 | 32 |
-| `A100-PCIe-40GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
-| `A10G-24GB` | 8 GPUs, PCIe | 4 | 24 | 8 | 32 |
-| `L40S-48GB` | 8 GPUs, PCIe | 4 | 24 | 8 | 32 |
-| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 2 | 8 | 8 | 16 |
-| `TPU-v5e` | 8-chip slice, ICI | 4 | 24 | 8 | 32 |
-| **Total** |  | **24** | **136** | **56** | **192** |
-
-| Accelerator | `us-east` | `eu-west` | `apac` | Total |
-|---|---:|---:|---:|---:|
-| H100 | 16 | 8 | 8 | 32 |
-| A100-SXM | 16 | 8 | 8 | 32 |
-| A100-PCIe | 8 | 8 | 0 | 16 |
-| A10G | 16 | 8 | 8 | 32 |
-| L40S | 16 | 8 | 8 | 32 |
-| MI300X | 8 | 8 | 0 | 16 |
-| TPU-v5e | 16 | 8 | 8 | 32 |
-| **Region total** | **96** | **56** | **40** | **192** |
-
-| Region | Reserved Devices | On-Demand Cap | Total Devices |
-|---|---:|---:|---:|
-| `us-east` | 80 | 16 | 96 |
-| `eu-west` | 32 | 24 | 56 |
-| `apac` | 24 | 16 | 40 |
-
-Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A100-PCIe/A10G/L40S nodes; TPU ICI within each slice. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
-
-## T+00:00 - Always-On APIs
+## T+00:00 - Always-on APIs across three regions
 
 ```json
 {
     "submit_at_offset_minutes":  0,
-    "description":  "persistent APIs warm across regions",
+    "description":  "baseline always-on product APIs in all regions",
     "jobs":  [
                  {
                      "user_id":  "tenant_chat_free",
@@ -105,7 +107,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  3600,
+                                                            "max_concurrent_streaming":  16000,
                                                             "target_p99_ttft_ms":  700,
                                                             "target_p99_tpot_ms":  55
                                                         }
@@ -114,21 +116,21 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_free_chat_us",
+                                          "prompt_dataset_id":  "chat_us",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  3600,
+                                          "max_concurrent_streaming":  16000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-1",
+                     "job_id":  "job-benchmark_timing_12hr-0-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  720,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-1"
+                                      "service_id":  "service-benchmark_timing_12hr-0-1"
                                   }
                  },
                  {
@@ -152,7 +154,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  2000,
+                                                            "max_concurrent_streaming":  10000,
                                                             "target_p99_ttft_ms":  750,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -161,21 +163,21 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_free_chat_eu",
+                                          "prompt_dataset_id":  "chat_eu",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  2000,
+                                          "max_concurrent_streaming":  10000,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-2",
+                     "job_id":  "job-benchmark_timing_12hr-0-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  720,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-2"
+                                      "service_id":  "service-benchmark_timing_12hr-0-2"
                                   }
                  },
                  {
@@ -199,30 +201,30 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  300,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  220,
-                                                            "target_p99_ttft_ms":  650,
-                                                            "target_p99_tpot_ms":  40
+                                                            "max_concurrent_streaming":  1200,
+                                                            "target_p99_ttft_ms":  600,
+                                                            "target_p99_tpot_ms":  38
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_premium_chat",
+                                          "prompt_dataset_id":  "premium_us",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  220,
+                                          "max_concurrent_streaming":  1200,
                                           "seed":  103
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-3",
+                     "job_id":  "job-benchmark_timing_12hr-0-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
-                                      "active_end_at_offset_minutes":  440,
-                                      "duration_minutes":  440,
+                                      "active_end_at_offset_minutes":  485,
+                                      "duration_minutes":  485,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-3"
+                                      "service_id":  "service-benchmark_timing_12hr-0-3"
                                   }
                  },
                  {
@@ -246,7 +248,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  1100,
+                                                            "max_concurrent_streaming":  6000,
                                                             "target_p99_ttft_ms":  180,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -255,25 +257,25 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_code_base",
+                                          "prompt_dataset_id":  "code_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  1100,
+                                          "max_concurrent_streaming":  6000,
                                           "seed":  104
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-4",
+                     "job_id":  "job-benchmark_timing_12hr-0-4",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  720,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-4"
+                                      "service_id":  "service-benchmark_timing_12hr-0-4"
                                   }
                  },
                  {
-                     "user_id":  "tenant_moderation_p0",
+                     "user_id":  "tenant_safety_moderation",
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
@@ -287,13 +289,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "osl_token_max":  32,
                                                             "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3,
+                                                            "peak_to_mean_ratio":  3.5,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  11000,
+                                                            "max_concurrent_streaming":  35000,
                                                             "target_p99_ttft_ms":  100,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -302,21 +304,21 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_moderation",
+                                          "prompt_dataset_id":  "moderation_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  11000,
+                                          "max_concurrent_streaming":  35000,
                                           "seed":  105
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-5",
+                     "job_id":  "job-benchmark_timing_12hr-0-5",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  720,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-5"
+                                      "service_id":  "service-benchmark_timing_12hr-0-5"
                                   }
                  },
                  {
@@ -340,7 +342,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  15000,
+                                                            "max_concurrent_streaming":  60000,
                                                             "target_p99_ttft_ms":  120,
                                                             "target_p99_tpot_ms":  1
                                                         }
@@ -349,35 +351,35 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/embeddings",
-                                          "prompt_dataset_id":  "real_12h_embeddings",
+                                          "prompt_dataset_id":  "embeddings_us",
                                           "request_arrival_pattern":  "Constant",
-                                          "max_concurrent_streaming":  15000,
+                                          "max_concurrent_streaming":  60000,
                                           "seed":  106
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-0-6",
+                     "job_id":  "job-benchmark_timing_12hr-0-6",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  720,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-6"
+                                      "service_id":  "service-benchmark_timing_12hr-0-6"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-0"
+    "event_id":  "event-benchmark_timing_12hr-0"
 }
 ```
 
-## T+00:10 - Nightly Eval and Backfill
+## T+00:10 - Nightly evaluation campaigns
 
 ```json
 {
     "submit_at_offset_minutes":  10,
-    "description":  "deadline batch begins after online warmup",
+    "description":  "nightly eval shards arrive after warm start",
     "jobs":  [
                  {
                      "user_id":  "tenant_eval_platform",
@@ -399,7 +401,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  48000000,
+                                                            "total_token_budget":  108000000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  7.8333,
                                                             "target_p99_ttft_ms":  10000,
@@ -408,20 +410,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_eval_llama70b",
+                                          "dataset_id":  "nightly_eval_llama70b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  80,
+                                          "shard_count":  180,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
                                            "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-10-1",
+                     "job_id":  "job-benchmark_timing_12hr-10-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  10,
                                       "deadline_at_offset_minutes":  480,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-10-1",
-                                      "shard_count":  80,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-10-1",
+                                      "shard_count":  180,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -447,7 +449,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  42000000,
+                                                            "total_token_budget":  96000000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  7.8333,
                                                             "target_p99_ttft_ms":  10000,
@@ -456,84 +458,85 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_eval_qwen72b",
+                                          "dataset_id":  "nightly_eval_qwen72b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  70,
+                                          "shard_count":  160,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
                                            "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-10-2",
+                     "job_id":  "job-benchmark_timing_12hr-10-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  10,
                                       "deadline_at_offset_minutes":  480,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-10-2",
-                                      "shard_count":  70,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-10-2",
+                                      "shard_count":  160,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
                  },
                  {
-                     "user_id":  "tenant_embeddings",
+                     "user_id":  "tenant_eval_platform",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-m3",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
-                                                            "isl_token_avg":  384,
-                                                            "isl_token_min":  96,
-                                                            "isl_token_max":  1024,
+                                                            "isl_token_avg":  1200,
+                                                            "isl_token_min":  300,
+                                                            "isl_token_max":  4096,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
+                                                            "osl_token_avg":  800,
+                                                            "osl_token_min":  200,
+                                                            "osl_token_max":  2500,
+                                                            "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Constant",
                                                             "peak_to_mean_ratio":  1,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  693000000,
-                                                            "priority_class":  "LOW",
-                                                            "deadline_hrs":  11.8333,
-                                                            "target_p99_ttft_ms":  1000
+                                                            "total_token_budget":  120000000,
+                                                            "priority_class":  "STANDARD",
+                                                            "deadline_hrs":  5.8333,
+                                                            "target_p99_ttft_ms":  8000,
+                                                            "target_p99_tpot_ms":  120
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_embedding_backfill",
+                                          "dataset_id":  "nightly_eval_phi4",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  180,
-                                          "requests_per_shard":  10000
+                                          "shard_count":  120,
+                                          "requests_per_shard":  500
                                       },
                      "output_target":  {
-                                           "sink":  "vector_store"
+                                           "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-10-3",
+                     "job_id":  "job-benchmark_timing_12hr-10-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  10,
-                                      "deadline_at_offset_minutes":  720,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-10-3",
-                                      "shard_count":  180,
-                                      "requests_per_shard":  10000,
+                                      "deadline_at_offset_minutes":  360,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-10-3",
+                                      "shard_count":  120,
+                                      "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-10"
+    "event_id":  "event-benchmark_timing_12hr-10"
 }
 ```
 
-## T+00:45 - Search Pipeline Starts
+## T+00:25 - Search pipeline APIs
 
 ```json
 {
-    "submit_at_offset_minutes":  45,
-    "description":  "RAG, reranker, docs QA, and support services enter",
+    "submit_at_offset_minutes":  25,
+    "description":  "RAG, reranking, docs QA, and support APIs start",
     "jobs":  [
                  {
                      "user_id":  "tenant_search_rag",
@@ -556,7 +559,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  2250,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  850,
+                                                            "max_concurrent_streaming":  4000,
                                                             "target_p99_ttft_ms":  1500,
                                                             "target_p99_tpot_ms":  55
                                                         }
@@ -565,21 +568,21 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_rag_us",
+                                          "prompt_dataset_id":  "rag_us",
                                           "request_arrival_pattern":  "Poisson",
-                                          "max_concurrent_streaming":  850,
+                                          "max_concurrent_streaming":  4000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-45-1",
+                     "job_id":  "job-benchmark_timing_12hr-25-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  45,
+                                      "release_at_offset_minutes":  25,
                                       "active_end_at_offset_minutes":  720,
-                                      "duration_minutes":  675,
+                                      "duration_minutes":  695,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-45-1"
+                                      "service_id":  "service-benchmark_timing_12hr-25-1"
                                   }
                  },
                  {
@@ -603,7 +606,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  3800,
+                                                            "max_concurrent_streaming":  15000,
                                                             "target_p99_ttft_ms":  160,
                                                             "target_p99_tpot_ms":  1
                                                         }
@@ -612,21 +615,68 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/rerank",
-                                          "prompt_dataset_id":  "real_12h_rerank",
+                                          "prompt_dataset_id":  "rerank_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  3800,
+                                          "max_concurrent_streaming":  15000,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-45-2",
+                     "job_id":  "job-benchmark_timing_12hr-25-2",
                      "schedule":  {
-                                      "release_at_offset_minutes":  45,
+                                      "release_at_offset_minutes":  25,
                                       "active_end_at_offset_minutes":  720,
-                                      "duration_minutes":  675,
+                                      "duration_minutes":  695,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-45-2"
+                                      "service_id":  "service-benchmark_timing_12hr-25-2"
+                                  }
+                 },
+                 {
+                     "user_id":  "tenant_docs_qa",
+                     "kind":  "online",
+                     "spec_json":  {
+                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  7000,
+                                                            "isl_token_min":  1750,
+                                                            "isl_token_max":  24000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  300,
+                                                            "osl_token_min":  75,
+                                                            "osl_token_max":  1000,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Poisson",
+                                                            "peak_to_mean_ratio":  2,
+                                                            "workload_prefix_concentration":  0.5,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1750,
+                                                            "is_session_affinity":  false,
+                                                            "priority_class":  "STANDARD",
+                                                            "max_concurrent_streaming":  1800,
+                                                            "target_p99_ttft_ms":  1300,
+                                                            "target_p99_tpot_ms":  55
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "api_load_generator",
+                                          "protocol":  "openai_compatible_http",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "docs_qa",
+                                          "request_arrival_pattern":  "Poisson",
+                                          "max_concurrent_streaming":  1800,
+                                          "seed":  103
+                                      },
+                     "output_target":  {
+                                           "sink":  "metrics"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-25-3",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  25,
+                                      "active_end_at_offset_minutes":  645,
+                                      "duration_minutes":  620,
+                                      "operation":  "base_service",
+                                      "service_id":  "service-benchmark_timing_12hr-25-3"
                                   }
                  },
                  {
@@ -650,7 +700,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  350,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  1100,
+                                                            "max_concurrent_streaming":  6000,
                                                             "target_p99_ttft_ms":  700,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -659,35 +709,143 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_support",
+                                          "prompt_dataset_id":  "support",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  1100,
-                                          "seed":  103
+                                          "max_concurrent_streaming":  6000,
+                                          "seed":  104
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-45-3",
+                     "job_id":  "job-benchmark_timing_12hr-25-4",
                      "schedule":  {
-                                      "release_at_offset_minutes":  45,
+                                      "release_at_offset_minutes":  25,
                                       "active_end_at_offset_minutes":  720,
-                                      "duration_minutes":  675,
+                                      "duration_minutes":  695,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-45-3"
+                                      "service_id":  "service-benchmark_timing_12hr-25-4"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-45"
+    "event_id":  "event-benchmark_timing_12hr-25"
 }
 ```
 
-## T+01:30 - Synthetic Teacher and Quant Probes
+## T+00:45 - Backfill and index refresh
+
+```json
+{
+    "submit_at_offset_minutes":  45,
+    "description":  "throughput-heavy embedding backfill and long-input RAG refresh",
+    "jobs":  [
+                 {
+                     "user_id":  "tenant_embeddings",
+                     "kind":  "batch",
+                     "spec_json":  {
+                                       "model_id":  "BAAI/bge-m3",
+                                       "job_features":  {
+                                                            "isl_token_avg":  384,
+                                                            "isl_token_min":  96,
+                                                            "isl_token_max":  1024,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  1,
+                                                            "osl_token_min":  1,
+                                                            "osl_token_max":  1,
+                                                            "osl_distribution_type":  "Constant",
+                                                            "request_arrival_pattern":  "Constant",
+                                                            "peak_to_mean_ratio":  1,
+                                                            "workload_prefix_concentration":  0,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1,
+                                                            "is_session_affinity":  false,
+                                                            "total_token_budget":  1232000000,
+                                                            "priority_class":  "LOW",
+                                                            "deadline_hrs":  11.25,
+                                                            "target_p99_ttft_ms":  1000
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "dataset",
+                                          "dataset_id":  "embedding_backfill_12h",
+                                          "partitioning":  "fixed_shards",
+                                          "shard_count":  320,
+                                          "requests_per_shard":  10000
+                                      },
+                     "output_target":  {
+                                           "sink":  "vector_store"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-45-1",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  45,
+                                      "deadline_at_offset_minutes":  720,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-45-1",
+                                      "shard_count":  320,
+                                      "requests_per_shard":  10000,
+                                      "expansion_policy":  "required",
+                                      "checkpointable":  true
+                                  }
+                 },
+                 {
+                     "user_id":  "tenant_search_rag",
+                     "kind":  "batch",
+                     "spec_json":  {
+                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  16000,
+                                                            "isl_token_min":  4000,
+                                                            "isl_token_max":  64000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  350,
+                                                            "osl_token_min":  87,
+                                                            "osl_token_max":  1200,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Constant",
+                                                            "peak_to_mean_ratio":  1,
+                                                            "workload_prefix_concentration":  0,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1,
+                                                            "is_session_affinity":  false,
+                                                            "total_token_budget":  261600000,
+                                                            "priority_class":  "STANDARD",
+                                                            "deadline_hrs":  6.25,
+                                                            "target_p99_ttft_ms":  12000,
+                                                            "target_p99_tpot_ms":  160
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "dataset",
+                                          "dataset_id":  "rag_index_refresh",
+                                          "partitioning":  "fixed_shards",
+                                          "shard_count":  160,
+                                          "requests_per_shard":  100
+                                      },
+                     "output_target":  {
+                                           "sink":  "rag_index"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-45-2",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  45,
+                                      "deadline_at_offset_minutes":  420,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-45-2",
+                                      "shard_count":  160,
+                                      "requests_per_shard":  100,
+                                      "expansion_policy":  "required",
+                                      "checkpointable":  true
+                                  }
+                 }
+             ],
+    "schema_version":  "koibench/v1",
+    "event_id":  "event-benchmark_timing_12hr-45"
+}
+```
+
+## T+01:30 - Synthetic teacher generation
 
 ```json
 {
     "submit_at_offset_minutes":  90,
-    "description":  "large batch work plus explicit quantization exploration",
+    "description":  "large-model batch generation fills low-priority capacity",
     "jobs":  [
                  {
                      "user_id":  "tenant_synthetic_data",
@@ -709,7 +867,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  64800000,
+                                                            "total_token_budget":  129600000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  9.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -718,20 +876,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_synthetic_teacher",
+                                          "dataset_id":  "synthetic_teacher_llama70b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  90,
+                                          "shard_count":  180,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
                                            "sink":  "synth_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-90-1",
+                     "job_id":  "job-benchmark_timing_12hr-90-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  90,
                                       "deadline_at_offset_minutes":  660,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-90-1",
-                                      "shard_count":  90,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-90-1",
+                                      "shard_count":  180,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -757,7 +915,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  36288000,
+                                                            "total_token_budget":  60480000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  3.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -766,20 +924,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_quant_probe",
+                                          "dataset_id":  "quant_probe_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  48,
+                                          "shard_count":  80,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
                                            "sink":  "perfdb"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-90-2",
+                     "job_id":  "job-benchmark_timing_12hr-90-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  90,
                                       "deadline_at_offset_minutes":  300,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-90-2",
-                                      "shard_count":  48,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-90-2",
+                                      "shard_count":  80,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -787,16 +945,16 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-90"
+    "event_id":  "event-benchmark_timing_12hr-90"
 }
 ```
 
-## T+02:30 - EU Business Ramp
+## T+02:15 - EU ramp
 
 ```json
 {
-    "submit_at_offset_minutes":  150,
-    "description":  "EU enterprise and RAG demand ramp",
+    "submit_at_offset_minutes":  135,
+    "description":  "EU business traffic ramps before US peak",
     "jobs":  [
                  {
                      "user_id":  "tenant_search_rag",
@@ -819,30 +977,30 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  2500,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  1200,
-                                                            "target_p99_ttft_ms":  1600,
-                                                            "target_p99_tpot_ms":  60
+                                                            "max_concurrent_streaming":  7000,
+                                                            "target_p99_ttft_ms":  1500,
+                                                            "target_p99_tpot_ms":  55
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_eu_rag",
+                                          "prompt_dataset_id":  "eu_rag_ramp",
                                           "request_arrival_pattern":  "Poisson",
-                                          "max_concurrent_streaming":  1200,
+                                          "max_concurrent_streaming":  7000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-150-1",
+                     "job_id":  "job-benchmark_timing_12hr-135-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  150,
-                                      "active_end_at_offset_minutes":  410,
+                                      "release_at_offset_minutes":  135,
+                                      "active_end_at_offset_minutes":  395,
                                       "duration_minutes":  260,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-150-1"
+                                      "service_id":  "service-benchmark_timing_12hr-135-1"
                                   }
                  },
                  {
@@ -866,7 +1024,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  375,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  600,
+                                                            "max_concurrent_streaming":  2200,
                                                             "target_p99_ttft_ms":  500,
                                                             "target_p99_tpot_ms":  42
                                                         }
@@ -875,35 +1033,35 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_eu_enterprise",
+                                          "prompt_dataset_id":  "eu_enterprise_chat",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  600,
+                                          "max_concurrent_streaming":  2200,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-150-2",
+                     "job_id":  "job-benchmark_timing_12hr-135-2",
                      "schedule":  {
-                                      "release_at_offset_minutes":  150,
-                                      "active_end_at_offset_minutes":  450,
+                                      "release_at_offset_minutes":  135,
+                                      "active_end_at_offset_minutes":  435,
                                       "duration_minutes":  300,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-150-2"
+                                      "service_id":  "service-benchmark_timing_12hr-135-2"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-150"
+    "event_id":  "event-benchmark_timing_12hr-135"
 }
 ```
 
-## T+03:30 - Code Peak
+## T+03:00 - Code traffic ramp
 
 ```json
 {
-    "submit_at_offset_minutes":  210,
-    "description":  "TTFT-sensitive code workload peak",
+    "submit_at_offset_minutes":  180,
+    "description":  "code autocomplete becomes the dominant TTFT-sensitive job",
     "jobs":  [
                  {
                      "user_id":  "tenant_code_autocomplete",
@@ -926,7 +1084,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  3000,
+                                                            "max_concurrent_streaming":  24000,
                                                             "target_p99_ttft_ms":  160,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -935,21 +1093,21 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_code_peak",
+                                          "prompt_dataset_id":  "code_peak_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  3000,
+                                          "max_concurrent_streaming":  24000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-210-1",
+                     "job_id":  "job-benchmark_timing_12hr-180-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  210,
-                                      "active_end_at_offset_minutes":  450,
-                                      "duration_minutes":  240,
+                                      "release_at_offset_minutes":  180,
+                                      "active_end_at_offset_minutes":  400,
+                                      "duration_minutes":  220,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-210-1"
+                                      "service_id":  "service-benchmark_timing_12hr-180-1"
                                   }
                  },
                  {
@@ -973,7 +1131,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  650,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  160,
+                                                            "max_concurrent_streaming":  800,
                                                             "target_p99_ttft_ms":  800,
                                                             "target_p99_tpot_ms":  42
                                                         }
@@ -982,35 +1140,142 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_code_chat",
+                                          "prompt_dataset_id":  "code_chat",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  160,
+                                          "max_concurrent_streaming":  800,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-210-2",
+                     "job_id":  "job-benchmark_timing_12hr-180-2",
                      "schedule":  {
-                                      "release_at_offset_minutes":  210,
-                                      "active_end_at_offset_minutes":  450,
+                                      "release_at_offset_minutes":  180,
+                                      "active_end_at_offset_minutes":  420,
                                       "duration_minutes":  240,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-210-2"
+                                      "service_id":  "service-benchmark_timing_12hr-180-2"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-210"
+    "event_id":  "event-benchmark_timing_12hr-180"
 }
 ```
 
-## T+04:30 - Engine Canary and Long-Input RAG Burst
+## T+04:00 - Enterprise peak
 
 ```json
 {
-    "submit_at_offset_minutes":  270,
-    "description":  "canary plus long-input online burst stresses prediction calibration",
+    "submit_at_offset_minutes":  240,
+    "description":  "enterprise chat, legal, finance, and support all contend for workhorse GPUs",
+    "jobs":  [
+                 {
+                     "user_id":  "tenant_enterprise_chat",
+                     "kind":  "online",
+                     "spec_json":  {
+                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  1600,
+                                                            "isl_token_min":  400,
+                                                            "isl_token_max":  6000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  500,
+                                                            "osl_token_min":  125,
+                                                            "osl_token_max":  1600,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Bursty",
+                                                            "peak_to_mean_ratio":  3.5,
+                                                            "workload_prefix_concentration":  0.5,
+                                                            "multi_turn_ratio":  0.7,
+                                                            "shared_prefix_length_avg":  400,
+                                                            "is_session_affinity":  true,
+                                                            "priority_class":  "HIGH",
+                                                            "max_concurrent_streaming":  1000,
+                                                            "target_p99_ttft_ms":  650,
+                                                            "target_p99_tpot_ms":  42
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "api_load_generator",
+                                          "protocol":  "openai_compatible_http",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "enterprise_premium_peak",
+                                          "request_arrival_pattern":  "Bursty",
+                                          "max_concurrent_streaming":  1000,
+                                          "seed":  101
+                                      },
+                     "output_target":  {
+                                           "sink":  "metrics"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-240-1",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  240,
+                                      "active_end_at_offset_minutes":  460,
+                                      "duration_minutes":  220,
+                                      "operation":  "base_service",
+                                      "service_id":  "service-benchmark_timing_12hr-240-1"
+                                  }
+                 },
+                 {
+                     "user_id":  "tenant_legal_finance",
+                     "kind":  "online",
+                     "spec_json":  {
+                                       "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  3000,
+                                                            "isl_token_min":  750,
+                                                            "isl_token_max":  12000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  700,
+                                                            "osl_token_min":  175,
+                                                            "osl_token_max":  2200,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Bursty",
+                                                            "peak_to_mean_ratio":  3.5,
+                                                            "workload_prefix_concentration":  0,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1,
+                                                            "is_session_affinity":  false,
+                                                            "priority_class":  "HIGH",
+                                                            "max_concurrent_streaming":  320,
+                                                            "target_p99_ttft_ms":  1000,
+                                                            "target_p99_tpot_ms":  45
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "api_load_generator",
+                                          "protocol":  "openai_compatible_http",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "legal_finance_peak",
+                                          "request_arrival_pattern":  "Bursty",
+                                          "max_concurrent_streaming":  320,
+                                          "seed":  102
+                                      },
+                     "output_target":  {
+                                           "sink":  "metrics"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-240-2",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  240,
+                                      "active_end_at_offset_minutes":  420,
+                                      "duration_minutes":  180,
+                                      "operation":  "base_service",
+                                      "service_id":  "service-benchmark_timing_12hr-240-2"
+                                  }
+                 }
+             ],
+    "schema_version":  "koibench/v1",
+    "event_id":  "event-benchmark_timing_12hr-240"
+}
+```
+
+## T+05:00 - vLLM/Dynamo canary and regression probes
+
+```json
+{
+    "submit_at_offset_minutes":  300,
+    "description":  "canary jobs exercise engine-version sensitivity and residual calibration",
     "jobs":  [
                  {
                      "user_id":  "tenant_engine_canary",
@@ -1032,34 +1297,47 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  88000000,
+                                                            "total_token_budget":  140800000,
                                                             "priority_class":  "HIGH",
-                                                            "deadline_hrs":  2.5,
+                                                            "deadline_hrs":  2,
                                                             "target_p99_ttft_ms":  8000,
                                                             "target_p99_tpot_ms":  120
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_engine_canary",
+                                          "dataset_id":  "engine_regression_probe",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  40,
+                                          "shard_count":  64,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
                                            "sink":  "perfdb"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-270-1",
+                     "job_id":  "job-benchmark_timing_12hr-300-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  270,
+                                      "release_at_offset_minutes":  300,
                                       "deadline_at_offset_minutes":  420,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-270-1",
-                                      "shard_count":  40,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-300-1",
+                                      "shard_count":  64,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
-                 },
+                 }
+             ],
+    "schema_version":  "koibench/v1",
+    "event_id":  "event-benchmark_timing_12hr-300"
+}
+```
+
+## T+05:30 - Prefill-heavy RAG burst without PD
+
+```json
+{
+    "submit_at_offset_minutes":  330,
+    "description":  "long-input RAG burst stresses batching, LMCache, and TTFT without PD",
+    "jobs":  [
                  {
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
@@ -1081,44 +1359,105 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  4000,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  220,
+                                                            "max_concurrent_streaming":  1400,
                                                             "target_p99_ttft_ms":  1800,
-                                                            "target_p99_tpot_ms":  65
+                                                            "target_p99_tpot_ms":  60
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_rag_long_burst",
+                                          "prompt_dataset_id":  "rag_long_input_burst",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  220,
-                                          "seed":  102
+                                          "max_concurrent_streaming":  1400,
+                                          "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-270-2",
+                     "job_id":  "job-benchmark_timing_12hr-330-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  270,
-                                      "active_end_at_offset_minutes":  360,
-                                      "duration_minutes":  90,
+                                      "release_at_offset_minutes":  330,
+                                      "active_end_at_offset_minutes":  410,
+                                      "duration_minutes":  80,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-270-2"
+                                      "service_id":  "service-benchmark_timing_12hr-330-1"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-270"
+    "event_id":  "event-benchmark_timing_12hr-330"
 }
 ```
 
-## T+06:00 - Product Launch Burst
+## T+06:15 - Legal audit batch
 
 ```json
 {
-    "submit_at_offset_minutes":  360,
-    "description":  "real-size launch burst with enough pressure to require on-demand",
+    "submit_at_offset_minutes":  375,
+    "description":  "strict quality batch cannot use aggressive low precision",
+    "jobs":  [
+                 {
+                     "user_id":  "tenant_legal_finance",
+                     "kind":  "batch",
+                     "spec_json":  {
+                                       "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  8000,
+                                                            "isl_token_min":  2000,
+                                                            "isl_token_max":  32000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  600,
+                                                            "osl_token_min":  150,
+                                                            "osl_token_max":  2000,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Constant",
+                                                            "peak_to_mean_ratio":  1,
+                                                            "workload_prefix_concentration":  0,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1,
+                                                            "is_session_affinity":  false,
+                                                            "total_token_budget":  154800000,
+                                                            "priority_class":  "HIGH",
+                                                            "deadline_hrs":  3.75,
+                                                            "target_p99_ttft_ms":  10000,
+                                                            "target_p99_tpot_ms":  120
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "dataset",
+                                          "dataset_id":  "legal_audit",
+                                          "partitioning":  "fixed_shards",
+                                          "shard_count":  90,
+                                          "requests_per_shard":  200
+                                      },
+                     "output_target":  {
+                                           "sink":  "audit_store"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-375-1",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  375,
+                                      "deadline_at_offset_minutes":  600,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-375-1",
+                                      "shard_count":  90,
+                                      "requests_per_shard":  200,
+                                      "expansion_policy":  "required",
+                                      "checkpointable":  true
+                                  }
+                 }
+             ],
+    "schema_version":  "koibench/v1",
+    "event_id":  "event-benchmark_timing_12hr-375"
+}
+```
+
+## T+07:00 - Product launch chat burst
+
+```json
+{
+    "submit_at_offset_minutes":  420,
+    "description":  "large free-chat and moderation burst uses on-demand capacity if needed",
     "jobs":  [
                  {
                      "user_id":  "tenant_chat_free",
@@ -1141,7 +1480,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  212,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  9000,
+                                                            "max_concurrent_streaming":  52000,
                                                             "target_p99_ttft_ms":  650,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -1150,25 +1489,25 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_launch_chat",
+                                          "prompt_dataset_id":  "product_launch_chat",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  9000,
+                                          "max_concurrent_streaming":  52000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-360-1",
+                     "job_id":  "job-benchmark_timing_12hr-420-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  360,
-                                      "active_end_at_offset_minutes":  440,
-                                      "duration_minutes":  80,
+                                      "release_at_offset_minutes":  420,
+                                      "active_end_at_offset_minutes":  490,
+                                      "duration_minutes":  70,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-360-1"
+                                      "service_id":  "service-benchmark_timing_12hr-420-1"
                                   }
                  },
                  {
-                     "user_id":  "tenant_moderation_p0",
+                     "user_id":  "tenant_safety_moderation",
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
@@ -1182,13 +1521,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "osl_token_max":  32,
                                                             "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3,
+                                                            "peak_to_mean_ratio":  3.5,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  26000,
+                                                            "max_concurrent_streaming":  100000,
                                                             "target_p99_ttft_ms":  90,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -1197,35 +1536,35 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_launch_moderation",
+                                          "prompt_dataset_id":  "launch_moderation",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  26000,
+                                          "max_concurrent_streaming":  100000,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-360-2",
+                     "job_id":  "job-benchmark_timing_12hr-420-2",
                      "schedule":  {
-                                      "release_at_offset_minutes":  360,
-                                      "active_end_at_offset_minutes":  440,
-                                      "duration_minutes":  80,
+                                      "release_at_offset_minutes":  420,
+                                      "active_end_at_offset_minutes":  490,
+                                      "duration_minutes":  70,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-360-2"
+                                      "service_id":  "service-benchmark_timing_12hr-420-2"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-360"
+    "event_id":  "event-benchmark_timing_12hr-420"
 }
 ```
 
-## T+07:00 - Premium Swap and P0 Safety Replay
+## T+07:45 - Premium Model Swap
 
 ```json
 {
-    "submit_at_offset_minutes":  420,
-    "description":  "new 72B premium stream overlaps the 70B service for 20 minutes before cutover; urgent safety batch arrives simultaneously",
+    "submit_at_offset_minutes":  465,
+    "description":  "new 72B premium variant overlaps the 70B service for 20 minutes, then replaces it",
     "jobs":  [
                  {
                      "user_id":  "tenant_chat_premium",
@@ -1248,33 +1587,46 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  300,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  180,
-                                                            "target_p99_ttft_ms":  700,
-                                                            "target_p99_tpot_ms":  42
+                                                            "max_concurrent_streaming":  1100,
+                                                            "target_p99_ttft_ms":  650,
+                                                            "target_p99_tpot_ms":  40
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_qwen72b_premium",
+                                          "prompt_dataset_id":  "premium_qwen72b_swap",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  180,
+                                          "max_concurrent_streaming":  1100,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-420-1",
+                     "job_id":  "job-benchmark_timing_12hr-465-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  420,
+                                      "release_at_offset_minutes":  465,
                                       "active_end_at_offset_minutes":  720,
-                                      "duration_minutes":  300,
+                                      "duration_minutes":  255,
                                       "operation":  "replace_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-420-1",
-                                      "supersedes_service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-0-3"
+                                      "service_id":  "service-benchmark_timing_12hr-465-1",
+                                      "supersedes_service_id":  "service-benchmark_timing_12hr-0-3"
                                   }
-                 },
+                 }
+             ],
+    "schema_version":  "koibench/v1",
+    "event_id":  "event-benchmark_timing_12hr-465"
+}
+```
+
+## T+08:00 - P0 abuse replay
+
+```json
+{
+    "submit_at_offset_minutes":  480,
+    "description":  "urgent P0 safety replay tests priority and deadline handling",
+    "jobs":  [
                  {
                      "user_id":  "tenant_safety_p0",
                      "kind":  "batch",
@@ -1295,7 +1647,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  27840000,
+                                                            "total_token_budget":  46400000,
                                                             "priority_class":  "HIGH",
                                                             "deadline_hrs":  2,
                                                             "target_p99_ttft_ms":  8000,
@@ -1304,20 +1656,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_p0_safety",
+                                          "dataset_id":  "p0_abuse_replay",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  48,
+                                          "shard_count":  80,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
                                            "sink":  "safety_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-420-2",
+                     "job_id":  "job-benchmark_timing_12hr-480-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  420,
-                                      "deadline_at_offset_minutes":  540,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-420-2",
-                                      "shard_count":  48,
+                                      "release_at_offset_minutes":  480,
+                                      "deadline_at_offset_minutes":  600,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-480-1",
+                                      "shard_count":  80,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1325,16 +1677,16 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-420"
+    "event_id":  "event-benchmark_timing_12hr-480"
 }
 ```
 
-## T+08:00 - Frontier Reasoning Wave
+## T+08:30 - Decode-heavy agent wave
 
 ```json
 {
-    "submit_at_offset_minutes":  480,
-    "description":  "Kimi, GLM, and DeepSeek put pressure on large-memory and multi-node planning",
+    "submit_at_offset_minutes":  510,
+    "description":  "frontier and MoE reasoning with long outputs",
     "jobs":  [
                  {
                      "user_id":  "tenant_agents_premium",
@@ -1357,30 +1709,30 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  110,
+                                                            "max_concurrent_streaming":  420,
                                                             "target_p99_ttft_ms":  2500,
-                                                            "target_p99_tpot_ms":  50
+                                                            "target_p99_tpot_ms":  45
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_kimi_agents",
+                                          "prompt_dataset_id":  "agent_wave_kimi",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  110,
+                                          "max_concurrent_streaming":  420,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-480-1",
+                     "job_id":  "job-benchmark_timing_12hr-510-1",
                      "schedule":  {
-                                      "release_at_offset_minutes":  480,
-                                      "active_end_at_offset_minutes":  630,
-                                      "duration_minutes":  150,
+                                      "release_at_offset_minutes":  510,
+                                      "active_end_at_offset_minutes":  650,
+                                      "duration_minutes":  140,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-480-1"
+                                      "service_id":  "service-benchmark_timing_12hr-510-1"
                                   }
                  },
                  {
@@ -1404,141 +1756,45 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  120,
-                                                            "target_p99_ttft_ms":  2300,
-                                                            "target_p99_tpot_ms":  55
+                                                            "max_concurrent_streaming":  480,
+                                                            "target_p99_ttft_ms":  2200,
+                                                            "target_p99_tpot_ms":  50
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_glm_agents",
+                                          "prompt_dataset_id":  "agent_wave_glm",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  120,
+                                          "max_concurrent_streaming":  480,
                                           "seed":  102
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-480-2",
+                     "job_id":  "job-benchmark_timing_12hr-510-2",
                      "schedule":  {
-                                      "release_at_offset_minutes":  480,
+                                      "release_at_offset_minutes":  510,
                                       "active_end_at_offset_minutes":  630,
-                                      "duration_minutes":  150,
+                                      "duration_minutes":  120,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-480-2"
-                                  }
-                 },
-                 {
-                     "user_id":  "tenant_new_model_eval",
-                     "kind":  "batch",
-                     "spec_json":  {
-                                       "model_id":  "deepseek-ai/DeepSeek-V3",
-                                       "job_features":  {
-                                                            "isl_token_avg":  1800,
-                                                            "isl_token_min":  450,
-                                                            "isl_token_max":  6000,
-                                                            "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1600,
-                                                            "osl_token_min":  400,
-                                                            "osl_token_max":  6000,
-                                                            "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Constant",
-                                                            "peak_to_mean_ratio":  1,
-                                                            "workload_prefix_concentration":  0,
-                                                            "multi_turn_ratio":  0,
-                                                            "shared_prefix_length_avg":  1,
-                                                            "is_session_affinity":  false,
-                                                            "total_token_budget":  21760000,
-                                                            "priority_class":  "STANDARD",
-                                                            "deadline_hrs":  3.5,
-                                                            "target_p99_ttft_ms":  12000,
-                                                            "target_p99_tpot_ms":  180
-                                                        }
-                                   },
-                     "input_source":  {
-                                          "type":  "dataset",
-                                          "dataset_id":  "real_12h_deepseek_probe",
-                                          "partitioning":  "fixed_shards",
-                                          "shard_count":  32,
-                                          "requests_per_shard":  200
-                                      },
-                     "output_target":  {
-                                           "sink":  "eval_store"
-                                       },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-480-3",
-                     "schedule":  {
-                                      "release_at_offset_minutes":  480,
-                                      "deadline_at_offset_minutes":  690,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-480-3",
-                                      "shard_count":  32,
-                                      "requests_per_shard":  200,
-                                      "expansion_policy":  "required",
-                                      "checkpointable":  true
+                                      "service_id":  "service-benchmark_timing_12hr-510-2"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-480"
+    "event_id":  "event-benchmark_timing_12hr-510"
 }
 ```
 
-## T+09:30 - Long Context and MoE Batch
+## T+09:30 - MoE and long-context campaigns
 
 ```json
 {
     "submit_at_offset_minutes":  570,
-    "description":  "long context and MoE campaigns arrive while online frontier work is active",
+    "description":  "MoE eval plus long-context benchmark",
     "jobs":  [
-                 {
-                     "user_id":  "tenant_long_context",
-                     "kind":  "batch",
-                     "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
-                                       "job_features":  {
-                                                            "isl_token_avg":  32000,
-                                                            "isl_token_min":  8000,
-                                                            "isl_token_max":  128000,
-                                                            "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1200,
-                                                            "osl_token_min":  300,
-                                                            "osl_token_max":  4000,
-                                                            "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Constant",
-                                                            "peak_to_mean_ratio":  1,
-                                                            "workload_prefix_concentration":  0,
-                                                            "multi_turn_ratio":  0,
-                                                            "shared_prefix_length_avg":  1,
-                                                            "is_session_affinity":  false,
-                                                            "total_token_budget":  139440000,
-                                                            "priority_class":  "STANDARD",
-                                                            "deadline_hrs":  2.1667,
-                                                            "target_p99_ttft_ms":  10000,
-                                                            "target_p99_tpot_ms":  160
-                                                        }
-                                   },
-                     "input_source":  {
-                                          "type":  "dataset",
-                                          "dataset_id":  "real_12h_long_context",
-                                          "partitioning":  "fixed_shards",
-                                          "shard_count":  42,
-                                          "requests_per_shard":  100
-                                      },
-                     "output_target":  {
-                                           "sink":  "eval_store"
-                                       },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-570-1",
-                     "schedule":  {
-                                      "release_at_offset_minutes":  570,
-                                      "deadline_at_offset_minutes":  700,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-570-1",
-                                      "shard_count":  42,
-                                      "requests_per_shard":  100,
-                                      "expansion_policy":  "required",
-                                      "checkpointable":  true
-                                  }
-                 },
                  {
                      "user_id":  "tenant_moe_eval",
                      "kind":  "batch",
@@ -1559,7 +1815,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  66000000,
+                                                            "total_token_budget":  105600000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  2.1667,
                                                             "target_p99_ttft_ms":  10000,
@@ -1568,37 +1824,85 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_moe_eval",
+                                          "dataset_id":  "moe_eval_qwen3",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  60,
+                                          "shard_count":  96,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
                                            "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-570-2",
+                     "job_id":  "job-benchmark_timing_12hr-570-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  570,
                                       "deadline_at_offset_minutes":  700,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-570-2",
-                                      "shard_count":  60,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-570-1",
+                                      "shard_count":  96,
                                       "requests_per_shard":  500,
+                                      "expansion_policy":  "required",
+                                      "checkpointable":  true
+                                  }
+                 },
+                 {
+                     "user_id":  "tenant_long_context",
+                     "kind":  "batch",
+                     "spec_json":  {
+                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "job_features":  {
+                                                            "isl_token_avg":  32000,
+                                                            "isl_token_min":  8000,
+                                                            "isl_token_max":  128000,
+                                                            "isl_distribution_type":  "LogNormal",
+                                                            "osl_token_avg":  1200,
+                                                            "osl_token_min":  300,
+                                                            "osl_token_max":  4000,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Constant",
+                                                            "peak_to_mean_ratio":  1,
+                                                            "workload_prefix_concentration":  0,
+                                                            "multi_turn_ratio":  0,
+                                                            "shared_prefix_length_avg":  1,
+                                                            "is_session_affinity":  false,
+                                                            "total_token_budget":  232400000,
+                                                            "priority_class":  "STANDARD",
+                                                            "deadline_hrs":  2.1667,
+                                                            "target_p99_ttft_ms":  10000,
+                                                            "target_p99_tpot_ms":  160
+                                                        }
+                                   },
+                     "input_source":  {
+                                          "type":  "dataset",
+                                          "dataset_id":  "long_context_benchmark",
+                                          "partitioning":  "fixed_shards",
+                                          "shard_count":  70,
+                                          "requests_per_shard":  100
+                                      },
+                     "output_target":  {
+                                           "sink":  "eval_store"
+                                       },
+                     "job_id":  "job-benchmark_timing_12hr-570-2",
+                     "schedule":  {
+                                      "release_at_offset_minutes":  570,
+                                      "deadline_at_offset_minutes":  700,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-570-2",
+                                      "shard_count":  70,
+                                      "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-570"
+    "event_id":  "event-benchmark_timing_12hr-570"
 }
 ```
 
-## T+10:30 - Reports and Transcripts
+## T+10:30 - Reports and transcript summaries
 
 ```json
 {
     "submit_at_offset_minutes":  630,
-    "description":  "late-run deadline work tests whether batch can finish without hurting online SLOs",
+    "description":  "late-day report and transcript batch work",
     "jobs":  [
                  {
                      "user_id":  "tenant_reports",
@@ -1620,7 +1924,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  155200000,
+                                                            "total_token_budget":  310400000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  1.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -1629,20 +1933,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_reports",
+                                          "dataset_id":  "reports_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  80,
+                                          "shard_count":  160,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
                                            "sink":  "report_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-630-1",
+                     "job_id":  "job-benchmark_timing_12hr-630-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  630,
                                       "deadline_at_offset_minutes":  720,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-630-1",
-                                      "shard_count":  80,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-630-1",
+                                      "shard_count":  160,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1668,7 +1972,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  108160000,
+                                                            "total_token_budget":  202800000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  1.5,
                                                             "target_p99_ttft_ms":  8000,
@@ -1677,20 +1981,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_transcripts",
+                                          "dataset_id":  "transcript_summary_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  64,
+                                          "shard_count":  120,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
                                            "sink":  "summary_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-630-2",
+                     "job_id":  "job-benchmark_timing_12hr-630-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  630,
                                       "deadline_at_offset_minutes":  720,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-630-2",
-                                      "shard_count":  64,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-630-2",
+                                      "shard_count":  120,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1698,16 +2002,16 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-630"
+    "event_id":  "event-benchmark_timing_12hr-630"
 }
 ```
 
-## T+11:30 - APAC Ramp and Cooldown
+## T+11:30 - APAC ramp and cooldown probes
 
 ```json
 {
     "submit_at_offset_minutes":  690,
-    "description":  "APAC online load appears while low-priority probes test remaining capacity",
+    "description":  "APAC ramp begins while low-priority profiling consumes leftovers",
     "jobs":  [
                  {
                      "user_id":  "tenant_chat_free",
@@ -1730,7 +2034,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  2800,
+                                                            "max_concurrent_streaming":  12000,
                                                             "target_p99_ttft_ms":  800,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -1739,36 +2043,36 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "real_12h_apac_chat",
+                                          "prompt_dataset_id":  "apac_chat_ramp",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  2800,
+                                          "max_concurrent_streaming":  12000,
                                           "seed":  101
                                       },
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-690-1",
+                     "job_id":  "job-benchmark_timing_12hr-690-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  690,
                                       "active_end_at_offset_minutes":  720,
                                       "duration_minutes":  30,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_12hr_160gpu_tpu-690-1"
+                                      "service_id":  "service-benchmark_timing_12hr-690-1"
                                   }
                  },
                  {
                      "user_id":  "tenant_koi_profiling",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen3-30B-A3B-Instruct",
+                                       "model_id":  "deepseek-ai/DeepSeek-V3",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
                                                             "isl_token_max":  4096,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  800,
-                                                            "osl_token_min":  200,
-                                                            "osl_token_max":  3000,
+                                                            "osl_token_avg":  1000,
+                                                            "osl_token_min":  250,
+                                                            "osl_token_max":  4000,
                                                             "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Constant",
                                                             "peak_to_mean_ratio":  1,
@@ -1776,7 +2080,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  21600000,
+                                                            "total_token_budget":  12800000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  0.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -1785,27 +2089,27 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                    },
                      "input_source":  {
                                           "type":  "dataset",
-                                          "dataset_id":  "real_12h_final_probe",
+                                          "dataset_id":  "heldout_deepseek_probe",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  24,
-                                          "requests_per_shard":  500
+                                          "shard_count":  32,
+                                          "requests_per_shard":  200
                                       },
                      "output_target":  {
                                            "sink":  "perfdb"
                                        },
-                     "job_id":  "job-benchmark_timing_real_12hr_160gpu_tpu-690-2",
+                     "job_id":  "job-benchmark_timing_12hr-690-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  690,
                                       "deadline_at_offset_minutes":  720,
-                                      "campaign_id":  "campaign-benchmark_timing_real_12hr_160gpu_tpu-690-2",
-                                      "shard_count":  24,
-                                      "requests_per_shard":  500,
+                                      "campaign_id":  "campaign-benchmark_timing_12hr-690-2",
+                                      "shard_count":  32,
+                                      "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_12hr_160gpu_tpu-690"
+    "event_id":  "event-benchmark_timing_12hr-690"
 }
 ```

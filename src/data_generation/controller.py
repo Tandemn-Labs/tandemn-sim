@@ -8,7 +8,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -17,16 +17,20 @@ from typing import BinaryIO, cast
 
 import yaml
 
+from data_generation.batch_dataset_generator import generate_batch_dataset
+
 ROOT = Path(__file__).resolve().parents[2]
 BENCHMARKS_ROOT = ROOT / "benchmarks"
 DEFAULT_BENCHMARK = "simulation_3h"
 DEFAULT_ARTIFACT_ROOT = ROOT / "artifacts"
 BENCHMARK_STATE_FILENAME = "benchmark_state.json"
+PROMPTS_FILENAME = "prompts.jsonl"
+RESPONSES_FILENAME = "responses.jsonl"
 LOGGER = logging.getLogger(__name__)
 
 
 class JobKind(StrEnum):
-    """Workload lifecycle types."""
+    """Benchmark job lifecycle types."""
 
     ONLINE = "online"
     BATCH = "batch"
@@ -102,6 +106,10 @@ class RunningJob:
     accumulated_runtime_seconds: float = 0.0
     process_started_at: float | None = None
     exit_code: int | None = None
+    raw_record_offsets: dict[Path, int] = field(default_factory=dict)
+    recorded_prompt_ids: set[str] = field(default_factory=set)
+    recorded_response_ids: set[str] = field(default_factory=set)
+    artifact_ids_loaded: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,7 +146,37 @@ def main() -> None:
         metavar="RUN_ID",
         help="resume a paused benchmark run without advancing paused time",
     )
+    parser.add_argument(
+        "--generate-batch",
+        type=Path,
+        metavar="CONFIG",
+        help="generate batch JSONL from a batch-dataset/v1 YAML",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="optional JSONL output path; otherwise records print to the terminal",
+    )
+    parser.add_argument(
+        "--records",
+        type=int,
+        help="optional generation limit used with --generate-batch",
+    )
     args = parser.parse_args()
+
+    if args.generate_batch is not None:
+        try:
+            generate_batch_dataset(
+                args.generate_batch,
+                args.output,
+                record_limit=args.records,
+            )
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        return
+
+    if args.output is not None or args.records is not None:
+        parser.error("--output and --records require --generate-batch")
 
     try:
         benchmark = load_benchmark(resolve_benchmark_overview(args.benchmark))
@@ -174,9 +212,10 @@ def run_benchmark(
     active_run_id = (
         resume_run_id or run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     )
-    run_directory = artifact_root / benchmark.benchmark_id / active_run_id
+    benchmark_directory = artifact_root / "benchmarks" / benchmark.benchmark_id
+    run_directory = benchmark_directory / active_run_id
     run_directory.mkdir(parents=True, exist_ok=True)
-    run_index = artifact_root / benchmark.benchmark_id / "runs.json"
+    run_index = benchmark_directory / "runs.json"
     jobs = {
         job.job_id: RunningJob(
             job=job,
@@ -184,6 +223,8 @@ def run_benchmark(
         )
         for job in benchmark.jobs
     }
+    for item in jobs.values():
+        ensure_job_artifacts(run_directory, item.job.job_id)
     elapsed_before_start = 0.0
     created_at = utc_timestamp()
     milestones: list[dict[str, object]] = []
@@ -244,6 +285,7 @@ def run_benchmark(
                     run_directory,
                     benchmark.shutdown_grace_seconds,
                 )
+                sync_job_records(item, run_directory)
                 record_job_milestones(
                     milestones,
                     item,
@@ -279,6 +321,7 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
+        sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
             milestones,
             jobs,
@@ -310,6 +353,7 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
+        sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
             milestones,
             jobs,
@@ -335,6 +379,7 @@ def run_benchmark(
             time.time() - active_period_started_at,
         )
         status = "completed"
+        sync_all_job_records(jobs.values(), run_directory)
         add_milestone(milestones, "benchmark_completed", elapsed_seconds)
         save_benchmark_state(
             run_directory,
@@ -415,8 +460,7 @@ def reconcile_job(
 
 def start_job(item: RunningJob, run_directory: Path) -> None:
     """Start one independent AIPerf generator or batch sender."""
-    job_directory = run_directory / item.job.job_id
-    job_directory.mkdir(parents=True, exist_ok=True)
+    job_directory = ensure_job_artifacts(run_directory, item.job.job_id)
     command = job_command(item.job, job_directory)
     log_file = None
     if not item.job.output_to_terminal:
@@ -454,6 +498,187 @@ def start_job(item: RunningJob, run_directory: Path) -> None:
         item.job.job_id,
         item.job.driver,
         process.pid,
+    )
+
+
+def job_artifact_directory(run_directory: Path, job_id: str) -> Path:
+    """Return the artifact directory for one job in a benchmark run."""
+    return run_directory / "jobs" / job_id
+
+
+def ensure_job_artifacts(run_directory: Path, job_id: str) -> Path:
+    """Create the stable prompt and response files for one job."""
+    job_directory = job_artifact_directory(run_directory, job_id)
+    job_directory.mkdir(parents=True, exist_ok=True)
+    (job_directory / PROMPTS_FILENAME).touch(exist_ok=True)
+    (job_directory / RESPONSES_FILENAME).touch(exist_ok=True)
+    return job_directory
+
+
+def sync_all_job_records(
+    jobs: Iterable[RunningJob],
+    run_directory: Path,
+) -> None:
+    """Capture all request and response records currently available."""
+    for item in jobs:
+        sync_job_records(item, run_directory)
+
+
+def sync_job_records(item: RunningJob, run_directory: Path) -> None:
+    """Append new AIPerf raw records to the job's lean JSONL files."""
+    if item.job.driver != "aiperf":
+        return
+
+    job_directory = job_artifact_directory(run_directory, item.job.job_id)
+    if not job_directory.is_dir():
+        return
+
+    prompts_path = job_directory / PROMPTS_FILENAME
+    responses_path = job_directory / RESPONSES_FILENAME
+    if not item.artifact_ids_loaded:
+        item.recorded_prompt_ids = load_recorded_request_ids(prompts_path)
+        item.recorded_response_ids = load_recorded_request_ids(responses_path)
+        item.artifact_ids_loaded = True
+
+    final_raw_path = job_directory / f"{item.job.job_id}_raw.jsonl"
+    raw_record_paths = sorted(
+        (job_directory / "raw_records").glob("raw_records_*.jsonl")
+    )
+    for raw_path in [final_raw_path, *raw_record_paths]:
+        sync_raw_record_file(
+            raw_path,
+            prompts_path,
+            responses_path,
+            item,
+        )
+
+
+def load_recorded_request_ids(path: Path) -> set[str]:
+    """Load request IDs already written before a resumed launch."""
+    request_ids: set[str] = set()
+    if not path.is_file():
+        return request_ids
+
+    with path.open(encoding="utf-8") as records:
+        for line_number, line in enumerate(records, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                LOGGER.warning(
+                    "[artifacts] ignored invalid JSON in %s line=%d",
+                    path,
+                    line_number,
+                )
+                continue
+            if isinstance(record, dict):
+                request_id = record.get("request_id")
+                if isinstance(request_id, str) and request_id:
+                    request_ids.add(request_id)
+    return request_ids
+
+
+def sync_raw_record_file(
+    raw_path: Path,
+    prompts_path: Path,
+    responses_path: Path,
+    item: RunningJob,
+) -> None:
+    """Read complete, unseen lines from one AIPerf raw JSONL file."""
+    try:
+        raw_size = raw_path.stat().st_size
+    except FileNotFoundError:
+        return
+
+    offset = item.raw_record_offsets.get(raw_path, 0)
+    if raw_size < offset:
+        offset = 0
+
+    try:
+        with raw_path.open("rb") as raw_records:
+            raw_records.seek(offset)
+            while True:
+                line_start = raw_records.tell()
+                line = raw_records.readline()
+                if not line:
+                    break
+                if not line.endswith(b"\n"):
+                    raw_records.seek(line_start)
+                    break
+
+                item.raw_record_offsets[raw_path] = raw_records.tell()
+                try:
+                    raw_record = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    LOGGER.warning(
+                        "[artifacts] ignored invalid raw record in %s",
+                        raw_path,
+                    )
+                    continue
+                append_job_record(
+                    raw_record,
+                    prompts_path,
+                    responses_path,
+                    item,
+                )
+    except FileNotFoundError:
+        return
+
+
+def append_job_record(
+    value: object,
+    prompts_path: Path,
+    responses_path: Path,
+    item: RunningJob,
+) -> None:
+    """Append one paired prompt and response for an AIPerf job."""
+    if not isinstance(value, dict):
+        return
+    raw_record = cast(dict[str, object], value)
+    metadata_value = raw_record.get("metadata")
+    if not isinstance(metadata_value, dict):
+        return
+    metadata = cast(dict[str, object], metadata_value)
+    request_id = metadata.get("x_request_id")
+    if not isinstance(request_id, str) or not request_id:
+        LOGGER.warning("[artifacts] raw record has no request ID")
+        return
+
+    if request_id not in item.recorded_prompt_ids:
+        prompt_record = {
+            "request_id": request_id,
+            "sent_at": timestamp_from_nanoseconds(metadata.get("request_start_ns")),
+            "request": raw_record.get("payload"),
+        }
+        append_jsonl(prompts_path, prompt_record)
+        item.recorded_prompt_ids.add(request_id)
+
+    if request_id not in item.recorded_response_ids:
+        response_record = {
+            "request_id": request_id,
+            "received_at": timestamp_from_nanoseconds(metadata.get("request_end_ns")),
+            "status_code": raw_record.get("status"),
+            "response": raw_record.get("responses"),
+            "error": raw_record.get("error"),
+        }
+        append_jsonl(responses_path, response_record)
+        item.recorded_response_ids.add(request_id)
+
+
+def append_jsonl(path: Path, record: Mapping[str, object]) -> None:
+    """Append one compact JSON object to a JSONL artifact."""
+    with path.open("a", encoding="utf-8") as output:
+        output.write(json.dumps(record, separators=(",", ":")))
+        output.write("\n")
+
+
+def timestamp_from_nanoseconds(value: object) -> str | None:
+    """Convert a wall-clock nanosecond timestamp to UTC."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return datetime.fromtimestamp(value / 1_000_000_000, UTC).isoformat(
+        timespec="microseconds"
     )
 
 
@@ -796,9 +1021,9 @@ def validate_saved_job(
         "deadline_at_offset_minutes": job.deadline_minute,
         "hard_stop_at_offset_minutes": job.hard_stop_minute,
     }
-    for field, expected_value in expected.items():
-        if definition.get(field) != expected_value:
-            raise ValueError(f"Benchmark changed for {job.job_id}: {field}")
+    for field_name, expected_value in expected.items():
+        if definition.get(field_name) != expected_value:
+            raise ValueError(f"Benchmark changed for {job.job_id}: {field_name}")
 
 
 def record_job_milestones(
@@ -880,6 +1105,8 @@ def job_command(job: Job, artifact_directory: Path) -> tuple[str, ...]:
             "profile",
             "--config",
             str(job.config),
+            "--export-level",
+            "raw",
             "--output-artifact-dir",
             str(artifact_directory),
             "--profile-export-prefix",
@@ -977,7 +1204,7 @@ def load_job(
     benchmark_directory: Path,
     default_hard_stop_minute: float,
 ) -> Job:
-    """Read one job entry and resolve its workload file."""
+    """Read one job entry and resolve its configuration file."""
     definition = mapping(value, f"jobs.{job_id}")
     enabled = boolean(definition.get("enabled"), f"jobs.{job_id}.enabled")
     output_to_terminal = boolean(
@@ -1051,7 +1278,7 @@ def load_job(
 
 
 def validate_jobs(jobs: tuple[Job, ...]) -> None:
-    """Check additive jobs against their parent workload windows."""
+    """Check additive jobs against their parent job windows."""
     jobs_by_id = {job.job_id: job for job in jobs}
     for job in jobs:
         if job.parent_job_id is None:

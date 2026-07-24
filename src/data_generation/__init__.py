@@ -1,1 +1,1 @@
-"""Benchmark-driven AIPerf workload orchestration."""
+"""Benchmark-driven job orchestration with AIPerf."""

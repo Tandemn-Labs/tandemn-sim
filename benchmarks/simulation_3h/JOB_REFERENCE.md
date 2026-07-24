@@ -1,6 +1,6 @@
 # Three-hour simulation job reference
 
-RPS values are derived from each workload's concurrency and target service
+RPS values are derived from each job's concurrency and target service
 time. Estimated max RPS describes the intended traffic peak; AIPerf enforces
 the concurrency cap rather than a hard maximum RPS.
 

@@ -1,8 +1,10 @@
-# benchmark_timing_real_24hr_160gpu_tpu.md
+# Real-life 24-hour benchmark
+
+Benchmark ID: `real_life_24h`
 
 Benchmark name: `KoiBench-Real-24h-160GPU-TPU-MegaCo`
 
-Purpose: synthetic workload replay on a real-cluster 24 hour representative company-day run. This is the real-hardware companion to the larger simulated paper trace. It keeps the same workload structure but scales load to 160 GPUs plus 32 TPU chips.
+Purpose: synthetic job replay on a real-cluster 24 hour representative company-day run. This is the real-hardware companion to the larger simulated paper trace. It keeps the same job structure but scales load to 160 GPUs plus 32 TPU chips.
 
 Horizon: 1440 minutes
 
@@ -26,11 +28,11 @@ Dispatch: releases occur at their exact offset. A job arrival triggers the admis
 
 Online lifecycle: `active_start_at_offset_minutes` and `active_end_at_offset_minutes` define a half-open traffic window. `duration_minutes` is retained only as a consistency check. At the end offset the load generator stops new requests, drains in-flight requests, and the executor records `terminal_at`.
 
-Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the workload.
+Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
 
 Overlap: `base_service` remains active, `additive_stream` adds demand to an existing service, and `replace_service` identifies a model/service replacement. Overlap is intentional and additive unless explicitly marked as replacement.
 
-Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized workload features. Hardware placement and market preferences are deliberately absent from job inputs.
+Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized job features. Hardware placement and market preferences are deliberately absent from job inputs.
 
 Traffic: `max_concurrent_streaming` is the sole authoritative submitted traffic field. `request_arrival_rate` is omitted so Orca selects concurrency mode and derives request rate. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
 
@@ -581,7 +583,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
 ```json
 {
     "submit_at_offset_minutes":  30,
-    "description":  "calibration workload for engine version and quantization behavior",
+    "description":  "calibration job for engine version and quantization behavior",
     "jobs":  [
                  {
                      "user_id":  "tenant_engine_canary",
@@ -1229,7 +1231,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
 ```json
 {
     "submit_at_offset_minutes":  540,
-    "description":  "enterprise chat, docs QA, and legal workloads overlap",
+    "description":  "enterprise chat, docs QA, and legal jobs overlap",
     "jobs":  [
                  {
                      "user_id":  "tenant_enterprise_chat",
@@ -1889,7 +1891,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
 ```json
 {
     "submit_at_offset_minutes":  1080,
-    "description":  "long-output frontier traffic becomes the binding workload",
+    "description":  "long-output frontier traffic becomes the binding job",
     "jobs":  [
                  {
                      "user_id":  "tenant_agents_premium",

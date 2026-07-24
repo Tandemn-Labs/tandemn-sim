@@ -1,3 +1,28 @@
-# Benchmark job: job-benchmark_timing_3hr-160-1
-# Placeholder only: external mock data will drive this batch campaign.
-# T+160 to deadline T+180; Qwen3 30B-A3B; 48 shards x 500 requests.
+# job-benchmark_timing_3hr-160-1
+schema_version: "batch-dataset/v1"
+
+dataset:
+  id: moe_quant_probe
+  model: Qwen/Qwen3-30B-A3B-Instruct
+  endpoint: /v1/chat/completions
+  request_format: chat
+  record_count: 24000
+  seed: 208
+
+  partitioning:
+    shard_count: 48
+    requests_per_shard: 500
+
+  io:
+    input_tokens:
+      distribution: lognormal
+      minimum: 250
+      average: 1000
+      maximum: 4096
+      sigma: 0.8
+    output_tokens:
+      distribution: lognormal
+      minimum: 200
+      average: 800
+      maximum: 3000
+      sigma: 0.8

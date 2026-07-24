@@ -13,7 +13,7 @@ REQUEST_NUMBERS = itertools.count(1)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    """Handle the endpoint types used by the smoke workloads."""
+    """Handle the endpoint types used by the smoke jobs."""
 
     def do_GET(self) -> None:
         """Return a basic health response."""

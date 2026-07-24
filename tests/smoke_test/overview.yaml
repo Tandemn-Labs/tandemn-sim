@@ -3,7 +3,7 @@ schema_version: "benchmark/v1"
 
 benchmark:
   id: simulation_3h_smoke
-  source_overview: ../../workload_overviews/simulation/benchmark_timing_3hr.md
+  source_benchmark: ../../benchmarks/simulation_3h/benchmark.md
   poll_interval_seconds: 1
   shutdown_grace_seconds: 5
   hard_stop_at_offset_minutes: 3.25

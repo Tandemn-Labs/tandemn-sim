@@ -1,8 +1,12 @@
-# KoiBench Workload Contract
+# KoiBench Benchmark and Job Contract
 
 Schema version: `koibench/v1`
 
-This document is the canonical contract shared by every `benchmark_timing*.md` file. The Markdown timing files are human-readable manifests; production tooling should parse their fenced JSON events into a normalized JSONL or database representation before execution.
+This document is the canonical contract shared by every benchmark. A benchmark
+is a collection of jobs. Each `benchmarks/<benchmark-id>/benchmark.md` file is
+the human-readable source manifest; production tooling should parse its fenced
+JSON events into a normalized JSONL or database representation before
+execution.
 
 ## Time Model
 
@@ -18,9 +22,10 @@ Job arrivals are dispatched exactly, including off-tick arrivals. An arrival inv
 
 Every run has a drain period after the offered-work horizon. The drain does not change deadlines. It exists to measure tardiness and in-flight completion. Work unfinished at its deadline is a deadline miss even if it finishes during drain.
 
-## Workload and Runtime Separation
+## Job Definition and Runtime Separation
 
-The manifest records offered work. Runtime state is written separately.
+The benchmark manifest records offered jobs. Runtime state is written
+separately.
 
 Valid runtime states:
 
@@ -140,11 +145,11 @@ The planner does not receive descriptions, trace/dataset names, human-readable t
 - cluster/resource state
 - the same performance interface and telemetry permitted by the experimental condition
 
-Placement hints such as `preferred_accelerators` and `market_preference` are forbidden in workload inputs. Backend/model compatibility comes from a separate, frozen compatibility manifest shared by every baseline.
+Placement hints such as `preferred_accelerators` and `market_preference` are forbidden in job inputs. Backend/model compatibility comes from a separate, frozen compatibility manifest shared by every baseline.
 
 ## Quality and Quantization
 
-Quantization, engine, LMCache, TP/PP/DP/EP, and accelerator choices are deliberately absent from submitted job specs because the submitter does not accept them as user-owned workload fields. They live in a frozen planner candidate/compatibility manifest shared by every baseline. Before a quantized config enters that catalog, it must pass a task-specific non-inferiority gate.
+Quantization, engine, LMCache, TP/PP/DP/EP, and accelerator choices are deliberately absent from submitted job specs because the submitter does not accept them as user-owned job fields. They live in a frozen planner candidate/compatibility manifest shared by every baseline. Before a quantized config enters that catalog, it must pass a task-specific non-inferiority gate.
 
 FP4 is excluded unless the selected backend/device implements and validates the exact format. FP32 is calibration-only.
 
@@ -158,7 +163,7 @@ Absolute concurrency cannot be declared feasible from accelerator count alone. B
 4. Target 55-65% qualified capacity in normal periods, 80-90% at ordinary peaks, and 105-120% only in the designated overload event.
 5. Freeze the multiplier for every system and seed.
 
-The listed concurrency values preserve relative tenant/workload scale. The frozen global multiplier establishes absolute real-cluster load.
+The listed concurrency values preserve relative tenant/job scale. The frozen global multiplier establishes absolute real-cluster load.
 
 ## Execution Validation
 

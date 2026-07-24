@@ -1,3 +1,28 @@
-# Benchmark job: job-benchmark_timing_3hr-145-2
-# Placeholder only: external mock data will drive this batch campaign.
-# T+145 to deadline T+180; DeepSeek V3; 32 shards x 200 requests.
+# job-benchmark_timing_3hr-145-2
+schema_version: "batch-dataset/v1"
+
+dataset:
+  id: heldout_frontier_eval
+  model: deepseek-ai/DeepSeek-V3
+  endpoint: /v1/chat/completions
+  request_format: chat
+  record_count: 6400
+  seed: 207
+
+  partitioning:
+    shard_count: 32
+    requests_per_shard: 200
+
+  io:
+    input_tokens:
+      distribution: lognormal
+      minimum: 450
+      average: 1800
+      maximum: 6000
+      sigma: 0.8
+    output_tokens:
+      distribution: lognormal
+      minimum: 400
+      average: 1600
+      maximum: 6000
+      sigma: 0.8

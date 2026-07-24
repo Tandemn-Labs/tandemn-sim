@@ -7,7 +7,7 @@ schema_version: "benchmark/v1"
 
 benchmark:
   id: simulation_3h
-  source_overview: ../../workload_overviews/simulation/benchmark_timing_3hr.md
+  source_benchmark: benchmark.md
   clock: time.time
   horizon_minutes: 180
   drain_minutes: 30

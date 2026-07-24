@@ -1,6 +1,8 @@
-# benchmark_timing_3hr.md
+# Simulation 3-hour benchmark
 
-Purpose: compact smoke benchmark for the Koi/Tandemn job spawner. This is not the paper headline trace. It is a 3 hour version that exercises every model tier, online plus batch, strict plus loose SLOs, quantization choices, LMCache, TP/PP/DP/EP search, and mixed persistent plus bursty workloads.
+Benchmark ID: `simulation_3h`
+
+Purpose: compact smoke benchmark for the Koi/Tandemn job spawner. This is not the paper headline trace. It is a 3 hour version that exercises every model tier, online plus batch, strict plus loose SLOs, quantization choices, LMCache, TP/PP/DP/EP search, and mixed persistent plus bursty jobs.
 
 Benchmark name: `KoiBench-3h-ReservedFleet-Smoke`
 
@@ -62,11 +64,11 @@ Dispatch: releases occur at their exact offset. A job arrival triggers the admis
 
 Online lifecycle: `active_start_at_offset_minutes` and `active_end_at_offset_minutes` define a half-open traffic window. `duration_minutes` is retained only as a consistency check. At the end offset the load generator stops new requests, drains in-flight requests, and the executor records `terminal_at`.
 
-Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the workload.
+Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
 
 Overlap: `base_service` remains active, `additive_stream` adds demand to an existing service, and `replace_service` identifies a model/service replacement. Overlap is intentional and additive unless explicitly marked as replacement.
 
-Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized workload features. Hardware placement and market preferences are deliberately absent from job inputs.
+Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized job features. Hardware placement and market preferences are deliberately absent from job inputs.
 
 Traffic: `max_concurrent_streaming` is the sole authoritative submitted traffic field. `request_arrival_rate` is omitted so Orca selects concurrency mode and derives request rate. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
 
@@ -853,7 +855,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
 ```json
 {
     "submit_at_offset_minutes":  67,
-    "description":  "frontier reasoning workloads exercise MoE and large-model planning",
+    "description":  "frontier reasoning jobs exercise MoE and large-model planning",
     "jobs":  [
                  {
                      "user_id":  "tenant_agents_premium",

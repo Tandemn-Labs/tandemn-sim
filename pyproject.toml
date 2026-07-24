@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "data-generation"
 version = "0.1.0"
-description = "Generate request previews from AIPerf workload definitions."
+description = "Run benchmark jobs and generate their request data."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
