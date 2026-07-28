@@ -6,7 +6,7 @@ schemaVersion: "2.0"
 randomSeed: 102
 
 benchmark:
-  model: Qwen/Qwen2.5-1.5B-Instruct
+  model: meta-llama/Llama-3.2-1B-Instruct
   endpoint:
     url: http://127.0.0.1:8765/v1/chat/completions
     type: chat

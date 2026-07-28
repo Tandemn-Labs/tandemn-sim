@@ -90,7 +90,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -137,7 +137,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -278,7 +278,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_moderation_p0",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  256,
                                                             "isl_token_min":  64,
@@ -635,7 +635,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_support",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  1400,
                                                             "isl_token_min":  350,
@@ -1126,7 +1126,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  850,
                                                             "isl_token_min":  212,
@@ -1173,7 +1173,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_moderation_p0",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  320,
                                                             "isl_token_min":  80,
@@ -1654,7 +1654,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_transcripts",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  16000,
                                                             "isl_token_min":  4000,
@@ -1715,7 +1715,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,

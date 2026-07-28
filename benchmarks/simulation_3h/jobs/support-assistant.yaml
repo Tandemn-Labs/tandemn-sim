@@ -6,7 +6,7 @@ schemaVersion: "2.0"
 randomSeed: 103
 
 benchmark:
-  model: meta-llama/Llama-3.1-8B-Instruct
+  model: mistralai/Mixtral-8x7B-Instruct-v0.1
   endpoint:
     url: http://preview.invalid/v1/chat/completions
     type: chat
@@ -14,7 +14,7 @@ benchmark:
     timeout: 180
     connectionReuse: sticky-user-sessions
   tokenizer:
-    name: ${TOKENIZER_NAME:meta-llama/Llama-3.1-8B-Instruct}
+    name: ${TOKENIZER_NAME:mistralai/Mixtral-8x7B-Instruct-v0.1}
   dataset:
     type: synthetic
     entries: 1500

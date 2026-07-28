@@ -20,7 +20,7 @@ Regions: `us-east`, `eu-west`, `apac`
 
 Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`, `TPU-v5e`
 
-Model catalog: `Qwen/Qwen2.5-1.5B-Instruct`, `meta-llama/Llama-3.1-8B-Instruct`, `microsoft/phi-4`, `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen2.5-72B-Instruct`, `Qwen/Qwen3-30B-A3B-Instruct`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-m3`, `BAAI/bge-reranker-v2-m3`
+Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen2.5-72B-Instruct`, `Qwen/Qwen3-30B-A3B-Instruct`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-m3`, `BAAI/bge-reranker-v2-m3`
 
 ## Frozen Cluster Resources
 
@@ -89,7 +89,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -230,7 +230,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                      "user_id":  "tenant_safety_moderation",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  256,
                                                             "isl_token_min":  64,
@@ -431,7 +431,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                      "user_id":  "tenant_support",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  1400,
                                                             "isl_token_min":  350,
@@ -754,7 +754,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                      "user_id":  "tenant_chat_free",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "meta-llama/Llama-3.1-8B-Instruct",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "job_features":  {
                                                             "isl_token_avg":  850,
                                                             "isl_token_min":  212,
@@ -801,7 +801,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                      "user_id":  "tenant_safety_moderation",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-1.5B-Instruct",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "job_features":  {
                                                             "isl_token_avg":  320,
                                                             "isl_token_min":  80,

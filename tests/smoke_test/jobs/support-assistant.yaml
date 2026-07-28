@@ -6,7 +6,7 @@ schemaVersion: "2.0"
 randomSeed: 103
 
 benchmark:
-  model: meta-llama/Llama-3.1-8B-Instruct
+  model: mistralai/Mixtral-8x7B-Instruct-v0.1
   endpoint:
     url: http://127.0.0.1:8765/v1/chat/completions
     type: chat
