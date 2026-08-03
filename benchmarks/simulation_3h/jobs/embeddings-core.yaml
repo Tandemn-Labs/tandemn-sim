@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-0-5
-# Benchmark window: T+0 through T+180. Constant traffic with a 1x peak/mean ratio.
+# Benchmark window: T+0 through T+180. Declared pattern: Constant.
 # Priority: STANDARD. SLO: p99 TTFT 120 ms; p99 TPOT 1 ms.
-# Traffic hypothesis: maintain the declared 40,000-request concurrency.
+# Trace: datasets/simulation_3h/traces/embeddings_analysis.json
+# Measured: 0.025 mean RPS, 2.000 max RPS, 6.596 mean input tokens.
+# Mapping: fixed interarrival timing at the measured mean request rate.
 schemaVersion: "2.0"
 randomSeed: 105
 
 benchmark:
   model: BAAI/bge-m3
   endpoint:
-    url: http://preview.invalid/v1/embeddings
+    path: /v1/embeddings
     type: embeddings
     streaming: false
     timeout: 120
@@ -20,12 +22,13 @@ benchmark:
     entries: 5000
     sampling: random
     prompts:
-      isl: {mean: 384, median: 288, min: 96, max: 1024}
+      isl: {mean: 6.596, median: 6, min: 1, max: 26}
       osl: 0
       batchSize: 1
   phases:
     - name: profiling
-      type: concurrency
+      type: constant
       duration: 10800
+      rate: 0.025
       concurrency: 40000
       gracePeriod: 120

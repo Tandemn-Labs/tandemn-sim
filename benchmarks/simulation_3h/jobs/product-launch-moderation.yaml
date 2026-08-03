@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-49-2
-# Benchmark window: T+49 through T+84. Bursty traffic with a 3.5x peak/mean ratio.
+# Benchmark window: T+49 through T+84. Declared pattern: Bursty.
 # Priority: HIGH. SLO: p99 TTFT 90 ms; p99 TPOT 30 ms.
-# Traffic hypothesis: 51,948.052 mean RPS with clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/product_launch_moderation_analysis.json
+# Measured: 4.091 mean RPS, 25.000 max RPS, 3.009 interarrival CV.
+# Mapping: same seed, parent events, and Gamma timing as Product Launch Chat.
 schemaVersion: "2.0"
-randomSeed: 102
+randomSeed: 101
 
 benchmark:
   model: meta-llama/Llama-3.2-1B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 120
@@ -20,14 +22,14 @@ benchmark:
     entries: 5000
     sampling: random
     prompts:
-      isl: {mean: 320, median: 240, min: 80, max: 1024}
-      osl: {mean: 8, median: 6, min: 2, max: 32}
+      isl: {mean: 14.776, stddev: 44.022, min: 0, max: 219}
+      osl: {mean: 1.991, stddev: 6.119, min: 0, max: 39}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 2100
-      rate: 51948.052
-      smoothness: 0.16
+      rate: 4.091
+      smoothness: 0.110
       concurrency: 60000
       gracePeriod: 120

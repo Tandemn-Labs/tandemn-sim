@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-67-2
-# Benchmark window: T+67 through T+142. Bursty traffic with a 5x peak/mean ratio.
+# Benchmark window: T+67 through T+142. Declared pattern: Bursty.
 # Priority: STANDARD. SLO: p99 TTFT 2200 ms; p99 TPOT 50 ms.
-# Traffic hypothesis: 0.472 mean RPS with highly clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/frontier_glm_reasoning_analysis.json
+# Measured: 1.641 mean RPS, 40.000 max RPS, 1.378 interarrival CV.
+# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 102
 
 benchmark:
   model: zai-org/GLM-4.5-Air
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 600
@@ -20,14 +22,14 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 1800, median: 1350, min: 450, max: 6000}
-      osl: {mean: 2500, median: 1875, min: 625, max: 9000}
+      isl: {mean: 4442.944, median: 3680, min: 13, max: 51622}
+      osl: {mean: 3930.863, median: 1684.5, min: 4, max: 75990}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 4500
-      rate: 0.472
-      smoothness: 0.0625
+      rate: 1.641
+      smoothness: 0.527
       concurrency: 300
       gracePeriod: 600

@@ -18,6 +18,12 @@ from typing import BinaryIO, cast
 import yaml
 
 from data_generation.batch_dataset_generator import generate_batch_dataset
+from data_generation.submission import (
+    JobSubmitter,
+    SubmissionError,
+    SubmissionRequest,
+    TandemnStoreSubmitter,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCHMARKS_ROOT = ROOT / "benchmarks"
@@ -26,6 +32,7 @@ DEFAULT_ARTIFACT_ROOT = ROOT / "artifacts"
 BENCHMARK_STATE_FILENAME = "benchmark_state.json"
 PROMPTS_FILENAME = "prompts.jsonl"
 RESPONSES_FILENAME = "responses.jsonl"
+RUNTIME_AIPERF_FILENAME = "runtime-aiperf.yaml"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -74,6 +81,7 @@ class Job:
     deadline_minute: float | None
     hard_stop_minute: float
     parent_job_id: str | None
+    submission: SubmissionRequest | None
 
 
 @dataclass(frozen=True)
@@ -106,6 +114,8 @@ class RunningJob:
     accumulated_runtime_seconds: float = 0.0
     process_started_at: float | None = None
     exit_code: int | None = None
+    tandemn_job_id: str | None = None
+    endpoint_url: str | None = None
     raw_record_offsets: dict[Path, int] = field(default_factory=dict)
     recorded_prompt_ids: set[str] = field(default_factory=set)
     recorded_response_ids: set[str] = field(default_factory=set)
@@ -139,6 +149,17 @@ def main() -> None:
         "--artifact-root",
         type=Path,
         default=DEFAULT_ARTIFACT_ROOT,
+    )
+    parser.add_argument(
+        "--aiperf-export-level",
+        choices=("summary", "records", "raw"),
+        default="raw",
+        help="AI-Perf output detail; summary excludes per-request payloads",
+    )
+    parser.add_argument(
+        "--discard-request-data",
+        action="store_true",
+        help="do not create controller request files and discard AI-Perf inputs",
     )
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument(
@@ -177,6 +198,8 @@ def main() -> None:
 
     if args.output is not None or args.records is not None:
         parser.error("--output and --records require --generate-batch")
+    if args.discard_request_data and args.aiperf_export_level != "summary":
+        parser.error("--discard-request-data requires --aiperf-export-level summary")
 
     try:
         benchmark = load_benchmark(resolve_benchmark_overview(args.benchmark))
@@ -191,6 +214,8 @@ def main() -> None:
                 benchmark,
                 args.artifact_root,
                 resume_run_id=args.resume,
+                aiperf_export_level=args.aiperf_export_level,
+                discard_request_data=args.discard_request_data,
             )
         except ValueError as error:
             parser.error(str(error))
@@ -204,6 +229,9 @@ def run_benchmark(
     *,
     run_id: str | None = None,
     resume_run_id: str | None = None,
+    aiperf_export_level: str = "raw",
+    discard_request_data: bool = False,
+    job_submitter: JobSubmitter | None = None,
 ) -> RunSummary:
     """Run or resume every enabled job in one benchmark."""
     if run_id is not None and resume_run_id is not None:
@@ -223,8 +251,17 @@ def run_benchmark(
         )
         for job in benchmark.jobs
     }
+    active_submitter = job_submitter
+    if active_submitter is None and any(
+        item.job.submission is not None for item in jobs.values()
+    ):
+        active_submitter = TandemnStoreSubmitter()
     for item in jobs.values():
-        ensure_job_artifacts(run_directory, item.job.job_id)
+        ensure_job_artifacts(
+            run_directory,
+            item.job.job_id,
+            create_record_files=not discard_request_data,
+        )
     elapsed_before_start = 0.0
     created_at = utc_timestamp()
     milestones: list[dict[str, object]] = []
@@ -284,8 +321,12 @@ def run_benchmark(
                     now,
                     run_directory,
                     benchmark.shutdown_grace_seconds,
+                    aiperf_export_level,
+                    discard_request_data,
+                    active_submitter,
                 )
-                sync_job_records(item, run_directory)
+                if not discard_request_data:
+                    sync_job_records(item, run_directory)
                 record_job_milestones(
                     milestones,
                     item,
@@ -321,7 +362,8 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
-        sync_all_job_records(jobs.values(), run_directory)
+        if not discard_request_data:
+            sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
             milestones,
             jobs,
@@ -353,7 +395,8 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
-        sync_all_job_records(jobs.values(), run_directory)
+        if not discard_request_data:
+            sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
             milestones,
             jobs,
@@ -379,7 +422,8 @@ def run_benchmark(
             time.time() - active_period_started_at,
         )
         status = "completed"
-        sync_all_job_records(jobs.values(), run_directory)
+        if not discard_request_data:
+            sync_all_job_records(jobs.values(), run_directory)
         add_milestone(milestones, "benchmark_completed", elapsed_seconds)
         save_benchmark_state(
             run_directory,
@@ -410,6 +454,9 @@ def reconcile_job(
     now: float,
     run_directory: Path,
     shutdown_grace_seconds: float,
+    aiperf_export_level: str = "raw",
+    discard_request_data: bool = False,
+    job_submitter: JobSubmitter | None = None,
 ) -> None:
     """Apply the current benchmark time to one job."""
     record_process_exit(item)
@@ -425,7 +472,13 @@ def reconcile_job(
             item.state = JobState.MISSED
             LOGGER.error("[missed] %s", job.job_id)
         elif elapsed_minutes >= job.start_minute:
-            start_job(item, run_directory)
+            start_job(
+                item,
+                run_directory,
+                aiperf_export_level=aiperf_export_level,
+                discard_request_data=discard_request_data,
+                job_submitter=job_submitter,
+            )
 
     if item.state == JobState.RUNNING:
         if (
@@ -458,10 +511,47 @@ def reconcile_job(
     record_process_exit(item)
 
 
-def start_job(item: RunningJob, run_directory: Path) -> None:
+def start_job(
+    item: RunningJob,
+    run_directory: Path,
+    *,
+    aiperf_export_level: str = "raw",
+    discard_request_data: bool = False,
+    job_submitter: JobSubmitter | None = None,
+) -> None:
     """Start one independent AIPerf generator or batch sender."""
-    job_directory = ensure_job_artifacts(run_directory, item.job.job_id)
-    command = job_command(item.job, job_directory)
+    job_directory = ensure_job_artifacts(
+        run_directory,
+        item.job.job_id,
+        create_record_files=not discard_request_data,
+    )
+    if discard_request_data and item.job.driver == "aiperf":
+        discard_aiperf_inputs(job_directory)
+    try:
+        runtime_config = item.job.config
+        if item.job.submission is not None:
+            if item.tandemn_job_id is None or item.endpoint_url is None:
+                if job_submitter is None:
+                    raise SubmissionError("no Tandemn job submitter is configured")
+                submission_result = job_submitter.submit(item.job.submission)
+                item.tandemn_job_id = submission_result.tandemn_job_id
+                item.endpoint_url = submission_result.endpoint_url
+            runtime_config = materialize_runtime_config(
+                item.job,
+                job_directory,
+                item.endpoint_url,
+            )
+        command = job_command(
+            item.job,
+            job_directory,
+            config=runtime_config,
+            endpoint_url=item.endpoint_url,
+            aiperf_export_level=aiperf_export_level,
+        )
+    except (OSError, SubmissionError, ValueError, yaml.YAMLError) as error:
+        item.state = JobState.FAILED
+        LOGGER.error("[failed] %s setup error: %s", item.job.job_id, error)
+        return
     log_file = None
     if not item.job.output_to_terminal:
         log_file = (job_directory / "process.log").open("ab")
@@ -506,13 +596,36 @@ def job_artifact_directory(run_directory: Path, job_id: str) -> Path:
     return run_directory / "jobs" / job_id
 
 
-def ensure_job_artifacts(run_directory: Path, job_id: str) -> Path:
+def ensure_job_artifacts(
+    run_directory: Path,
+    job_id: str,
+    *,
+    create_record_files: bool = True,
+) -> Path:
     """Create the stable prompt and response files for one job."""
     job_directory = job_artifact_directory(run_directory, job_id)
     job_directory.mkdir(parents=True, exist_ok=True)
-    (job_directory / PROMPTS_FILENAME).touch(exist_ok=True)
-    (job_directory / RESPONSES_FILENAME).touch(exist_ok=True)
+    if create_record_files:
+        (job_directory / PROMPTS_FILENAME).touch(exist_ok=True)
+        (job_directory / RESPONSES_FILENAME).touch(exist_ok=True)
     return job_directory
+
+
+def discard_aiperf_inputs(job_directory: Path) -> None:
+    """Redirect AI-Perf's generated input export to the null device."""
+    input_paths = (
+        job_directory / "inputs.json",
+        job_directory / "inputs.tmp",
+    )
+    for inputs_path in input_paths:
+        if inputs_path.exists() or inputs_path.is_symlink():
+            inputs_path.unlink()
+        try:
+            inputs_path.symlink_to(os.devnull)
+        except OSError as error:
+            raise RuntimeError(
+                f"Cannot safely discard AI-Perf inputs at {inputs_path}"
+            ) from error
 
 
 def sync_all_job_records(
@@ -819,6 +932,7 @@ def save_benchmark_state(
                 "stop_at_offset_minutes": item.job.stop_minute,
                 "deadline_at_offset_minutes": item.job.deadline_minute,
                 "hard_stop_at_offset_minutes": item.job.hard_stop_minute,
+                "submission": submission_state(item.job.submission),
                 "state": item.state.value,
                 "pid": None if item.process is None else item.process.pid,
                 "launch_count": item.launch_count,
@@ -830,6 +944,8 @@ def save_benchmark_state(
                 "runtime_seconds": round(current_runtime_seconds(item), 3),
                 "exit_code": item.exit_code,
                 "deadline_missed": item.deadline_missed,
+                "tandemn_job_id": item.tandemn_job_id,
+                "endpoint_url": item.endpoint_url,
             }
             for job_id, item in jobs.items()
         ],
@@ -991,6 +1107,18 @@ def restore_benchmark_state(
             definition.get("deadline_missed", False),
             f"state.jobs.{job_id}.deadline_missed",
         )
+        item.tandemn_job_id = optional_text(
+            definition.get("tandemn_job_id"),
+            f"state.jobs.{job_id}.tandemn_job_id",
+        )
+        item.endpoint_url = optional_text(
+            definition.get("endpoint_url"),
+            f"state.jobs.{job_id}.endpoint_url",
+        )
+        if (item.tandemn_job_id is None) != (item.endpoint_url is None):
+            raise ValueError(
+                f"State submission is incomplete for benchmark job {job_id}"
+            )
 
     milestone_value = document.get("milestones", [])
     if not isinstance(milestone_value, list):
@@ -1020,10 +1148,21 @@ def validate_saved_job(
         "stop_at_offset_minutes": job.stop_minute,
         "deadline_at_offset_minutes": job.deadline_minute,
         "hard_stop_at_offset_minutes": job.hard_stop_minute,
+        "submission": submission_state(job.submission),
     }
     for field_name, expected_value in expected.items():
         if definition.get(field_name) != expected_value:
             raise ValueError(f"Benchmark changed for {job.job_id}: {field_name}")
+
+
+def submission_state(submission: SubmissionRequest | None) -> dict[str, object] | None:
+    """Return the source-controlled submission fields saved for resume checks."""
+    if submission is None:
+        return None
+    return {
+        "user_id": submission.user_id,
+        "spec_json": dict(submission.spec_json),
+    }
 
 
 def record_job_milestones(
@@ -1097,16 +1236,65 @@ def interrupt_controller(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
-def job_command(job: Job, artifact_directory: Path) -> tuple[str, ...]:
+def materialize_runtime_config(
+    job: Job,
+    artifact_directory: Path,
+    endpoint_url: str | None,
+) -> Path:
+    """Create the generator config that owns one job's runtime endpoint."""
+    if endpoint_url is None:
+        raise SubmissionError("Tandemn submission returned no endpoint URL")
+    if job.driver != "aiperf":
+        return job.config
+
+    document = dict(
+        mapping(
+            yaml.safe_load(job.config.read_text(encoding="utf-8")),
+            f"AIPerf config for {job.job_id}",
+        )
+    )
+    benchmark_document = cast(
+        dict[str, object],
+        mapping(document.get("benchmark"), f"AIPerf benchmark for {job.job_id}"),
+    )
+    endpoint_document = cast(
+        dict[str, object],
+        mapping(
+            benchmark_document.get("endpoint"),
+            f"AIPerf endpoint for {job.job_id}",
+        ),
+    )
+    endpoint_document["url"] = endpoint_url
+    endpoint_document.pop("path", None)
+
+    runtime_config = artifact_directory / RUNTIME_AIPERF_FILENAME
+    runtime_config.write_text(
+        yaml.safe_dump(document, sort_keys=False),
+        encoding="utf-8",
+    )
+    return runtime_config
+
+
+def job_command(
+    job: Job,
+    artifact_directory: Path,
+    *,
+    config: Path | None = None,
+    endpoint_url: str | None = None,
+    aiperf_export_level: str = "raw",
+) -> tuple[str, ...]:
     """Build the process command declared by a job's driver."""
+    active_config = job.config if config is None else config
     if job.driver == "aiperf":
+        if aiperf_export_level not in {"summary", "records", "raw"}:
+            raise ValueError(f"Unsupported AIPerf export level: {aiperf_export_level}")
         return (
             "aiperf",
             "profile",
             "--config",
-            str(job.config),
+            str(active_config),
             "--export-level",
-            "raw",
+            aiperf_export_level,
             "--output-artifact-dir",
             str(artifact_directory),
             "--profile-export-prefix",
@@ -1118,9 +1306,11 @@ def job_command(job: Job, artifact_directory: Path) -> tuple[str, ...]:
 
     replacements = {
         "{artifact_dir}": str(artifact_directory),
-        "{config}": str(job.config),
+        "{config}": str(active_config),
         "{job_id}": job.job_id,
     }
+    if endpoint_url is not None:
+        replacements["{endpoint_url}"] = endpoint_url
     command = []
     for argument in job.command:
         for marker, replacement in replacements.items():
@@ -1249,6 +1439,7 @@ def load_job(
         if parent_value is None
         else text(parent_value, f"jobs.{job_id}.parent_job_id")
     )
+    submission = load_submission(definition.get("submission"), job_id, kind)
 
     if kind == JobKind.ONLINE and (stop_minute is None or stop_minute <= start_minute):
         raise ValueError(f"{job_id} requires a stop after its start")
@@ -1274,6 +1465,37 @@ def load_job(
         deadline_minute=deadline_minute,
         hard_stop_minute=hard_stop_minute,
         parent_job_id=parent_job_id,
+        submission=submission,
+    )
+
+
+def load_submission(
+    value: object,
+    job_id: str,
+    kind: JobKind,
+) -> SubmissionRequest | None:
+    """Load the immutable Tandemn request associated with one benchmark job."""
+    if value is None:
+        return None
+    definition = mapping(value, f"jobs.{job_id}.submission")
+    user_id = text(
+        definition.get("user_id"),
+        f"jobs.{job_id}.submission.user_id",
+    )
+    spec_json = dict(
+        mapping(
+            definition.get("spec_json"),
+            f"jobs.{job_id}.submission.spec_json",
+        )
+    )
+    text(
+        spec_json.get("model_id"),
+        f"jobs.{job_id}.submission.spec_json.model_id",
+    )
+    return SubmissionRequest(
+        user_id=user_id,
+        kind=kind.value,
+        spec_json=spec_json,
     )
 
 

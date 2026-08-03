@@ -1,18 +1,20 @@
 # Benchmark job: job-benchmark_timing_3hr-67-1
-# Benchmark window: T+67 through T+157. Bursty traffic with a 5x peak/mean ratio.
+# Benchmark window: T+67 through T+157. Declared pattern: Bursty.
 # Priority: HIGH. SLO: p99 TTFT 2500 ms; p99 TPOT 45 ms.
-# Traffic hypothesis: 0.300 mean RPS with highly clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/premium_agents_kimi_analysis.json
+# Measured: 0.077 mean RPS, 4.000 max RPS, 2.189 interarrival CV.
+# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
   model: moonshotai/Kimi-K2-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 900
-    connectionReuse: sticky-user-sessions
+    connectionReuse: pooled
   tokenizer:
     name: ${TOKENIZER_NAME:moonshotai/Kimi-K2-Instruct}
   dataset:
@@ -20,14 +22,14 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 1400, median: 1050, min: 350, max: 4096}
-      osl: {mean: 4096, median: 3072, min: 1024, max: 12000}
+      isl: {mean: 137750.794, median: 109733, min: 668, max: 407013}
+      osl: {mean: 1157.851, median: 172, min: 3, max: 36498}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 5400
-      rate: 0.300
-      smoothness: 0.0625
+      rate: 0.077
+      smoothness: 0.209
       concurrency: 280
       gracePeriod: 900

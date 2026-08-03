@@ -1,18 +1,20 @@
 # Benchmark job: job-benchmark_timing_3hr-7-3
-# Benchmark window: T+7 through T+180. Bursty traffic with a 3.5x peak/mean ratio.
+# Benchmark window: T+7 through T+180. Declared pattern: Bursty.
 # Priority: STANDARD. SLO: p99 TTFT 700 ms; p99 TPOT 50 ms.
-# Traffic hypothesis: 70.644 mean RPS with clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/support_assistant_analysis.json
+# Measured: 0.009 mean RPS, 1.000 max RPS, 1.605 interarrival CV.
+# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 103
 
 benchmark:
   model: mistralai/Mixtral-8x7B-Instruct-v0.1
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 180
-    connectionReuse: sticky-user-sessions
+    connectionReuse: pooled
   tokenizer:
     name: ${TOKENIZER_NAME:mistralai/Mixtral-8x7B-Instruct-v0.1}
   dataset:
@@ -20,15 +22,14 @@ benchmark:
     entries: 1500
     sampling: random
     prompts:
-      isl: {mean: 1050, median: 788, min: 1, max: 5650}
-      osl: {mean: 350, median: 262, min: 87, max: 1000}
-    prefixPrompts: {poolSize: 32, length: 350}
-    turns: {peaks: [{value: 1, weight: 70}, {value: 3, weight: 30}]}
+      isl: {mean: 2907.354, stddev: 1003.743, min: 1052, max: 5881}
+      osl: {mean: 269.052, median: 237, min: 7, max: 877}
+    turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 10380
-      rate: 70.644
-      smoothness: 0.16
+      rate: 0.009
+      smoothness: 0.388
       concurrency: 4500
       gracePeriod: 180

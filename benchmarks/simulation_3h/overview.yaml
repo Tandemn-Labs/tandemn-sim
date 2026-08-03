@@ -22,6 +22,29 @@ jobs:
   job-benchmark_timing_3hr-0-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_chat_free
+      spec_json:
+        model_id: meta-llama/Llama-3.2-1B-Instruct
+        job_features:
+          isl_token_avg: 900
+          isl_token_min: 225
+          isl_token_max: 2200
+          isl_distribution_type: LogNormal
+          osl_token_avg: 300
+          osl_token_min: 75
+          osl_token_max: 700
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Diurnal
+          peak_to_mean_ratio: 2
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.7
+          shared_prefix_length_avg: 225
+          is_session_affinity: true
+          priority_class: LOW
+          max_concurrent_streaming: 12000
+          target_p99_ttft_ms: 700
+          target_p99_tpot_ms: 55
     tenant: tenant_chat_free
     driver: aiperf
     config: jobs/chat-free-core.yaml
@@ -33,6 +56,29 @@ jobs:
   job-benchmark_timing_3hr-0-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_chat_premium
+      spec_json:
+        model_id: meta-llama/Llama-3.3-70B-Instruct
+        job_features:
+          isl_token_avg: 1200
+          isl_token_min: 300
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 500
+          osl_token_min: 125
+          osl_token_max: 1400
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Diurnal
+          peak_to_mean_ratio: 2
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.7
+          shared_prefix_length_avg: 300
+          is_session_affinity: true
+          priority_class: HIGH
+          max_concurrent_streaming: 900
+          target_p99_ttft_ms: 600
+          target_p99_tpot_ms: 38
     tenant: tenant_chat_premium
     driver: aiperf
     config: jobs/chat-premium-core.yaml
@@ -44,6 +90,29 @@ jobs:
   job-benchmark_timing_3hr-0-3:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_code_autocomplete
+      spec_json:
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        job_features:
+          isl_token_avg: 1800
+          isl_token_min: 450
+          isl_token_max: 5000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 120
+          osl_token_min: 30
+          osl_token_max: 350
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 5000
+          target_p99_ttft_ms: 180
+          target_p99_tpot_ms: 45
     tenant: tenant_code_autocomplete
     driver: aiperf
     config: jobs/code-autocomplete-core.yaml
@@ -55,6 +124,29 @@ jobs:
   job-benchmark_timing_3hr-0-4:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_safety_moderation
+      spec_json:
+        model_id: meta-llama/Llama-3.2-1B-Instruct
+        job_features:
+          isl_token_avg: 256
+          isl_token_min: 64
+          isl_token_max: 1024
+          isl_distribution_type: LogNormal
+          osl_token_avg: 8
+          osl_token_min: 2
+          osl_token_max: 32
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: HIGH
+          max_concurrent_streaming: 25000
+          target_p99_ttft_ms: 100
+          target_p99_tpot_ms: 30
     tenant: tenant_safety_moderation
     driver: aiperf
     config: jobs/safety-moderation-core.yaml
@@ -66,6 +158,29 @@ jobs:
   job-benchmark_timing_3hr-0-5:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_embeddings
+      spec_json:
+        model_id: BAAI/bge-m3
+        job_features:
+          isl_token_avg: 384
+          isl_token_min: 96
+          isl_token_max: 1024
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1
+          osl_token_min: 1
+          osl_token_max: 1
+          osl_distribution_type: Constant
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 40000
+          target_p99_ttft_ms: 120
+          target_p99_tpot_ms: 1
     tenant: tenant_embeddings
     driver: aiperf
     config: jobs/embeddings-core.yaml
@@ -77,6 +192,29 @@ jobs:
   job-benchmark_timing_3hr-7-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_search_rag
+      spec_json:
+        model_id: Qwen/Qwen2.5-14B-Instruct
+        job_features:
+          isl_token_avg: 9000
+          isl_token_min: 2250
+          isl_token_max: 32000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 220
+          osl_token_min: 55
+          osl_token_max: 700
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Poisson
+          peak_to_mean_ratio: 2
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.3
+          shared_prefix_length_avg: 2250
+          is_session_affinity: true
+          priority_class: STANDARD
+          max_concurrent_streaming: 2600
+          target_p99_ttft_ms: 1500
+          target_p99_tpot_ms: 55
     tenant: tenant_search_rag
     driver: aiperf
     config: jobs/search-rag.yaml
@@ -88,6 +226,29 @@ jobs:
   job-benchmark_timing_3hr-7-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_search_rerank
+      spec_json:
+        model_id: BAAI/bge-reranker-v2-m3
+        job_features:
+          isl_token_avg: 512
+          isl_token_min: 128
+          isl_token_max: 2048
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1
+          osl_token_min: 1
+          osl_token_max: 1
+          osl_distribution_type: Constant
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 10000
+          target_p99_ttft_ms: 160
+          target_p99_tpot_ms: 1
     tenant: tenant_search_rerank
     driver: aiperf
     config: jobs/search-rerank.yaml
@@ -99,6 +260,29 @@ jobs:
   job-benchmark_timing_3hr-7-3:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_support
+      spec_json:
+        model_id: mistralai/Mixtral-8x7B-Instruct-v0.1
+        job_features:
+          isl_token_avg: 1400
+          isl_token_min: 350
+          isl_token_max: 6000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 350
+          osl_token_min: 87
+          osl_token_max: 1000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.3
+          shared_prefix_length_avg: 350
+          is_session_affinity: true
+          priority_class: STANDARD
+          max_concurrent_streaming: 4500
+          target_p99_ttft_ms: 700
+          target_p99_tpot_ms: 50
     tenant: tenant_support
     driver: aiperf
     config: jobs/support-assistant.yaml
@@ -110,6 +294,30 @@ jobs:
   job-benchmark_timing_3hr-15-1:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_eval_platform
+      spec_json:
+        model_id: meta-llama/Llama-3.3-70B-Instruct
+        job_features:
+          isl_token_avg: 1800
+          isl_token_min: 450
+          isl_token_max: 6000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1200
+          osl_token_min: 300
+          osl_token_max: 4000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 43200000
+          priority_class: STANDARD
+          deadline_hrs: 2.25
+          target_p99_ttft_ms: 10000
+          target_p99_tpot_ms: 120
     tenant: tenant_eval_platform
     driver: external_mock_data
     config: jobs/batch-mini-nightly-eval.yaml
@@ -122,6 +330,29 @@ jobs:
   job-benchmark_timing_3hr-15-2:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_embeddings
+      spec_json:
+        model_id: BAAI/bge-m3
+        job_features:
+          isl_token_avg: 384
+          isl_token_min: 96
+          isl_token_max: 1024
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1
+          osl_token_min: 1
+          osl_token_max: 1
+          osl_distribution_type: Constant
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 492800000
+          priority_class: LOW
+          deadline_hrs: 2.75
+          target_p99_ttft_ms: 1000
     tenant: tenant_embeddings
     driver: external_mock_data
     config: jobs/batch-embedding-backfill.yaml
@@ -134,6 +365,30 @@ jobs:
   job-benchmark_timing_3hr-15-3:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_koi_profiling
+      spec_json:
+        model_id: microsoft/phi-4
+        job_features:
+          isl_token_avg: 1000
+          isl_token_min: 250
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 512
+          osl_token_min: 128
+          osl_token_max: 2048
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 27216000
+          priority_class: LOW
+          deadline_hrs: 1.75
+          target_p99_ttft_ms: 12000
+          target_p99_tpot_ms: 200
     tenant: tenant_koi_profiling
     driver: external_mock_data
     config: jobs/batch-phi4-quant-probe.yaml
@@ -146,6 +401,29 @@ jobs:
   job-benchmark_timing_3hr-32-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_code_autocomplete
+      spec_json:
+        model_id: Qwen/Qwen2.5-Coder-32B-Instruct
+        job_features:
+          isl_token_avg: 2200
+          isl_token_min: 550
+          isl_token_max: 6000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 96
+          osl_token_min: 24
+          osl_token_max: 280
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 13000
+          target_p99_ttft_ms: 160
+          target_p99_tpot_ms: 45
     tenant: tenant_code_autocomplete
     driver: aiperf
     config: jobs/code-morning-burst.yaml
@@ -158,6 +436,29 @@ jobs:
   job-benchmark_timing_3hr-32-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_enterprise_chat
+      spec_json:
+        model_id: microsoft/phi-4
+        job_features:
+          isl_token_avg: 1500
+          isl_token_min: 375
+          isl_token_max: 5500
+          isl_distribution_type: LogNormal
+          osl_token_avg: 420
+          osl_token_min: 105
+          osl_token_max: 1200
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Diurnal
+          peak_to_mean_ratio: 2
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.7
+          shared_prefix_length_avg: 375
+          is_session_affinity: true
+          priority_class: STANDARD
+          max_concurrent_streaming: 1600
+          target_p99_ttft_ms: 500
+          target_p99_tpot_ms: 42
     tenant: tenant_enterprise_chat
     driver: aiperf
     config: jobs/enterprise-chat.yaml
@@ -169,6 +470,29 @@ jobs:
   job-benchmark_timing_3hr-49-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_chat_free
+      spec_json:
+        model_id: mistralai/Mixtral-8x7B-Instruct-v0.1
+        job_features:
+          isl_token_avg: 850
+          isl_token_min: 212
+          isl_token_max: 2200
+          isl_distribution_type: LogNormal
+          osl_token_avg: 280
+          osl_token_min: 70
+          osl_token_max: 650
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0.5
+          multi_turn_ratio: 0.7
+          shared_prefix_length_avg: 212
+          is_session_affinity: true
+          priority_class: STANDARD
+          max_concurrent_streaming: 32000
+          target_p99_ttft_ms: 650
+          target_p99_tpot_ms: 50
     tenant: tenant_chat_free
     driver: aiperf
     config: jobs/product-launch-chat.yaml
@@ -181,6 +505,29 @@ jobs:
   job-benchmark_timing_3hr-49-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_safety_moderation
+      spec_json:
+        model_id: meta-llama/Llama-3.2-1B-Instruct
+        job_features:
+          isl_token_avg: 320
+          isl_token_min: 80
+          isl_token_max: 1024
+          isl_distribution_type: LogNormal
+          osl_token_avg: 8
+          osl_token_min: 2
+          osl_token_max: 32
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: HIGH
+          max_concurrent_streaming: 60000
+          target_p99_ttft_ms: 90
+          target_p99_tpot_ms: 30
     tenant: tenant_safety_moderation
     driver: aiperf
     config: jobs/product-launch-moderation.yaml
@@ -193,6 +540,29 @@ jobs:
   job-benchmark_timing_3hr-67-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_agents_premium
+      spec_json:
+        model_id: moonshotai/Kimi-K2-Instruct
+        job_features:
+          isl_token_avg: 1400
+          isl_token_min: 350
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 4096
+          osl_token_min: 1024
+          osl_token_max: 12000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: true
+          priority_class: HIGH
+          max_concurrent_streaming: 280
+          target_p99_ttft_ms: 2500
+          target_p99_tpot_ms: 45
     tenant: tenant_agents_premium
     driver: aiperf
     config: jobs/premium-agents-kimi.yaml
@@ -204,6 +574,29 @@ jobs:
   job-benchmark_timing_3hr-67-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_frontier_glm
+      spec_json:
+        model_id: zai-org/GLM-4.5-Air
+        job_features:
+          isl_token_avg: 1800
+          isl_token_min: 450
+          isl_token_max: 6000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 2500
+          osl_token_min: 625
+          osl_token_max: 9000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 300
+          target_p99_ttft_ms: 2200
+          target_p99_tpot_ms: 50
     tenant: tenant_frontier_glm
     driver: aiperf
     config: jobs/frontier-reasoning-glm.yaml
@@ -215,6 +608,29 @@ jobs:
   job-benchmark_timing_3hr-67-3:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_moe_routing
+      spec_json:
+        model_id: Qwen/Qwen3-30B-A3B-Instruct
+        job_features:
+          isl_token_avg: 1200
+          isl_token_min: 300
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 900
+          osl_token_min: 225
+          osl_token_max: 3000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 900
+          target_p99_ttft_ms: 1000
+          target_p99_tpot_ms: 45
     tenant: tenant_moe_routing
     driver: aiperf
     config: jobs/moe-routing-qwen3.yaml
@@ -226,6 +642,30 @@ jobs:
   job-benchmark_timing_3hr-85-1:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_koi_profiling
+      spec_json:
+        model_id: Qwen/Qwen2.5-14B-Instruct
+        job_features:
+          isl_token_avg: 1400
+          isl_token_min: 350
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 512
+          osl_token_min: 128
+          osl_token_max: 1600
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 22944000
+          priority_class: LOW
+          deadline_hrs: 1.4167
+          target_p99_ttft_ms: 12000
+          target_p99_tpot_ms: 200
     tenant: tenant_koi_profiling
     driver: external_mock_data
     config: jobs/batch-calibration-probe.yaml
@@ -238,6 +678,30 @@ jobs:
   job-benchmark_timing_3hr-100-1:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_safety_p0
+      spec_json:
+        model_id: meta-llama/Llama-3.3-70B-Instruct
+        job_features:
+          isl_token_avg: 2200
+          isl_token_min: 550
+          isl_token_max: 8000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 700
+          osl_token_min: 175
+          osl_token_max: 2500
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 23200000
+          priority_class: HIGH
+          deadline_hrs: 1
+          target_p99_ttft_ms: 8000
+          target_p99_tpot_ms: 100
     tenant: tenant_safety_p0
     driver: external_mock_data
     config: jobs/batch-safety-p0-replay.yaml
@@ -250,6 +714,29 @@ jobs:
   job-benchmark_timing_3hr-100-2:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_safety_reasoner
+      spec_json:
+        model_id: microsoft/phi-4
+        job_features:
+          isl_token_avg: 900
+          isl_token_min: 225
+          isl_token_max: 3000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 160
+          osl_token_min: 40
+          osl_token_max: 600
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: HIGH
+          max_concurrent_streaming: 2500
+          target_p99_ttft_ms: 350
+          target_p99_tpot_ms: 40
     tenant: tenant_safety_reasoner
     driver: aiperf
     config: jobs/safety-p0-live.yaml
@@ -261,6 +748,29 @@ jobs:
   job-benchmark_timing_3hr-125-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_meeting_summary
+      spec_json:
+        model_id: Qwen/Qwen2.5-72B-Instruct
+        job_features:
+          isl_token_avg: 24000
+          isl_token_min: 6000
+          isl_token_max: 128000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1200
+          osl_token_min: 300
+          osl_token_max: 4000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Bursty
+          peak_to_mean_ratio: 3.5
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: STANDARD
+          max_concurrent_streaming: 180
+          target_p99_ttft_ms: 3000
+          target_p99_tpot_ms: 65
     tenant: tenant_meeting_summary
     driver: aiperf
     config: jobs/meeting-summary.yaml
@@ -272,6 +782,30 @@ jobs:
   job-benchmark_timing_3hr-125-2:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_reports
+      spec_json:
+        model_id: Qwen/Qwen2.5-72B-Instruct
+        job_features:
+          isl_token_avg: 18000
+          isl_token_min: 4500
+          isl_token_max: 64000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1400
+          osl_token_min: 350
+          osl_token_max: 5000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 155200000
+          priority_class: LOW
+          deadline_hrs: 0.9167
+          target_p99_ttft_ms: 10000
+          target_p99_tpot_ms: 120
     tenant: tenant_reports
     driver: external_mock_data
     config: jobs/batch-sales-reports.yaml
@@ -284,6 +818,29 @@ jobs:
   job-benchmark_timing_3hr-145-1:
     enabled: true
     kind: online
+    submission:
+      user_id: tenant_legal_finance
+      spec_json:
+        model_id: meta-llama/Llama-3.3-70B-Instruct
+        job_features:
+          isl_token_avg: 3000
+          isl_token_min: 750
+          isl_token_max: 12000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 700
+          osl_token_min: 175
+          osl_token_max: 2200
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Diurnal
+          peak_to_mean_ratio: 2
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          priority_class: HIGH
+          max_concurrent_streaming: 240
+          target_p99_ttft_ms: 1000
+          target_p99_tpot_ms: 45
     tenant: tenant_legal_finance
     driver: aiperf
     config: jobs/legal-finance-review.yaml
@@ -295,6 +852,30 @@ jobs:
   job-benchmark_timing_3hr-145-2:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_new_model_eval
+      spec_json:
+        model_id: deepseek-ai/DeepSeek-V3
+        job_features:
+          isl_token_avg: 1800
+          isl_token_min: 450
+          isl_token_max: 6000
+          isl_distribution_type: LogNormal
+          osl_token_avg: 1600
+          osl_token_min: 400
+          osl_token_max: 6000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 21760000
+          priority_class: STANDARD
+          deadline_hrs: 0.5833
+          target_p99_ttft_ms: 12000
+          target_p99_tpot_ms: 160
     tenant: tenant_new_model_eval
     driver: external_mock_data
     config: jobs/batch-deepseek-heldout-eval.yaml
@@ -307,6 +888,30 @@ jobs:
   job-benchmark_timing_3hr-160-1:
     enabled: false
     kind: batch
+    submission:
+      user_id: tenant_koi_profiling
+      spec_json:
+        model_id: Qwen/Qwen3-30B-A3B-Instruct
+        job_features:
+          isl_token_avg: 1000
+          isl_token_min: 250
+          isl_token_max: 4096
+          isl_distribution_type: LogNormal
+          osl_token_avg: 800
+          osl_token_min: 200
+          osl_token_max: 3000
+          osl_distribution_type: LogNormal
+          request_arrival_pattern: Constant
+          peak_to_mean_ratio: 1
+          workload_prefix_concentration: 0
+          multi_turn_ratio: 0
+          shared_prefix_length_avg: 1
+          is_session_affinity: false
+          total_token_budget: 43200000
+          priority_class: LOW
+          deadline_hrs: 0.3333
+          target_p99_ttft_ms: 12000
+          target_p99_tpot_ms: 200
     tenant: tenant_koi_profiling
     driver: external_mock_data
     config: jobs/batch-moe-quant-probe.yaml

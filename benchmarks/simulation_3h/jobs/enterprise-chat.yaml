@@ -1,18 +1,22 @@
 # Benchmark job: job-benchmark_timing_3hr-32-2
-# Benchmark window: T+32 through T+152. Diurnal traffic with a 2x peak/mean ratio.
+# Benchmark window: T+32 through T+152. Declared pattern: Diurnal.
 # Priority: STANDARD. SLO: p99 TTFT 500 ms; p99 TPOT 42 ms.
-# Traffic hypothesis: ramp to 88.203 RPS; the full-window ramp yields a 2x peak/mean ratio.
+# Trace: datasets/simulation_3h/traces/enterprise_chat_analysis.json
+# Measured: 39.700 mean RPS, 75.000 max RPS.
+# Mapping: full-window Gamma traffic at the measured mean RPS.
+# Smoothness is calibrated from second-level variance after removing the
+# trace's 10-minute rate envelope.
 schemaVersion: "2.0"
 randomSeed: 102
 
 benchmark:
   model: microsoft/phi-4
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 180
-    connectionReuse: sticky-user-sessions
+    connectionReuse: pooled
   tokenizer:
     name: ${TOKENIZER_NAME:microsoft/phi-4}
   dataset:
@@ -20,15 +24,14 @@ benchmark:
     entries: 1000
     sampling: random
     prompts:
-      isl: {mean: 1125, median: 844, min: 1, max: 5125}
-      osl: {mean: 420, median: 315, min: 105, max: 1200}
-    prefixPrompts: {poolSize: 32, length: 375}
-    turns: {peaks: [{value: 1, weight: 30}, {value: 4, weight: 70}]}
+      isl: {mean: 1523.161, median: 917, min: 6, max: 7998}
+      osl: {mean: 94.547, median: 39, min: 1, max: 1200}
+    turns: 1
   phases:
     - name: profiling
-      type: poisson
+      type: gamma
       duration: 7200
-      rate: 88.203
+      rate: 39.700
+      smoothness: 0.733
       concurrency: 1600
-      rateRamp: 7200
       gracePeriod: 180

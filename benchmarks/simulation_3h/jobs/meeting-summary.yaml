@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-125-1
-# Benchmark window: T+125 through T+170. Bursty traffic with a 3.5x peak/mean ratio.
+# Benchmark window: T+125 through T+170. Declared pattern: Bursty.
 # Priority: STANDARD. SLO: p99 TTFT 3000 ms; p99 TPOT 65 ms.
-# Traffic hypothesis: 0.635 mean RPS with clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/meeting_summary_analysis.json
+# Measured: 0.003 mean RPS and nine requests at one source timestamp.
+# Mapping: Gamma arrivals with minimum smoothness to preserve an extreme cluster.
 schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
   model: Qwen/Qwen2.5-72B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 1200
@@ -20,14 +22,14 @@ benchmark:
     entries: 64
     sampling: random
     prompts:
-      isl: {mean: 24000, median: 18000, min: 6000, max: 128000}
-      osl: {mean: 1200, median: 900, min: 300, max: 4000}
+      isl: {mean: 42327.556, median: 33206, min: 24615, max: 92457}
+      osl: {mean: 357.444, stddev: 203.324, min: 3, max: 583}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 2700
-      rate: 0.635
-      smoothness: 0.16
+      rate: 0.003
+      smoothness: 0.001
       concurrency: 180
       gracePeriod: 1200

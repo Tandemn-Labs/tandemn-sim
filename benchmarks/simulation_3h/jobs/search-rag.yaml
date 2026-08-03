@@ -1,18 +1,20 @@
 # Benchmark job: job-benchmark_timing_3hr-7-1
-# Benchmark window: T+7 through T+180. Poisson traffic with a 2x peak/mean ratio.
+# Benchmark window: T+7 through T+180. Declared pattern: Poisson.
 # Priority: STANDARD. SLO: p99 TTFT 1500 ms; p99 TPOT 55 ms.
-# Traffic hypothesis: 95.588 mean RPS with native Poisson arrivals.
+# Trace: datasets/simulation_3h/traces/search_rag_analysis.json
+# Measured: 0.020 mean RPS, 2.000 max RPS, 1.064 interarrival CV.
+# Mapping: Poisson arrivals at the measured mean request rate.
 schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
   model: Qwen/Qwen2.5-14B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 300
-    connectionReuse: sticky-user-sessions
+    connectionReuse: pooled
   tokenizer:
     name: ${TOKENIZER_NAME:Qwen/Qwen2.5-14B-Instruct}
   dataset:
@@ -20,14 +22,13 @@ benchmark:
     entries: 512
     sampling: random
     prompts:
-      isl: {mean: 6750, median: 5062, min: 1, max: 29750}
-      osl: {mean: 220, median: 165, min: 55, max: 700}
-    prefixPrompts: {poolSize: 32, length: 2250}
-    turns: {peaks: [{value: 1, weight: 70}, {value: 3, weight: 30}]}
+      isl: {mean: 2969.874, stddev: 976.910, min: 1052, max: 5339}
+      osl: {mean: 277.150, median: 238, min: 7, max: 931}
+    turns: 1
   phases:
     - name: profiling
       type: poisson
       duration: 10380
-      rate: 95.588
+      rate: 0.020
       concurrency: 2600
       gracePeriod: 300

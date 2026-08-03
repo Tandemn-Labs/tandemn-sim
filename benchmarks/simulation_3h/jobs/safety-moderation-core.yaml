@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-0-4
-# Benchmark window: T+0 through T+180. Bursty traffic with a 3.5x peak/mean ratio.
+# Benchmark window: T+0 through T+180. Declared pattern: Bursty.
 # Priority: HIGH. SLO: p99 TTFT 100 ms; p99 TPOT 30 ms.
-# Traffic hypothesis: 21,008.403 mean RPS with clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/safety_moderation_analysis.json
+# Measured: 3.286 mean RPS, 35.000 max RPS, 20.398 interarrival CV.
+# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 104
 
 benchmark:
   model: meta-llama/Llama-3.2-1B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 120
@@ -20,14 +22,14 @@ benchmark:
     entries: 5000
     sampling: random
     prompts:
-      isl: {mean: 256, median: 192, min: 64, max: 1024}
-      osl: {mean: 8, median: 6, min: 2, max: 32}
+      isl: {mean: 247.650, stddev: 144.515, min: 0, max: 512}
+      osl: {mean: 6.574, stddev: 4.442, min: 0, max: 28}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 10800
-      rate: 21008.403
-      smoothness: 0.16
+      rate: 3.286
+      smoothness: 0.002
       concurrency: 25000
       gracePeriod: 120

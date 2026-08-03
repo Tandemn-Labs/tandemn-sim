@@ -1,18 +1,20 @@
 # Benchmark job: job-benchmark_timing_3hr-0-2
-# Benchmark window: T+0 through T+180. Diurnal traffic with a 2x peak/mean ratio.
+# Benchmark window: T+0 through T+180. Declared pattern: Diurnal.
 # Priority: HIGH. SLO: p99 TTFT 600 ms; p99 TPOT 38 ms.
-# Traffic hypothesis: ramp to 45.918 RPS; the full-window ramp yields a 2x peak/mean ratio.
+# Trace: datasets/simulation_3h/traces/chat_premium_analysis.json
+# Measured: 0.011 mean RPS, 2.000 max RPS, 2.337 interarrival CV.
+# Mapping: full-window Gamma ramp; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 102
 
 benchmark:
   model: meta-llama/Llama-3.3-70B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 300
-    connectionReuse: sticky-user-sessions
+    connectionReuse: pooled
   tokenizer:
     name: ${TOKENIZER_NAME:meta-llama/Llama-3.3-70B-Instruct}
   dataset:
@@ -20,15 +22,15 @@ benchmark:
     entries: 1000
     sampling: random
     prompts:
-      isl: {mean: 900, median: 675, min: 1, max: 3796}
-      osl: {mean: 500, median: 375, min: 125, max: 1400}
-    prefixPrompts: {poolSize: 32, length: 300}
-    turns: {peaks: [{value: 1, weight: 30}, {value: 4, weight: 70}]}
+      isl: {mean: 1472.754, median: 720, min: 13, max: 18886}
+      osl: {mean: 276.664, median: 182, min: 2, max: 1227}
+    turns: 1
   phases:
     - name: profiling
-      type: poisson
+      type: gamma
       duration: 10800
-      rate: 45.918
+      rate: 0.022
+      smoothness: 0.183
       concurrency: 900
       rateRamp: 10800
       gracePeriod: 300

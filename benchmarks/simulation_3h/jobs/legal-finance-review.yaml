@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-145-1
-# Benchmark window: T+145 through T+180. Diurnal traffic with a 2x peak/mean ratio.
+# Benchmark window: T+145 through T+180. Declared pattern: Diurnal.
 # Priority: HIGH. SLO: p99 TTFT 1000 ms; p99 TPOT 45 ms.
-# Traffic hypothesis: ramp to 7.385 RPS; the full-window ramp yields a 2x peak/mean ratio.
+# Trace: datasets/simulation_3h/traces/legal_finance_review_analysis.json
+# Measured: 0.015 mean RPS, 2.000 max RPS, 0.836 interarrival CV.
+# Mapping: full-window Gamma ramp; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
   model: meta-llama/Llama-3.3-70B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 300
@@ -20,14 +22,15 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 3000, median: 2250, min: 750, max: 12000}
-      osl: {mean: 700, median: 525, min: 175, max: 2200}
+      isl: {mean: 5967.968, median: 5515, min: 3041, max: 12146}
+      osl: {mean: 359.935, median: 338, min: 306, max: 500}
     turns: 1
   phases:
     - name: profiling
-      type: poisson
+      type: gamma
       duration: 2100
-      rate: 7.385
+      rate: 0.030
+      smoothness: 1.431
       concurrency: 240
       rateRamp: 2100
       gracePeriod: 300

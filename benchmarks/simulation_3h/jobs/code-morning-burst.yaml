@@ -1,14 +1,16 @@
 # Benchmark job: job-benchmark_timing_3hr-32-1
-# Benchmark window: T+32 through T+87. Bursty traffic with a 3.5x peak/mean ratio.
+# Benchmark window: T+32 through T+87. Declared pattern: Bursty.
 # Priority: STANDARD. SLO: p99 TTFT 160 ms; p99 TPOT 45 ms.
-# Traffic hypothesis: 829.082 mean RPS with clustered Gamma arrivals.
+# Trace: datasets/simulation_3h/traces/code_morning_burst_analysis.json
+# Measured: 23.053 mean RPS, 55.000 max RPS, 1.268 interarrival CV.
+# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
 schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
   model: Qwen/Qwen2.5-Coder-32B-Instruct
   endpoint:
-    url: http://preview.invalid/v1/chat/completions
+    path: /v1/chat/completions
     type: chat
     streaming: true
     timeout: 120
@@ -20,14 +22,14 @@ benchmark:
     entries: 2000
     sampling: random
     prompts:
-      isl: {mean: 2200, median: 1650, min: 550, max: 6000}
-      osl: {mean: 96, median: 72, min: 24, max: 280}
+      isl: {mean: 2574.682, median: 1934, min: 2, max: 7691}
+      osl: {mean: 23.384, median: 8, min: 1, max: 5000}
     turns: 1
   phases:
     - name: profiling
       type: gamma
       duration: 3300
-      rate: 829.082
-      smoothness: 0.16
+      rate: 23.053
+      smoothness: 0.622
       concurrency: 13000
       gracePeriod: 120

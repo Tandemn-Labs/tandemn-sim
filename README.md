@@ -83,7 +83,15 @@ data-generation/
 │       └── benchmark.md
 ├── src/data_generation/
 │   ├── controller.py
-│   └── batch_dataset_generator.py
+│   ├── submission.py
+│   ├── batch_dataset_generator.py
+│   ├── traffic_trace_analysis.py
+│   └── benchmark_trace_analysis.py
+├── datasets/
+│   └── simulation_3h/
+│       ├── trace_mapping.yaml
+│       ├── raw_datasets/
+│       └── traces/
 ├── tests/
 │   ├── smoke_test/
 │   │   ├── overview.yaml
@@ -169,8 +177,8 @@ Important benchmark fields:
 ### `jobs/*.yaml`: one job's generation configuration
 
 Each job listed in `overview.yaml` points to exactly one job configuration.
-The overview controls **when** the job runs. The job YAML controls **what data
-it generates**.
+The overview controls **when** the job runs and its optional Tandemn
+`submission`. The job YAML controls **what data it generates**.
 
 Job IDs are keys in `overview.yaml`. Job configuration filenames are readable
 descriptions such as `chat-free-core.yaml`. They do not have to repeat the job
@@ -222,7 +230,7 @@ it does not combine their processes.
 
 ## Online job configuration
 
-Online job YAMLs use AIPerf's configuration schema. They define:
+Online job YAMLs are AIPerf configuration templates. They define:
 
 - target model and endpoint type;
 - streaming behavior and timeout;
@@ -240,11 +248,12 @@ benchmarks/simulation_3h/overview.yaml
        -> AIPerf synthetic requests
 ```
 
-The full-size `simulation_3h` job YAMLs currently use
-`http://preview.invalid/...` endpoints because endpoint integration is
-deliberately deferred. They accurately define request and traffic shapes but
-will not reach a real model server until those endpoints are replaced or
-injected.
+Full-size job YAMLs contain only an environment-independent endpoint path.
+When a scheduled job becomes eligible, the controller submits its
+`submission` mapping to Tandemn, saves the returned Tandemn job ID and endpoint
+URL, and writes `runtime-aiperf.yaml` in that job's run artifacts. AIPerf runs
+from this generated file; source job YAMLs are never given runtime URLs or
+modified during a run.
 
 The smoke job YAMLs use `http://127.0.0.1:8765` and are safe for local
 inspection.
@@ -287,7 +296,9 @@ controller
   -> validate the benchmark and job windows
   -> start the benchmark clock with time.time()
   -> poll all job states
-  -> start, observe, or stop each job
+  -> submit each eligible managed job to Tandemn
+  -> materialize its endpoint-aware runtime config
+  -> start, observe, or stop its traffic process
   -> save benchmark and job state
   -> capture job request/response artifacts
 ```
@@ -296,13 +307,23 @@ On each tick, the controller:
 
 1. Calculates elapsed active benchmark time using `time.time()`.
 2. Checks every job in the overview.
-3. Starts eligible pending jobs.
-4. Detects exited child processes.
-5. Marks batch deadline misses.
-6. Stops online jobs whose active windows ended.
-7. Force-stops jobs that exceed the shutdown grace period.
-8. Synchronizes newly available AIPerf request/response records.
-9. Writes the benchmark checkpoint and run index.
+3. Submits eligible managed jobs that have no saved Tandemn identity.
+4. Persists each returned Tandemn job ID and endpoint URL.
+5. Creates the job's runtime generator configuration and starts traffic.
+6. Detects exited child processes and marks batch deadline misses.
+7. Stops online jobs whose active windows ended.
+8. Force-stops jobs that exceed the shutdown grace period.
+9. Synchronizes records and writes the benchmark checkpoint and run index.
+
+On resume, saved Tandemn IDs and endpoint URLs are reused. The controller
+recreates runtime generator configs but does not submit those jobs again. Jobs
+without a `submission` mapping are unmanaged local support processes and keep
+the existing direct-launch behavior.
+
+`submission.py` is the transport boundary. The controller depends on its
+`JobSubmitter` interface, while the production adapter uses Tandemn's
+`JobStore`. This keeps future API or scheduler response changes out of the
+benchmark lifecycle code.
 
 The overview is loaded when the controller starts. The controller polls its
 in-memory benchmark and job objects; it does not reread the YAML on every tick.
