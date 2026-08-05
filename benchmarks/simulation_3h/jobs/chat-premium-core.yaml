@@ -4,6 +4,29 @@
 # Trace: datasets/simulation_3h/traces/chat_premium_analysis.json
 # Measured: 0.011 mean RPS, 2.000 max RPS, 2.337 interarrival CV.
 # Mapping: full-window Gamma ramp; smoothness = 1 / interarrival CV^2.
+job:
+  user_id: tenant_chat_premium
+  optimization_goal: latency
+  features:
+    isl_token_avg: 1200
+    isl_token_min: 300
+    isl_token_max: 4096
+    isl_distribution_type: LogNormal
+    osl_token_avg: 500
+    osl_token_min: 125
+    osl_token_max: 1400
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Diurnal
+    peak_to_mean_ratio: 2
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 300
+    is_session_affinity: true
+    priority_class: HIGH
+    max_concurrent_streaming: 900
+    target_p99_ttft_ms: 600
+    target_p99_tpot_ms: 38
+
 schemaVersion: "2.0"
 randomSeed: 102
 

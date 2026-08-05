@@ -1,0 +1,62 @@
+schema_version: "resource-map/v1"
+
+resources:
+  - id: h100-sxm-80gb
+    accelerator: H100-SXM-80GB
+    total_devices: 32
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: h100_sxm
+    regions: {us-east: 16, eu-west: 8, apac: 8}
+
+  - id: a100-sxm-80gb
+    accelerator: A100-SXM-80GB
+    total_devices: 32
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: a100_sxm
+    regions: {us-east: 16, eu-west: 8, apac: 8}
+
+  - id: a100-pcie-40gb
+    accelerator: A100-PCIe-40GB
+    total_devices: 16
+    devices_per_node: 8
+    memory_gb: 40
+    aic_system: null
+    unsupported_reason: AIC 0.11 only defines the 80 GB A100 PCIe system
+    regions: {us-east: 8, eu-west: 8, apac: 0}
+
+  - id: a10g-24gb
+    accelerator: A10G-24GB
+    total_devices: 48
+    devices_per_node: 8
+    memory_gb: 24
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no A10G system model
+    regions: {us-east: 24, eu-west: 16, apac: 8}
+
+  - id: l40s-48gb
+    accelerator: L40S-48GB
+    total_devices: 40
+    devices_per_node: 8
+    memory_gb: 48
+    aic_system: l40s
+    regions: {us-east: 16, eu-west: 16, apac: 8}
+
+  - id: mi300x-192gb
+    accelerator: MI300X-192GB
+    total_devices: 16
+    devices_per_node: 8
+    memory_gb: 192
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no MI300X system model
+    regions: {us-east: 8, eu-west: 8, apac: 0}
+
+  - id: tpu-v5e
+    accelerator: TPU-v5e
+    total_devices: 16
+    devices_per_node: 8
+    memory_gb: 16
+    aic_system: null
+    unsupported_reason: NVIDIA AIC does not model TPU systems
+    regions: {us-east: 8, eu-west: 0, apac: 8}

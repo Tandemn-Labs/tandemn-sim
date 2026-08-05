@@ -6,6 +6,29 @@
 # Mapping: full-window Gamma traffic at the measured mean RPS.
 # Smoothness is calibrated from second-level variance after removing the
 # trace's 10-minute rate envelope.
+job:
+  user_id: tenant_enterprise_chat
+  optimization_goal: latency
+  features:
+    isl_token_avg: 1500
+    isl_token_min: 375
+    isl_token_max: 5500
+    isl_distribution_type: LogNormal
+    osl_token_avg: 420
+    osl_token_min: 105
+    osl_token_max: 1200
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Diurnal
+    peak_to_mean_ratio: 2
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 375
+    is_session_affinity: true
+    priority_class: STANDARD
+    max_concurrent_streaming: 1600
+    target_p99_ttft_ms: 500
+    target_p99_tpot_ms: 42
+
 schemaVersion: "2.0"
 randomSeed: 102
 

@@ -98,11 +98,16 @@ Traffic intent is mutually exclusive exactly as in `submit_job.py`:
 
 | Field | Meaning |
 |---|---|
-| `max_concurrent_streaming` | sole authoritative online traffic input in these manifests; maximum active streaming requests |
+| `max_concurrent_streaming` | submitted concurrency ceiling; maximum active streaming requests |
 | `request_arrival_rate` | omitted from submitted specs; Orca derives it from concurrency and target service time |
 | `_traffic_mode` | set by Orca to `concurrency` |
 
 `max_concurrent_streaming` is concurrency, not requests per second. The API generator and surrogate never exceed it. Orca derives an equivalent request rate as `concurrency / target_service_time`. Do not submit both concurrency and request rate.
+
+Executable AIPerf job YAMLs separately define the traffic actually emitted.
+Scheduler performance adapters use `phases[].rate` and the dataset's mean token
+shape for placement; they retain AIPerf `concurrency` only as an execution
+ceiling. They must not reinterpret that ceiling as offered request rate.
 
 Request token lengths use the submitter's accepted `isl_*` and `osl_*` fields and distribution names. Embeddings and rerankers use end-to-end latency for evaluation; a positive 1 ms TPOT compatibility value is submitted because the current online validator requires positive TPOT/OSL.
 

@@ -4,6 +4,29 @@
 # Trace: datasets/simulation_3h/traces/legal_finance_review_analysis.json
 # Measured: 0.015 mean RPS, 2.000 max RPS, 0.836 interarrival CV.
 # Mapping: full-window Gamma ramp; smoothness = 1 / interarrival CV^2.
+job:
+  user_id: tenant_legal_finance
+  optimization_goal: latency
+  features:
+    isl_token_avg: 3000
+    isl_token_min: 750
+    isl_token_max: 12000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 700
+    osl_token_min: 175
+    osl_token_max: 2200
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Diurnal
+    peak_to_mean_ratio: 2
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    priority_class: HIGH
+    max_concurrent_streaming: 240
+    target_p99_ttft_ms: 1000
+    target_p99_tpot_ms: 45
+
 schemaVersion: "2.0"
 randomSeed: 101
 

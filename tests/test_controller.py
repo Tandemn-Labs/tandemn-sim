@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -23,6 +24,13 @@ from data_generation.controller import (
     run_benchmark,
     sync_job_records,
 )
+from data_generation.scheduling import (
+    DecisionStatus,
+    OptimizationGoal,
+    SchedulerJob,
+    SchedulerWorkload,
+    SchedulingDecision,
+)
 from data_generation.submission import SubmissionRequest, SubmissionResult
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +44,7 @@ class ControllerTests(unittest.TestCase):
 
         self.assertEqual(benchmark.benchmark_id, "simulation_3h")
         self.assertEqual(len(benchmark.jobs), 26)
-        self.assertEqual(sum(job.enabled for job in benchmark.jobs), 18)
+        self.assertEqual(sum(job.enabled for job in benchmark.jobs), 26)
         self.assertTrue(all(job.submission is not None for job in benchmark.jobs))
         self.assertEqual(benchmark.poll_interval_seconds, 60)
 
@@ -247,6 +255,11 @@ class ControllerTests(unittest.TestCase):
             source_config.write_text(
                 yaml.safe_dump(
                     {
+                        "job": {
+                            "user_id": "test-user",
+                            "optimization_goal": "latency",
+                            "features": {},
+                        },
                         "schemaVersion": "2.0",
                         "benchmark": {
                             "model": "test-model",
@@ -288,10 +301,65 @@ class ControllerTests(unittest.TestCase):
             runtime = yaml.safe_load(runtime_config.read_text())
 
             self.assertNotIn("url", source["benchmark"]["endpoint"])
+            self.assertNotIn("job", runtime)
             self.assertEqual(
                 runtime["benchmark"]["endpoint"]["url"],
                 "https://runtime.example/v1/chat/completions",
             )
+
+    def test_scheduler_placement_precedes_sending_and_is_released(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=0.002,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            benchmark = replace(
+                benchmark,
+                jobs=tuple(
+                    replace(
+                        job,
+                        workload=SchedulerWorkload(
+                            input_tokens=10,
+                            output_tokens=10,
+                            request_rate=1,
+                        ),
+                    )
+                    for job in benchmark.jobs
+                ),
+            )
+            method = FakeSchedulingMethod()
+            submitter = FakeSubmitter()
+
+            summary = run_benchmark(
+                benchmark,
+                root / "artifacts",
+                run_id="scheduled-send-test",
+                job_submitter=submitter,
+                scheduling_method=method,
+            )
+
+            placement_path = (
+                root
+                / "artifacts"
+                / "benchmarks"
+                / "test-benchmark"
+                / "scheduled-send-test"
+                / "jobs"
+                / "test-job"
+                / "placement.json"
+            )
+            self.assertEqual(summary.states["test-job"], JobState.COMPLETED)
+            self.assertEqual(method.scheduled_jobs, ["test-job"])
+            self.assertEqual(method.released_jobs, ["test-job"])
+            self.assertEqual(len(submitter.requests), 1)
+            self.assertTrue(placement_path.is_file())
 
     def test_aiperf_raw_records_are_split_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -361,7 +429,18 @@ def write_benchmark(
 ) -> Path:
     """Write one small command-backed benchmark."""
     config = root / "job.yaml"
-    config.write_text("# test job\n")
+    config_document: dict[str, object] = {}
+    if with_submission:
+        config_document["job"] = {
+            "user_id": "test-user",
+            "optimization_goal": "latency",
+            "model_id": "test-model",
+            "features": {},
+        }
+    config.write_text(
+        yaml.safe_dump(config_document, sort_keys=False) if config_document else "",
+        encoding="utf-8",
+    )
     overview_path = root / "overview.yaml"
     job_definition: dict[str, object] = {
         "enabled": True,
@@ -376,11 +455,6 @@ def write_benchmark(
         "start_at_offset_minutes": 0,
         end_field: end_minute,
     }
-    if with_submission:
-        job_definition["submission"] = {
-            "user_id": "test-user",
-            "spec_json": {"model_id": "test-model"},
-        }
     overview_path.write_text(
         yaml.safe_dump(
             {
@@ -413,6 +487,44 @@ class FakeSubmitter:
             tandemn_job_id="tandemn-test-job",
             endpoint_url=self.endpoint_url,
         )
+
+
+class FakeSchedulingMethod:
+    """Accept one placement and record its allocation lifecycle."""
+
+    method_name = "fake"
+
+    def __init__(self) -> None:
+        self.scheduled_jobs: list[str] = []
+        self.released_jobs: list[str] = []
+
+    def schedule(self, job: SchedulerJob) -> SchedulingDecision:
+        self.scheduled_jobs.append(job.job_id)
+        before = {"available": 1}
+        after = {"available": 0}
+        return SchedulingDecision(
+            job_id=job.job_id,
+            method=self.method_name,
+            status=DecisionStatus.ACCEPTED,
+            optimization_goal=OptimizationGoal.THROUGHPUT,
+            candidates=(),
+            resource_snapshot_before=before,
+            resource_snapshot_after=after,
+            pool_id="test-pool",
+            accelerator="test-accelerator",
+            devices=1,
+            latency_ms=1,
+            throughput_tokens_per_second=1,
+            configuration={"parallel": "tp1"},
+        )
+
+    def release(self, job_id: str) -> None:
+        self.released_jobs.append(job_id)
+
+    def resource_snapshot(self) -> dict[str, object]:
+        return {
+            "available": 1 if self.released_jobs else 0,
+        }
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:

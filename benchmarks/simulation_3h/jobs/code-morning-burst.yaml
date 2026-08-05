@@ -4,6 +4,29 @@
 # Trace: datasets/simulation_3h/traces/code_morning_burst_analysis.json
 # Measured: 23.053 mean RPS, 55.000 max RPS, 1.268 interarrival CV.
 # Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
+job:
+  user_id: tenant_code_autocomplete
+  optimization_goal: latency
+  features:
+    isl_token_avg: 2200
+    isl_token_min: 550
+    isl_token_max: 6000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 96
+    osl_token_min: 24
+    osl_token_max: 280
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3.5
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    priority_class: STANDARD
+    max_concurrent_streaming: 13000
+    target_p99_ttft_ms: 160
+    target_p99_tpot_ms: 45
+
 schemaVersion: "2.0"
 randomSeed: 101
 

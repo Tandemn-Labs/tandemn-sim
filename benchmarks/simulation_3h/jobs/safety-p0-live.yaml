@@ -4,6 +4,29 @@
 # Trace: datasets/simulation_3h/traces/safety_p0_live_analysis.json
 # Measured: 0.883 mean RPS, 20.000 max RPS, 20.359 interarrival CV.
 # Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
+job:
+  user_id: tenant_safety_reasoner
+  optimization_goal: latency
+  features:
+    isl_token_avg: 900
+    isl_token_min: 225
+    isl_token_max: 3000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 160
+    osl_token_min: 40
+    osl_token_max: 600
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    priority_class: HIGH
+    max_concurrent_streaming: 2500
+    target_p99_ttft_ms: 350
+    target_p99_tpot_ms: 40
+
 schemaVersion: "2.0"
 randomSeed: 102
 

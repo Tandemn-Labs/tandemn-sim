@@ -13,6 +13,9 @@ benchmark
     └── requests and responses
 ```
 
+The command-to-placement and data-generation flow is documented in
+[`architecture/BENCHMARK_EXECUTION.md`](architecture/BENCHMARK_EXECUTION.md).
+
 ## Canonical terminology
 
 These terms have specific meanings throughout the repository.
@@ -177,8 +180,9 @@ Important benchmark fields:
 ### `jobs/*.yaml`: one job's generation configuration
 
 Each job listed in `overview.yaml` points to exactly one job configuration.
-The overview controls **when** the job runs and its optional Tandemn
-`submission`. The job YAML controls **what data it generates**.
+The overview controls **when** the job runs. The job YAML owns the complete
+per-job definition: scheduler policy, submission features, and generated
+workload.
 
 Job IDs are keys in `overview.yaml`. Job configuration filenames are readable
 descriptions such as `chat-free-core.yaml`. They do not have to repeat the job
@@ -214,12 +218,12 @@ their processes are independent.
 ### Enabled and disabled jobs
 
 `enabled: true` places a job into the scheduler. `enabled: false` preserves the
-job in the benchmark definition and state map without launching it.
+job in the benchmark definition and state map without placing or launching it.
 
 The current `simulation_3h` overview defines 26 jobs:
 
 - 18 enabled online AIPerf jobs;
-- 8 disabled batch jobs awaiting sender integration.
+- 8 enabled batch jobs whose sender integration is still pending.
 
 ### Parent jobs
 
@@ -232,6 +236,7 @@ it does not combine their processes.
 
 Online job YAMLs are AIPerf configuration templates. They define:
 
+- scheduler policy, user, and SLO requirements in the top-level `job` block;
 - target model and endpoint type;
 - streaming behavior and timeout;
 - synthetic input and output token distributions;
@@ -248,12 +253,12 @@ benchmarks/simulation_3h/overview.yaml
        -> AIPerf synthetic requests
 ```
 
-Full-size job YAMLs contain only an environment-independent endpoint path.
-When a scheduled job becomes eligible, the controller submits its
-`submission` mapping to Tandemn, saves the returned Tandemn job ID and endpoint
-URL, and writes `runtime-aiperf.yaml` in that job's run artifacts. AIPerf runs
-from this generated file; source job YAMLs are never given runtime URLs or
-modified during a run.
+When a scheduled job becomes eligible, the controller builds the Tandemn
+submission from its job YAML, saves the returned Tandemn job ID and endpoint
+URL, and writes `runtime-aiperf.yaml` in that job's run artifacts. The
+controller-only `job` block is removed from the runtime file before AIPerf
+loads it. Source job YAMLs are never given runtime URLs or modified during a
+run.
 
 The smoke job YAMLs use `http://127.0.0.1:8765` and are safe for local
 inspection.
@@ -282,8 +287,9 @@ For every generated request:
    generated-output settings.
 
 The batch generator creates request data. It does not currently send that data.
-The batch jobs remain disabled in the benchmark overview until a batch sender
-is connected through the job's driver and command.
+The batch jobs remain enabled so placement-only runs include them. Normal
+execution fails fast until each batch job is connected to a sender through its
+driver and command.
 
 ## Controller execution flow
 
@@ -317,7 +323,7 @@ On each tick, the controller:
 
 On resume, saved Tandemn IDs and endpoint URLs are reused. The controller
 recreates runtime generator configs but does not submit those jobs again. Jobs
-without a `submission` mapping are unmanaged local support processes and keep
+without a top-level `job` block are unmanaged local support processes and keep
 the existing direct-launch behavior.
 
 `submission.py` is the transport boundary. The controller depends on its
@@ -485,6 +491,107 @@ Run the three-hour simulation:
 uv run controller simulation_3h
 ```
 
+### Dynamo+AIC placements
+
+The Dynamo+AIC method is isolated under `data_generation.methods.dynamo_aic`.
+Its benchmark-owned inputs are `resources.yaml` and
+`methods/dynamo_aic.yaml`. Install the repository's pinned AIC source build:
+
+```bash
+uv sync --group dynamo
+```
+
+#### Hugging Face authentication
+
+AIC reads model architecture metadata from Hugging Face. Gated models such as
+Meta Llama require a Hugging Face account that has accepted the model license
+and a read token from that account. Create the local environment file and add
+the token:
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+HF_TOKEN=your-read-token
+```
+
+The controller loads `.env` from the repository root at startup. `.env` is
+ignored by Git; `.env.example` documents the required variable without storing
+a credential. Never add a Hugging Face token to benchmark YAML, source code,
+shell scripts, or committed files. An existing shell environment variable
+takes precedence over the value in `.env`.
+
+Generate placements without waiting for benchmark time or sending data:
+
+```bash
+uv run --group dynamo controller simulation_3h --method dynamo-aic --placement-only
+```
+
+This mode fast-forwards through all 26 job releases and logs each decision with its
+original `T+` benchmark offset, hardware, GPU count, replicas, and parallelism.
+It never submits jobs or starts data senders. Detailed AIC output is kept out of
+the terminal and retained in the checkpointed `placements.json` artifact.
+
+Failed placements include a category and concise reason in both the terminal
+and artifacts:
+
+| Category | Meaning |
+|---|---|
+| `insufficient_capacity` | AIC found a configuration, but the pool lacks enough free devices. |
+| `slo_infeasible` | A predicted TTFT or TPOT exceeds the job SLO. |
+| `load_infeasible` | AIC found no configuration meeting the requested load and SLO. |
+| `model_unsupported` | AIC cannot model the architecture. |
+| `model_unavailable` | The configured model cannot be loaded from Hugging Face. |
+| `hardware_unsupported` | AIC cannot model any available hardware pool. |
+| `method_error` | AIC failed for another reason. |
+
+Only the first three categories represent workload or cluster infeasibility.
+Unsupported models and method errors are coverage failures, not evidence that
+the cluster scheduler rejected a feasible job.
+
+For each job arrival, the method evaluates every AIC-supported homogeneous
+hardware pool, filters results by SLO and currently available capacity, and
+selects the best latency or throughput result. The selected devices are
+reserved before the next arrival is evaluated and released at the job's end.
+Unsupported hardware remains visible in the decision artifact.
+
+Within each hardware evaluation, AIC first load-matches configurations using
+the job's TTFT, TPOT, request rate, and token shape. AIC's objective picker
+then ranks the SLO-compliant configurations using the resolved per-job goal:
+minimum TTFT (then TPOT and GPU count) for `latency`, or maximum token
+throughput efficiency for `throughput`. The controller uses the same goal when
+comparing hardware types.
+
+The controller builds scheduler input from one job YAML. Online load comes from
+its AIPerf section. Batch load is its record count divided by its deadline, using
+the batch dataset's average input and output token counts. SLO and policy come
+from the top-level `job` section.
+AIPerf `concurrency` remains a sender safety ceiling; it is not passed to AIC
+as offered load when the sender defines `rate`. Throughput decisions compare
+the full selected deployment in tokens per second.
+
+The method defaults to the optimization goal in
+`methods/dynamo_aic.yaml`. A job can override it with
+`job.optimization_goal: latency` or `job.optimization_goal: throughput` in its
+job YAML. The three-hour benchmark sets every job explicitly: online jobs use
+`latency`, while batch jobs use `throughput`.
+
+Artifacts are written to the normal run directory:
+
+- `placements.json`: all placement decisions and resource events;
+- `resource_map.json`: latest available and allocated capacity;
+- `jobs/<job-id>/placement.json`: AIC inputs, candidates, and the winner.
+
+Without `--placement-only`, the controller makes the placement first, then
+uses the existing submission/endpoint path and starts the job's data sender.
+The three-hour batch jobs require sender commands before this execution mode can
+run; placement-only mode does not require or start those senders.
+
+```bash
+uv run --group dynamo controller simulation_3h --method dynamo-aic
+```
+
 An explicit overview path is also accepted:
 
 ```bash
@@ -555,7 +662,8 @@ Use this sequence to make another benchmark executable:
 5. Set `benchmark.id` equal to the folder name.
 6. Set `benchmark.source_benchmark` to `benchmark.md`.
 7. Translate every benchmark job into one entry under `jobs`.
-8. Add one configuration YAML under `jobs/` for every overview entry.
+8. Add one configuration YAML under `jobs/` for every overview entry, including
+   its `job` metadata and generator or dataset configuration.
 9. Ensure online jobs have valid start and stop offsets.
 10. Ensure batch jobs have start, deadline, and hard-stop offsets.
 11. Validate parent-job windows.
@@ -592,7 +700,7 @@ The current architecture intentionally separates concerns:
 
 - benchmark Markdown defines intent;
 - overview YAML defines the executable schedule;
-- job YAML defines generated data and traffic;
+- job YAML defines policy, submission features, generated data, and traffic;
 - the controller owns timing and processes;
 - artifacts own runtime state, prompts, and responses.
 

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "aiperf==0.11.0",
+  "python-dotenv>=1.0,<2",
   "pyyaml>=6.0,<7",
 ]
 
@@ -22,6 +23,10 @@ dev = [
   "pre-commit>=4.2",
   "ruff>=0.12",
   "types-pyyaml>=6.0",
+]
+dynamo = [
+  "aiconfigurator @ git+https://github.com/ai-dynamo/aiconfigurator.git@4b0a812c3fb9ea0b679206af442a7107a2583b07",
+  "aiconfigurator-core @ git+https://github.com/ai-dynamo/aiconfigurator.git@4b0a812c3fb9ea0b679206af442a7107a2583b07#subdirectory=aic-core",
 ]
 
 [tool.setuptools.packages.find]
@@ -40,5 +45,5 @@ files = ["src"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = "aiperf.*"
+module = ["aiconfigurator.*", "aiperf.*"]
 ignore_missing_imports = true

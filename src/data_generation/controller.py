@@ -16,8 +16,17 @@ from types import FrameType
 from typing import BinaryIO, cast
 
 import yaml
+from dotenv import load_dotenv
 
 from data_generation.batch_dataset_generator import generate_batch_dataset
+from data_generation.scheduling import (
+    DecisionStatus,
+    OptimizationGoal,
+    SchedulerJob,
+    SchedulerWorkload,
+    SchedulingDecision,
+    SchedulingMethod,
+)
 from data_generation.submission import (
     JobSubmitter,
     SubmissionError,
@@ -54,6 +63,7 @@ class JobState(StrEnum):
     MISSED = "missed"
     DISABLED = "disabled"
     PAUSED = "paused"
+    REJECTED = "rejected"
 
 
 TERMINAL_STATES = {
@@ -62,6 +72,7 @@ TERMINAL_STATES = {
     JobState.MISSED,
     JobState.DISABLED,
     JobState.PAUSED,
+    JobState.REJECTED,
 }
 
 
@@ -82,6 +93,8 @@ class Job:
     hard_stop_minute: float
     parent_job_id: str | None
     submission: SubmissionRequest | None
+    optimization_goal: OptimizationGoal | None = None
+    workload: SchedulerWorkload | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +133,8 @@ class RunningJob:
     recorded_prompt_ids: set[str] = field(default_factory=set)
     recorded_response_ids: set[str] = field(default_factory=set)
     artifact_ids_loaded: bool = False
+    scheduling_decision: SchedulingDecision | None = None
+    allocation_released: bool = False
 
 
 @dataclass(frozen=True)
@@ -131,8 +146,17 @@ class RunSummary:
     deadline_misses: frozenset[str]
 
 
+@dataclass(frozen=True)
+class PlacementSummary:
+    """Final result of a placement-only benchmark simulation."""
+
+    run_id: str
+    decisions: Mapping[str, SchedulingDecision]
+
+
 def main() -> None:
     """Run or validate one benchmark."""
+    load_dotenv(ROOT / ".env")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(message)s",
@@ -183,6 +207,16 @@ def main() -> None:
         type=int,
         help="optional generation limit used with --generate-batch",
     )
+    parser.add_argument(
+        "--method",
+        choices=("dynamo-aic",),
+        help="scheduler method used to place managed jobs",
+    )
+    parser.add_argument(
+        "--placement-only",
+        action="store_true",
+        help="simulate placements without waiting or starting data senders",
+    )
     args = parser.parse_args()
 
     if args.generate_batch is not None:
@@ -198,16 +232,43 @@ def main() -> None:
 
     if args.output is not None or args.records is not None:
         parser.error("--output and --records require --generate-batch")
+    if args.placement_only and args.method is None:
+        parser.error("--placement-only requires --method")
+    if args.placement_only and args.resume is not None:
+        parser.error("--placement-only cannot be resumed")
     if args.discard_request_data and args.aiperf_export_level != "summary":
         parser.error("--discard-request-data requires --aiperf-export-level summary")
 
     try:
-        benchmark = load_benchmark(resolve_benchmark_overview(args.benchmark))
+        overview_path = resolve_benchmark_overview(args.benchmark)
+        benchmark = load_benchmark(overview_path)
     except ValueError as error:
         parser.error(str(error))
 
-    log_benchmark(benchmark)
+    scheduling_method: SchedulingMethod | None = None
+    if args.method == "dynamo-aic":
+        from data_generation.methods.dynamo_aic import load_dynamo_aic_method
+
+        try:
+            scheduling_method = load_dynamo_aic_method(overview_path.parent)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            parser.error(str(error))
+
+    if not args.placement_only:
+        log_benchmark(benchmark)
     if not args.validate_only:
+        if args.placement_only:
+            if scheduling_method is None:
+                parser.error("no scheduler method is configured")
+            try:
+                run_placement_only(
+                    benchmark,
+                    args.artifact_root,
+                    scheduling_method,
+                )
+            except ValueError as error:
+                parser.error(str(error))
+            return
         previous_sigterm = signal.signal(signal.SIGTERM, interrupt_controller)
         try:
             run_benchmark(
@@ -216,6 +277,7 @@ def main() -> None:
                 resume_run_id=args.resume,
                 aiperf_export_level=args.aiperf_export_level,
                 discard_request_data=args.discard_request_data,
+                scheduling_method=scheduling_method,
             )
         except ValueError as error:
             parser.error(str(error))
@@ -232,10 +294,14 @@ def run_benchmark(
     aiperf_export_level: str = "raw",
     discard_request_data: bool = False,
     job_submitter: JobSubmitter | None = None,
+    scheduling_method: SchedulingMethod | None = None,
 ) -> RunSummary:
     """Run or resume every enabled job in one benchmark."""
+    validate_runnable_jobs(benchmark)
     if run_id is not None and resume_run_id is not None:
         raise ValueError("run_id and resume_run_id cannot be used together")
+    if resume_run_id is not None and scheduling_method is not None:
+        raise ValueError("scheduler method runs cannot currently be resumed")
 
     active_run_id = (
         resume_run_id or run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -324,6 +390,7 @@ def run_benchmark(
                     aiperf_export_level,
                     discard_request_data,
                     active_submitter,
+                    scheduling_method,
                 )
                 if not discard_request_data:
                     sync_job_records(item, run_directory)
@@ -362,6 +429,7 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
+        release_all_allocations(jobs.values(), scheduling_method, run_directory)
         if not discard_request_data:
             sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
@@ -395,6 +463,7 @@ def run_benchmark(
             benchmark.shutdown_grace_seconds,
             paused=True,
         )
+        release_all_allocations(jobs.values(), scheduling_method, run_directory)
         if not discard_request_data:
             sync_all_job_records(jobs.values(), run_directory)
         record_shutdown_milestones(
@@ -448,6 +517,243 @@ def run_benchmark(
     return summary
 
 
+def run_placement_only(
+    benchmark: Benchmark,
+    artifact_root: Path,
+    scheduling_method: SchedulingMethod,
+    *,
+    run_id: str | None = None,
+) -> PlacementSummary:
+    """Simulate benchmark arrivals and placements without starting senders."""
+    active_run_id = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_directory = (
+        artifact_root / "benchmarks" / benchmark.benchmark_id / active_run_id
+    )
+    run_directory.mkdir(parents=True, exist_ok=True)
+    decisions: dict[str, SchedulingDecision] = {}
+    releases: list[tuple[float, str]] = []
+    resource_events: list[dict[str, object]] = []
+    created_at = utc_timestamp()
+    save_placement_run_artifact(
+        run_directory,
+        benchmark,
+        active_run_id,
+        scheduling_method,
+        decisions,
+        resource_events,
+        created_at,
+    )
+    save_resource_artifact(run_directory, scheduling_method)
+
+    indexed_jobs = enumerate(benchmark.jobs)
+    ordered_jobs = sorted(
+        indexed_jobs,
+        key=lambda value: (value[1].start_minute, value[0]),
+    )
+    for _, job in ordered_jobs:
+        if not job.enabled or job.submission is None:
+            continue
+        pending_releases = sorted(releases)
+        releases = []
+        for release_minute, release_job_id in pending_releases:
+            if release_minute > job.start_minute:
+                releases.append((release_minute, release_job_id))
+                continue
+            scheduling_method.release(release_job_id)
+            resource_events.append(
+                {
+                    "offset_minutes": release_minute,
+                    "event": "released",
+                    "job_id": release_job_id,
+                    "resource_snapshot": scheduling_method.resource_snapshot(),
+                }
+            )
+
+        decision = scheduling_method.schedule(scheduler_job(job))
+        decisions[job.job_id] = decision
+        save_placement_artifacts(
+            run_directory,
+            decision,
+            scheduling_method,
+        )
+        resource_events.append(
+            {
+                "offset_minutes": job.start_minute,
+                "event": decision.status.value,
+                "job_id": job.job_id,
+                "resource_snapshot": decision.resource_snapshot_after,
+            }
+        )
+        log_placement_decision(job.start_minute, decision)
+        save_placement_run_artifact(
+            run_directory,
+            benchmark,
+            active_run_id,
+            scheduling_method,
+            decisions,
+            resource_events,
+            created_at,
+        )
+        if decision.status == DecisionStatus.ACCEPTED:
+            releases.append((job_end_minute(job), job.job_id))
+
+    for release_minute, release_job_id in sorted(releases):
+        scheduling_method.release(release_job_id)
+        resource_events.append(
+            {
+                "offset_minutes": release_minute,
+                "event": "released",
+                "job_id": release_job_id,
+                "resource_snapshot": scheduling_method.resource_snapshot(),
+            }
+        )
+    save_placement_run_artifact(
+        run_directory,
+        benchmark,
+        active_run_id,
+        scheduling_method,
+        decisions,
+        resource_events,
+        created_at,
+    )
+    save_resource_artifact(run_directory, scheduling_method)
+    LOGGER.debug(
+        "[placement-only] benchmark=%s run=%s accepted=%d rejected=%d",
+        benchmark.benchmark_id,
+        active_run_id,
+        sum(
+            decision.status == DecisionStatus.ACCEPTED
+            for decision in decisions.values()
+        ),
+        sum(
+            decision.status == DecisionStatus.REJECTED
+            for decision in decisions.values()
+        ),
+    )
+    return PlacementSummary(active_run_id, decisions)
+
+
+def log_placement_decision(
+    release_minute: float,
+    decision: SchedulingDecision,
+) -> None:
+    """Log one placement result at its benchmark release offset."""
+    if decision.status == DecisionStatus.REJECTED:
+        category = (
+            "unknown"
+            if decision.failure_category is None
+            else decision.failure_category.value
+        )
+        LOGGER.info(
+            "[placement] T+%gm job=%s rejected category=%s reason=%s",
+            release_minute,
+            decision.job_id,
+            category,
+            decision.reason,
+        )
+        return
+
+    configuration = decision.configuration or {}
+    LOGGER.info(
+        "[placement] T+%gm job=%s hardware=%s devices=%s replicas=%s parallel=%s",
+        release_minute,
+        decision.job_id,
+        decision.accelerator,
+        decision.devices,
+        configuration.get("replicas_needed", 1),
+        configuration.get("parallel", "unknown"),
+    )
+
+
+def save_placement_run_artifact(
+    run_directory: Path,
+    benchmark: Benchmark,
+    run_id: str,
+    scheduling_method: SchedulingMethod,
+    decisions: Mapping[str, SchedulingDecision],
+    resource_events: list[dict[str, object]],
+    created_at: str,
+) -> None:
+    """Checkpoint all placement decisions and resource events so far."""
+    write_json(
+        run_directory / "placements.json",
+        {
+            "schema_version": "placement-run/v1",
+            "benchmark_id": benchmark.benchmark_id,
+            "run_id": run_id,
+            "method": scheduling_method.method_name,
+            "created_at": created_at,
+            "updated_at": utc_timestamp(),
+            "decisions": [decision.to_dict() for decision in decisions.values()],
+            "resource_events": resource_events,
+            "current_resource_snapshot": scheduling_method.resource_snapshot(),
+            "final_resource_snapshot": scheduling_method.resource_snapshot(),
+        },
+    )
+
+
+def job_end_minute(job: Job) -> float:
+    """Return the allocation release offset for one benchmark job."""
+    if job.kind == JobKind.ONLINE and job.stop_minute is not None:
+        return job.stop_minute
+    if job.kind == JobKind.BATCH and job.deadline_minute is not None:
+        return job.deadline_minute
+    return job.hard_stop_minute
+
+
+def scheduler_job(job: Job) -> SchedulerJob:
+    """Expose only canonical job inputs to a scheduler method."""
+    if job.submission is None:
+        raise ValueError(f"Job {job.job_id} has no scheduler-visible submission")
+    if job.workload is None:
+        raise ValueError(f"Job {job.job_id} has no scheduler-visible workload")
+    return SchedulerJob(
+        job_id=job.job_id,
+        kind=job.kind.value,
+        spec=job.submission.spec_json,
+        workload=job.workload,
+        optimization_goal=job.optimization_goal,
+    )
+
+
+def save_placement_artifacts(
+    run_directory: Path,
+    decision: SchedulingDecision,
+    scheduling_method: SchedulingMethod,
+) -> None:
+    """Persist one decision and the resulting resource-map snapshot."""
+    job_directory = ensure_job_artifacts(
+        run_directory,
+        decision.job_id,
+        create_record_files=False,
+    )
+    write_json(job_directory / "placement.json", decision.to_dict())
+    save_resource_artifact(run_directory, scheduling_method)
+
+
+def save_resource_artifact(
+    run_directory: Path,
+    scheduling_method: SchedulingMethod,
+) -> None:
+    """Persist the scheduler's latest mutable resource map."""
+    write_json(
+        run_directory / "resource_map.json",
+        {
+            "schema_version": "resource-state/v1",
+            "method": scheduling_method.method_name,
+            "updated_at": utc_timestamp(),
+            "resource_snapshot": scheduling_method.resource_snapshot(),
+        },
+    )
+
+
+def write_json(path: Path, document: Mapping[str, object]) -> None:
+    """Atomically write one JSON artifact."""
+    temporary_path = path.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    temporary_path.replace(path)
+
+
 def reconcile_job(
     item: RunningJob,
     elapsed_minutes: float,
@@ -457,9 +763,11 @@ def reconcile_job(
     aiperf_export_level: str = "raw",
     discard_request_data: bool = False,
     job_submitter: JobSubmitter | None = None,
+    scheduling_method: SchedulingMethod | None = None,
 ) -> None:
     """Apply the current benchmark time to one job."""
     record_process_exit(item)
+    release_terminal_allocation(item, scheduling_method, run_directory)
     job = item.job
 
     if item.state == JobState.PENDING:
@@ -478,6 +786,7 @@ def reconcile_job(
                 aiperf_export_level=aiperf_export_level,
                 discard_request_data=discard_request_data,
                 job_submitter=job_submitter,
+                scheduling_method=scheduling_method,
             )
 
     if item.state == JobState.RUNNING:
@@ -509,6 +818,7 @@ def reconcile_job(
         LOGGER.warning("[force-stop] %s", job.job_id)
 
     record_process_exit(item)
+    release_terminal_allocation(item, scheduling_method, run_directory)
 
 
 def start_job(
@@ -518,6 +828,7 @@ def start_job(
     aiperf_export_level: str = "raw",
     discard_request_data: bool = False,
     job_submitter: JobSubmitter | None = None,
+    scheduling_method: SchedulingMethod | None = None,
 ) -> None:
     """Start one independent AIPerf generator or batch sender."""
     job_directory = ensure_job_artifacts(
@@ -528,6 +839,33 @@ def start_job(
     if discard_request_data and item.job.driver == "aiperf":
         discard_aiperf_inputs(job_directory)
     try:
+        if (
+            scheduling_method is not None
+            and item.job.submission is not None
+            and item.scheduling_decision is None
+        ):
+            item.scheduling_decision = scheduling_method.schedule(
+                scheduler_job(item.job)
+            )
+            save_placement_artifacts(
+                run_directory,
+                item.scheduling_decision,
+                scheduling_method,
+            )
+            if item.scheduling_decision.status == DecisionStatus.REJECTED:
+                item.state = JobState.REJECTED
+                category = (
+                    "unknown"
+                    if item.scheduling_decision.failure_category is None
+                    else item.scheduling_decision.failure_category.value
+                )
+                LOGGER.warning(
+                    "[rejected] %s category=%s reason=%s",
+                    item.job.job_id,
+                    category,
+                    item.scheduling_decision.reason,
+                )
+                return
         runtime_config = item.job.config
         if item.job.submission is not None:
             if item.tandemn_job_id is None or item.endpoint_url is None:
@@ -550,6 +888,7 @@ def start_job(
         )
     except (OSError, SubmissionError, ValueError, yaml.YAMLError) as error:
         item.state = JobState.FAILED
+        release_terminal_allocation(item, scheduling_method, run_directory)
         LOGGER.error("[failed] %s setup error: %s", item.job.job_id, error)
         return
     log_file = None
@@ -567,6 +906,7 @@ def start_job(
         if log_file is not None:
             log_file.close()
         item.state = JobState.FAILED
+        release_terminal_allocation(item, scheduling_method, run_directory)
         LOGGER.error("[failed] %s launch error: %s", item.job.job_id, error)
         return
 
@@ -589,6 +929,47 @@ def start_job(
         item.job.driver,
         process.pid,
     )
+
+
+def release_terminal_allocation(
+    item: RunningJob,
+    scheduling_method: SchedulingMethod | None,
+    run_directory: Path,
+) -> None:
+    """Release resources once a scheduled job reaches a terminal state."""
+    if (
+        scheduling_method is None
+        or item.scheduling_decision is None
+        or item.scheduling_decision.status != DecisionStatus.ACCEPTED
+        or item.allocation_released
+        or item.state not in TERMINAL_STATES
+        or item.state == JobState.PAUSED
+    ):
+        return
+    scheduling_method.release(item.job.job_id)
+    item.allocation_released = True
+    save_resource_artifact(run_directory, scheduling_method)
+    LOGGER.info("[release] %s", item.job.job_id)
+
+
+def release_all_allocations(
+    jobs: Iterable[RunningJob],
+    scheduling_method: SchedulingMethod | None,
+    run_directory: Path,
+) -> None:
+    """Release every live allocation when a method run cannot continue."""
+    if scheduling_method is None:
+        return
+    for item in jobs:
+        if (
+            item.scheduling_decision is None
+            or item.scheduling_decision.status != DecisionStatus.ACCEPTED
+            or item.allocation_released
+        ):
+            continue
+        scheduling_method.release(item.job.job_id)
+        item.allocation_released = True
+    save_resource_artifact(run_directory, scheduling_method)
 
 
 def job_artifact_directory(run_directory: Path, job_id: str) -> Path:
@@ -933,6 +1314,11 @@ def save_benchmark_state(
                 "deadline_at_offset_minutes": item.job.deadline_minute,
                 "hard_stop_at_offset_minutes": item.job.hard_stop_minute,
                 "submission": submission_state(item.job.submission),
+                "optimization_goal": (
+                    None
+                    if item.job.optimization_goal is None
+                    else item.job.optimization_goal.value
+                ),
                 "state": item.state.value,
                 "pid": None if item.process is None else item.process.pid,
                 "launch_count": item.launch_count,
@@ -1149,6 +1535,9 @@ def validate_saved_job(
         "deadline_at_offset_minutes": job.deadline_minute,
         "hard_stop_at_offset_minutes": job.hard_stop_minute,
         "submission": submission_state(job.submission),
+        "optimization_goal": (
+            None if job.optimization_goal is None else job.optimization_goal.value
+        ),
     }
     for field_name, expected_value in expected.items():
         if definition.get(field_name) != expected_value:
@@ -1253,6 +1642,7 @@ def materialize_runtime_config(
             f"AIPerf config for {job.job_id}",
         )
     )
+    document.pop("job", None)
     benchmark_document = cast(
         dict[str, object],
         mapping(document.get("benchmark"), f"AIPerf benchmark for {job.job_id}"),
@@ -1411,6 +1801,7 @@ def load_job(
     ).resolve()
     if not config.is_file():
         raise ValueError(f"Config not found for {job_id}: {config}")
+    config_document = load_job_config_document(config, job_id)
 
     command_value = definition.get("command")
     command = None if command_value is None else string_list(command_value)
@@ -1439,7 +1830,18 @@ def load_job(
         if parent_value is None
         else text(parent_value, f"jobs.{job_id}.parent_job_id")
     )
-    submission = load_submission(definition.get("submission"), job_id, kind)
+    workload, sender_model = load_scheduler_workload(
+        config_document,
+        driver,
+        kind,
+        job_id,
+    )
+    submission, optimization_goal = load_job_submission(
+        config_document,
+        sender_model,
+        job_id,
+        kind,
+    )
 
     if kind == JobKind.ONLINE and (stop_minute is None or stop_minute <= start_minute):
         raise ValueError(f"{job_id} requires a stop after its start")
@@ -1449,9 +1851,6 @@ def load_job(
         raise ValueError(f"{job_id} requires a deadline")
     if hard_stop_minute <= start_minute:
         raise ValueError(f"{job_id} hard stop must be after its start")
-    if enabled and driver == "external_mock_data" and command is None:
-        raise ValueError(f"{job_id} requires a batch sender command")
-
     return Job(
         job_id=job_id,
         enabled=enabled,
@@ -1466,36 +1865,196 @@ def load_job(
         hard_stop_minute=hard_stop_minute,
         parent_job_id=parent_job_id,
         submission=submission,
+        optimization_goal=optimization_goal,
+        workload=workload,
     )
 
 
-def load_submission(
-    value: object,
+def load_scheduler_workload(
+    config_document: Mapping[str, object] | None,
+    driver: str,
+    kind: JobKind,
+    job_id: str,
+) -> tuple[SchedulerWorkload | None, str | None]:
+    """Read the actual sender rate and token shape used for scheduling."""
+    if config_document is None:
+        return None, None
+    if kind == JobKind.BATCH:
+        dataset = mapping(
+            config_document.get("dataset"),
+            f"batch dataset for {job_id}",
+        )
+        io = mapping(dataset.get("io"), f"batch io for {job_id}")
+        input_tokens = token_mean(
+            io.get("input_tokens"),
+            f"batch input tokens for {job_id}",
+        )
+        output_tokens = token_mean(
+            io.get("output_tokens"),
+            f"batch output tokens for {job_id}",
+        )
+        record_count = positive_number(
+            dataset.get("record_count"),
+            f"batch record count for {job_id}",
+        )
+        job_definition = mapping(
+            config_document.get("job"),
+            f"job config for {job_id}",
+        )
+        features = mapping(
+            job_definition.get("features"),
+            f"job features for {job_id}",
+        )
+        deadline_hours = positive_number(
+            features.get("deadline_hrs"),
+            f"batch deadline for {job_id}",
+        )
+        return (
+            SchedulerWorkload(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                request_rate=record_count / (deadline_hours * 60 * 60),
+            ),
+            text(dataset.get("model"), f"batch model for {job_id}"),
+        )
+    if driver != "aiperf":
+        return None, None
+    benchmark_document = mapping(
+        config_document.get("benchmark"),
+        f"AIPerf benchmark for {job_id}",
+    )
+    sender_model = text(
+        benchmark_document.get("model"),
+        f"AIPerf benchmark model for {job_id}",
+    )
+    dataset = mapping(
+        benchmark_document.get("dataset"),
+        f"AIPerf dataset for {job_id}",
+    )
+    input_tokens, output_tokens = aiperf_token_means(dataset, job_id)
+    phases_value = benchmark_document.get("phases")
+    if not isinstance(phases_value, list) or not phases_value:
+        raise ValueError(f"AIPerf phases for {job_id} must be a non-empty array")
+    phases = [mapping(value, f"AIPerf phase for {job_id}") for value in phases_value]
+    request_rate = max(
+        positive_number(
+            phase.get("rate"),
+            f"AIPerf phase rate for {job_id}",
+        )
+        for phase in phases
+    )
+    concurrency_values = [
+        whole_number(
+            phase.get("concurrency"),
+            f"AIPerf phase concurrency for {job_id}",
+        )
+        for phase in phases
+        if phase.get("concurrency") is not None
+    ]
+    max_concurrency = max(concurrency_values) if concurrency_values else None
+    return (
+        SchedulerWorkload(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            request_rate=request_rate,
+            max_concurrency=max_concurrency,
+        ),
+        sender_model,
+    )
+
+
+def aiperf_token_means(
+    dataset: Mapping[str, object],
+    job_id: str,
+) -> tuple[float, float]:
+    """Return mean input and output tokens from an AIPerf dataset."""
+    prompts_value = dataset.get("prompts")
+    if isinstance(prompts_value, Mapping):
+        prompts = cast(Mapping[str, object], prompts_value)
+        return (
+            token_mean(prompts.get("isl"), f"AIPerf ISL for {job_id}"),
+            token_mean(prompts.get("osl"), f"AIPerf OSL for {job_id}"),
+        )
+
+    rankings_value = dataset.get("rankings")
+    if isinstance(rankings_value, Mapping):
+        rankings = cast(Mapping[str, object], rankings_value)
+        passages = token_mean(
+            rankings.get("passages"),
+            f"AIPerf passages for {job_id}",
+        )
+        passage_tokens = token_mean(
+            rankings.get("passageTokens"),
+            f"AIPerf passage tokens for {job_id}",
+        )
+        query_tokens = token_mean(
+            rankings.get("queryTokens"),
+            f"AIPerf query tokens for {job_id}",
+        )
+        return query_tokens + passages * passage_tokens, 1.0
+    raise ValueError(f"AIPerf dataset for {job_id} has no supported token shape")
+
+
+def token_mean(value: object, name: str) -> float:
+    """Read a scalar or distribution mean token count."""
+    if isinstance(value, Mapping):
+        value = value.get("mean", value.get("average"))
+    return nonnegative_number(value, name)
+
+
+def load_job_config_document(
+    config: Path,
+    job_id: str,
+) -> Mapping[str, object] | None:
+    """Load a YAML job file while allowing non-YAML support processes."""
+    if config.suffix != ".yaml":
+        return None
+    document = yaml.safe_load(config.read_text(encoding="utf-8"))
+    if document is None:
+        return None
+    return mapping(
+        document,
+        f"job config for {job_id}",
+    )
+
+
+def load_job_submission(
+    config_document: Mapping[str, object] | None,
+    sender_model: str | None,
     job_id: str,
     kind: JobKind,
-) -> SubmissionRequest | None:
-    """Load the immutable Tandemn request associated with one benchmark job."""
-    if value is None:
-        return None
-    definition = mapping(value, f"jobs.{job_id}.submission")
+) -> tuple[SubmissionRequest | None, OptimizationGoal | None]:
+    """Load scheduler policy and submission data from one job YAML."""
+    if config_document is None or config_document.get("job") is None:
+        return None, None
+    definition = mapping(config_document.get("job"), f"job config for {job_id}")
     user_id = text(
         definition.get("user_id"),
-        f"jobs.{job_id}.submission.user_id",
+        f"job config for {job_id}.job.user_id",
     )
-    spec_json = dict(
+    model_id = sender_model or text(
+        definition.get("model_id"),
+        f"job config for {job_id}.job.model_id",
+    )
+    features = dict(
         mapping(
-            definition.get("spec_json"),
-            f"jobs.{job_id}.submission.spec_json",
+            definition.get("features"),
+            f"job config for {job_id}.job.features",
         )
     )
-    text(
-        spec_json.get("model_id"),
-        f"jobs.{job_id}.submission.spec_json.model_id",
+    optimization_goal = OptimizationGoal(
+        text(
+            definition.get("optimization_goal"),
+            f"job config for {job_id}.job.optimization_goal",
+        )
     )
-    return SubmissionRequest(
-        user_id=user_id,
-        kind=kind.value,
-        spec_json=spec_json,
+    return (
+        SubmissionRequest(
+            user_id=user_id,
+            kind=kind.value,
+            spec_json={"model_id": model_id, "job_features": features},
+        ),
+        optimization_goal,
     )
 
 
@@ -1516,6 +2075,13 @@ def validate_jobs(jobs: tuple[Job, ...]) -> None:
             and parent.stop_minute < job.stop_minute
         ):
             raise ValueError(f"{job.job_id} stops after its parent")
+
+
+def validate_runnable_jobs(benchmark: Benchmark) -> None:
+    """Require a sender command for every enabled external job."""
+    for job in benchmark.jobs:
+        if job.enabled and job.driver == "external_mock_data" and job.command is None:
+            raise ValueError(f"{job.job_id} requires a batch sender command")
 
 
 def log_benchmark(benchmark: Benchmark) -> None:

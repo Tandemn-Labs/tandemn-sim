@@ -1,4 +1,28 @@
 # job-benchmark_timing_3hr-145-2
+job:
+  user_id: tenant_new_model_eval
+  optimization_goal: throughput
+  features:
+    isl_token_avg: 1800
+    isl_token_min: 450
+    isl_token_max: 6000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 1600
+    osl_token_min: 400
+    osl_token_max: 6000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Constant
+    peak_to_mean_ratio: 1
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    total_token_budget: 21760000
+    priority_class: STANDARD
+    deadline_hrs: 0.5833
+    target_p99_ttft_ms: 12000
+    target_p99_tpot_ms: 160
+
 schema_version: "batch-dataset/v1"
 
 dataset:
