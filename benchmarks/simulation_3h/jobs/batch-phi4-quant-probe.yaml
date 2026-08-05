@@ -2,6 +2,7 @@
 job:
   user_id: tenant_koi_profiling
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 1000
     isl_token_min: 250
@@ -36,17 +37,3 @@ dataset:
   partitioning:
     shard_count: 36
     requests_per_shard: 500
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 250
-      average: 1000
-      maximum: 4096
-      sigma: 0.8
-    output_tokens:
-      distribution: lognormal
-      minimum: 128
-      average: 512
-      maximum: 2048
-      sigma: 0.8

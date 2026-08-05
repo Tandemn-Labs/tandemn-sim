@@ -61,7 +61,11 @@ Scheduler input currently comes from two benchmark layers:
 | Input | Authoritative source |
 |---|---|
 | Job ID and lifecycle | `overview.yaml` |
-| Model and workload | AIPerf or batch dataset section |
+| Model | AIPerf or batch dataset section |
+| Token shape | Job `job.features` section |
+| Online request rate | AIPerf phase |
+| Batch size and deadline | Batch dataset and overview schedule |
+| Model precision | Job `job.precision` field |
 | SLO and submission features | Job `job.features` section |
 | Latency or throughput policy | Job `job.optimization_goal` field |
 
@@ -164,8 +168,9 @@ and their latest state.
 benchmark offsets without waiting for wall-clock time. It schedules and
 releases resources but never submits jobs or starts data senders.
 
-Online demand uses AIPerf's request rate and token means. Batch demand uses the
-dataset record count divided by its deadline, plus its input/output token means.
+Online demand uses AIPerf's request rate and the canonical job token shape.
+Batch demand uses the dataset record count divided by its deadline and the same
+canonical job token shape.
 The simulated batch allocation is released at that deadline because AIC sizes
 the configuration to finish the work by then.
 

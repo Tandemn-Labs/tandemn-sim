@@ -138,7 +138,7 @@ class DynamoAicTests(unittest.TestCase):
             "AIC does not support model architecture Phi3ForCausalLM",
         )
 
-    def test_first_job_uses_actual_sender_rate_and_token_shape(self) -> None:
+    def test_first_job_uses_canonical_rate_and_token_shape(self) -> None:
         benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
         first_job = benchmark.jobs[0]
         client = FakeAicClient(devices=1)
@@ -152,8 +152,8 @@ class DynamoAicTests(unittest.TestCase):
         request = client.requests[0]
         self.assertEqual(request.target_request_rate, 37.081)
         self.assertIsNone(request.target_concurrency)
-        self.assertEqual(request.input_tokens, 1686)
-        self.assertEqual(request.output_tokens, 108)
+        self.assertEqual(request.input_tokens, 900)
+        self.assertEqual(request.output_tokens, 300)
         self.assertEqual(request.available_devices, 32)
         self.assertEqual(
             request.optimization_goal,

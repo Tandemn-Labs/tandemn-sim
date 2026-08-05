@@ -7,6 +7,7 @@
 job:
   user_id: tenant_moe_routing
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 1200
     isl_token_min: 300
@@ -31,7 +32,7 @@ schemaVersion: "2.0"
 randomSeed: 103
 
 benchmark:
-  model: Qwen/Qwen3-30B-A3B-Instruct
+  model: Qwen/Qwen3-Next-80B-A3B-Thinking
   endpoint:
     path: /v1/chat/completions
     type: chat
@@ -39,14 +40,12 @@ benchmark:
     timeout: 300
     connectionReuse: pooled
   tokenizer:
-    name: ${TOKENIZER_NAME:Qwen/Qwen3-30B-A3B-Instruct}
+    name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
   dataset:
     type: synthetic
     entries: 512
     sampling: random
     prompts:
-      isl: {mean: 932.905, median: 620, min: 19, max: 59159}
-      osl: {mean: 90.731, median: 42, min: 1, max: 8192}
     turns: 1
   phases:
     - name: profiling

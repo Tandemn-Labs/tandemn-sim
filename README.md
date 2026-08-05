@@ -236,10 +236,11 @@ it does not combine their processes.
 
 Online job YAMLs are AIPerf configuration templates. They define:
 
-- scheduler policy, user, and SLO requirements in the top-level `job` block;
+- canonical token shape, scheduler policy, precision, user, and SLO
+  requirements in the top-level `job` block;
 - target model and endpoint type;
 - streaming behavior and timeout;
-- synthetic input and output token distributions;
+- AIPerf-specific generation and traffic settings;
 - prefix reuse and session turns;
 - traffic pattern, rate, concurrency, ramp, and duration;
 - random seed for reproducibility.
@@ -272,8 +273,8 @@ defines one finite dataset for one batch job:
 - model and request format;
 - total record count;
 - shard count and requests per shard;
-- input-token distribution;
-- output-token distribution;
+- input-token distribution from `job.features`;
+- output-token distribution from `job.features`;
 - deterministic random seed.
 
 For every generated request:
@@ -563,10 +564,11 @@ minimum TTFT (then TPOT and GPU count) for `latency`, or maximum token
 throughput efficiency for `throughput`. The controller uses the same goal when
 comparing hardware types.
 
-The controller builds scheduler input from one job YAML. Online load comes from
-its AIPerf section. Batch load is its record count divided by its deadline, using
-the batch dataset's average input and output token counts. SLO and policy come
-from the top-level `job` section.
+The controller builds scheduler input from one job YAML. Token shape, SLO, and
+policy come from the canonical top-level `job` section. Online request rate
+comes from its AIPerf phases; batch request rate is its record count divided by
+its deadline. Runtime AIPerf and batch generation consume the same canonical
+token fields rather than declaring another copy.
 AIPerf `concurrency` remains a sender safety ceiling; it is not passed to AIC
 as offered load when the sender defines `rate`. Throughput decisions compare
 the full selected deployment in tokens per second.

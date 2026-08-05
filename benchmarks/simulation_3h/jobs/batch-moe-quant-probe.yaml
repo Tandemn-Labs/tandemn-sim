@@ -2,6 +2,7 @@
 job:
   user_id: tenant_koi_profiling
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 1000
     isl_token_min: 250
@@ -27,7 +28,7 @@ schema_version: "batch-dataset/v1"
 
 dataset:
   id: moe_quant_probe
-  model: Qwen/Qwen3-30B-A3B-Instruct
+  model: Qwen/Qwen3-Next-80B-A3B-Thinking
   endpoint: /v1/chat/completions
   request_format: chat
   record_count: 24000
@@ -36,17 +37,3 @@ dataset:
   partitioning:
     shard_count: 48
     requests_per_shard: 500
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 250
-      average: 1000
-      maximum: 4096
-      sigma: 0.8
-    output_tokens:
-      distribution: lognormal
-      minimum: 200
-      average: 800
-      maximum: 3000
-      sigma: 0.8

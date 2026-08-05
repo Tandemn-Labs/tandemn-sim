@@ -2,6 +2,7 @@
 job:
   user_id: tenant_koi_profiling
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 1400
     isl_token_min: 350
@@ -27,7 +28,7 @@ schema_version: "batch-dataset/v1"
 
 dataset:
   id: calibration_probe
-  model: Qwen/Qwen2.5-14B-Instruct
+  model: microsoft/phi-4
   endpoint: /v1/chat/completions
   request_format: chat
   record_count: 12000
@@ -36,17 +37,3 @@ dataset:
   partitioning:
     shard_count: 24
     requests_per_shard: 500
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 350
-      average: 1400
-      maximum: 4096
-      sigma: 0.8
-    output_tokens:
-      distribution: lognormal
-      minimum: 128
-      average: 512
-      maximum: 1600
-      sigma: 0.8

@@ -6,7 +6,7 @@ schemaVersion: "2.0"
 randomSeed: 105
 
 benchmark:
-  model: BAAI/bge-m3
+  model: intfloat/multilingual-e5-large
   endpoint:
     url: http://127.0.0.1:8765/v1/embeddings
     type: embeddings

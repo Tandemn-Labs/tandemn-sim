@@ -2,6 +2,7 @@
 job:
   user_id: tenant_embeddings
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 384
     isl_token_min: 96
@@ -27,7 +28,7 @@ schema_version: "batch-dataset/v1"
 
 dataset:
   id: embedding_backfill_sample
-  model: BAAI/bge-m3
+  model: intfloat/multilingual-e5-large
   endpoint: /v1/embeddings
   request_format: embeddings
   record_count: 1280000
@@ -36,16 +37,3 @@ dataset:
   partitioning:
     shard_count: 128
     requests_per_shard: 10000
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 96
-      average: 384
-      maximum: 1024
-      sigma: 0.8
-    output_tokens:
-      distribution: constant
-      minimum: 1
-      average: 1
-      maximum: 1

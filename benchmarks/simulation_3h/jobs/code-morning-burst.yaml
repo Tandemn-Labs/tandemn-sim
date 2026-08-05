@@ -7,6 +7,7 @@
 job:
   user_id: tenant_code_autocomplete
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 2200
     isl_token_min: 550
@@ -45,8 +46,6 @@ benchmark:
     entries: 2000
     sampling: random
     prompts:
-      isl: {mean: 2574.682, median: 1934, min: 2, max: 7691}
-      osl: {mean: 23.384, median: 8, min: 1, max: 5000}
     turns: 1
   phases:
     - name: profiling

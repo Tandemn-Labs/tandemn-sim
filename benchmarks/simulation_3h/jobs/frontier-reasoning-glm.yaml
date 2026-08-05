@@ -7,6 +7,7 @@
 job:
   user_id: tenant_frontier_glm
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 1800
     isl_token_min: 450
@@ -45,8 +46,6 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 4442.944, median: 3680, min: 13, max: 51622}
-      osl: {mean: 3930.863, median: 1684.5, min: 4, max: 75990}
     turns: 1
   phases:
     - name: profiling

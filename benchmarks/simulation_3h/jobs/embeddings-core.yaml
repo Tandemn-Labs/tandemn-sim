@@ -7,6 +7,7 @@
 job:
   user_id: tenant_embeddings
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 384
     isl_token_min: 96
@@ -31,7 +32,7 @@ schemaVersion: "2.0"
 randomSeed: 105
 
 benchmark:
-  model: BAAI/bge-m3
+  model: intfloat/multilingual-e5-large
   endpoint:
     path: /v1/embeddings
     type: embeddings
@@ -39,14 +40,12 @@ benchmark:
     timeout: 120
     connectionReuse: pooled
   tokenizer:
-    name: ${TOKENIZER_NAME:BAAI/bge-m3}
+    name: ${TOKENIZER_NAME:intfloat/multilingual-e5-large}
   dataset:
     type: synthetic
     entries: 5000
     sampling: random
     prompts:
-      isl: {mean: 6.596, median: 6, min: 1, max: 26}
-      osl: 0
       batchSize: 1
   phases:
     - name: profiling

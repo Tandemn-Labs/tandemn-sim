@@ -1,0 +1,86 @@
+schema_version: traffic-analysis/v1
+output_directory: traces
+
+sources:
+  AZ-CONV:
+    kind: azure
+    path: raw_datasets/azure_llm/AzureLLMInferenceTrace_conv_1week.csv
+  AZ-CODE:
+    kind: azure
+    path: raw_datasets/azure_llm/AzureLLMInferenceTrace_code_1week.csv
+  BURST:
+    kind: burstgpt
+    path: raw_datasets/burstgpt/BurstGPT_3.csv
+  BAIL-CODER:
+    kind: bailian
+    path: raw_datasets/bailian/qwen_coder_blksz_16.jsonl
+  BAIL-TOB:
+    kind: bailian
+    path: raw_datasets/bailian/qwen_traceB_blksz_16.jsonl
+  BAIL-THINK:
+    kind: bailian
+    path: raw_datasets/bailian/qwen_thinking_blksz_16.jsonl
+  RAG:
+    kind: ragpulse
+    path: raw_datasets/ragpulse/0_trace.jsonl
+  WEKA:
+    kind: normalized_csv
+    path: raw_datasets/weka_agents/premium_agents_kimi_normalized.csv
+  MOON-CONV:
+    kind: mooncake
+    path: raw_datasets/mooncake/conversation_trace.jsonl
+  SWISS:
+    kind: swiss
+    path: raw_datasets/swissai/swissai_serving_trace.jsonl
+
+jobs:
+  - {slug: chat_free, job_id: job-benchmark_timing_3hr-0-1, pattern: Diurnal,
+     duration_minutes: 180, source: AZ-CONV}
+  - {slug: chat_premium, job_id: job-benchmark_timing_3hr-0-2, pattern: Diurnal,
+     duration_minutes: 180, source: BURST, variant: gpt4_conversation,
+     filter_description: "Model=GPT-4; Log Type=Conversation log"}
+  - {slug: code_autocomplete, job_id: job-benchmark_timing_3hr-0-3,
+     pattern: Bursty, duration_minutes: 180, source: BAIL-CODER}
+  - {slug: safety_moderation, job_id: job-benchmark_timing_3hr-0-4,
+     pattern: Bursty, duration_minutes: 180, source: BURST, variant: short_api,
+     filter_description: "Log Type=API log; input<=512; output<=32"}
+  - {slug: embeddings, job_id: job-benchmark_timing_3hr-0-5,
+     pattern: Constant, duration_minutes: 180, source: RAG, variant: embedding,
+     filter_description: "query-embedding stage; output=0"}
+  - {slug: search_rag, job_id: job-benchmark_timing_3hr-7-1, pattern: Poisson,
+     duration_minutes: 173, source: RAG, variant: generation}
+  - {slug: search_rerank, job_id: job-benchmark_timing_3hr-7-2,
+     pattern: Bursty, duration_minutes: 173, source: RAG, variant: rerank,
+     filter_description: "query plus retrieved-passage stage; output=0"}
+  - {slug: support_assistant, job_id: job-benchmark_timing_3hr-7-3,
+     pattern: Bursty, duration_minutes: 173, source: RAG, variant: generation,
+     exclude_windows_from: [search_rerank]}
+  - {slug: code_morning_burst, job_id: job-benchmark_timing_3hr-32-1,
+     pattern: Bursty, duration_minutes: 55, source: AZ-CODE}
+  - {slug: enterprise_chat, job_id: job-benchmark_timing_3hr-32-2,
+     pattern: Diurnal, duration_minutes: 120, source: AZ-CONV,
+     exclude_windows_from: [chat_free]}
+  - {slug: product_launch_chat, job_id: job-benchmark_timing_3hr-49-1,
+     pattern: Bursty, duration_minutes: 35, source: BURST, variant: api,
+     filter_description: "Log Type=API log"}
+  - {slug: product_launch_moderation, job_id: job-benchmark_timing_3hr-49-2,
+     pattern: Bursty, duration_minutes: 35, source: BURST, variant: api,
+     filter_description: "same parent API events as Product Launch Chat",
+     reuse_window_from: product_launch_chat}
+  - {slug: premium_agents_kimi, job_id: job-benchmark_timing_3hr-67-1,
+     pattern: Bursty, duration_minutes: 90, source: WEKA,
+     filter_description: "source session 2f7abb00530bb35037c045eae6191f585bde"}
+  - {slug: frontier_glm_reasoning, job_id: job-benchmark_timing_3hr-67-2,
+     pattern: Bursty, duration_minutes: 75, source: BAIL-THINK}
+  - {slug: moe_routing_qwen3, job_id: job-benchmark_timing_3hr-67-3,
+     pattern: Bursty, duration_minutes: 75, source: BAIL-TOB}
+  - {slug: safety_p0_live, job_id: job-benchmark_timing_3hr-100-2,
+     pattern: Bursty, duration_minutes: 50, source: BURST, variant: safety_api,
+     filter_description: "Log Type=API log; 256<=input<=2048; 64<=output<=512",
+     exclude_windows_from: [product_launch_chat]}
+  - {slug: meeting_summary, job_id: job-benchmark_timing_3hr-125-1,
+     pattern: Bursty, duration_minutes: 45, source: MOON-CONV,
+     filter_description: "input>=24000"}
+  - {slug: legal_finance_review, job_id: job-benchmark_timing_3hr-145-1,
+     pattern: Diurnal, duration_minutes: 35, source: SWISS,
+     filter_description: "input>=3000; 300<=output<=1500"}

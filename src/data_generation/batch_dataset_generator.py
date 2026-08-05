@@ -5,6 +5,7 @@ import logging
 import math
 import random
 import sys
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import cache
@@ -190,7 +191,22 @@ def load_batch_dataset_spec(path: Path) -> BatchDatasetSpec:
 
     dataset = _mapping(document.get("dataset"), "dataset")
     partitioning = _mapping(dataset.get("partitioning"), "dataset.partitioning")
-    io = _mapping(dataset.get("io"), "dataset.io")
+    job_value = document.get("job")
+    if job_value is None:
+        io = _mapping(dataset.get("io"), "dataset.io")
+        input_tokens = _load_distribution(
+            io.get("input_tokens"),
+            "dataset.io.input_tokens",
+        )
+        output_tokens = _load_distribution(
+            io.get("output_tokens"),
+            "dataset.io.output_tokens",
+        )
+    else:
+        job = _mapping(job_value, "job")
+        features = _mapping(job.get("features"), "job.features")
+        input_tokens = _load_job_distribution(features, "isl")
+        output_tokens = _load_job_distribution(features, "osl")
 
     shard_count = _positive_integer(
         partitioning.get("shard_count"),
@@ -234,14 +250,24 @@ def load_batch_dataset_spec(path: Path) -> BatchDatasetSpec:
         requests_per_shard=requests_per_shard,
         seed=_nonnegative_integer(dataset.get("seed"), "dataset.seed"),
         request_format=request_format,
-        input_tokens=_load_distribution(
-            io.get("input_tokens"),
-            "dataset.io.input_tokens",
-        ),
-        output_tokens=_load_distribution(
-            io.get("output_tokens"),
-            "dataset.io.output_tokens",
-        ),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def _load_job_distribution(
+    features: Mapping[str, object],
+    prefix: str,
+) -> TokenDistribution:
+    """Load one batch token distribution from canonical job features."""
+    return _load_distribution(
+        {
+            "distribution": features.get(f"{prefix}_distribution_type"),
+            "minimum": features.get(f"{prefix}_token_min"),
+            "average": features.get(f"{prefix}_token_avg"),
+            "maximum": features.get(f"{prefix}_token_max"),
+        },
+        f"job.features.{prefix}",
     )
 
 

@@ -45,8 +45,45 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(benchmark.benchmark_id, "simulation_3h")
         self.assertEqual(len(benchmark.jobs), 26)
         self.assertEqual(sum(job.enabled for job in benchmark.jobs), 26)
+        self.assertEqual(len({job.config for job in benchmark.jobs}), 26)
         self.assertTrue(all(job.submission is not None for job in benchmark.jobs))
+        self.assertTrue(
+            all(
+                job.submission is not None
+                and job.submission.spec_json.get("precision") == "fp16"
+                for job in benchmark.jobs
+            )
+        )
         self.assertEqual(benchmark.poll_interval_seconds, 60)
+
+        token_fields = {
+            "isl_token_avg",
+            "isl_token_min",
+            "isl_token_max",
+            "isl_distribution_type",
+            "osl_token_avg",
+            "osl_token_min",
+            "osl_token_max",
+            "osl_distribution_type",
+        }
+        for job in benchmark.jobs:
+            document = yaml.safe_load(job.config.read_text(encoding="utf-8"))
+            features = document["job"]["features"]
+            self.assertTrue(token_fields <= features.keys(), job.job_id)
+            if job.kind == JobKind.BATCH:
+                self.assertNotIn("io", document["dataset"], job.job_id)
+                continue
+            dataset = document["benchmark"]["dataset"]
+            if "rankings" in dataset:
+                self.assertNotIn(
+                    "passageTokens",
+                    dataset["rankings"],
+                    job.job_id,
+                )
+            else:
+                prompts = dataset.get("prompts") or {}
+                self.assertNotIn("isl", prompts, job.job_id)
+                self.assertNotIn("osl", prompts, job.job_id)
 
     def test_aiperf_summary_export_excludes_raw_payload_level(self) -> None:
         """Build an AI-Perf command that requests aggregate output only."""
@@ -306,6 +343,44 @@ class ControllerTests(unittest.TestCase):
                 runtime["benchmark"]["endpoint"]["url"],
                 "https://runtime.example/v1/chat/completions",
             )
+
+    def test_runtime_aiperf_uses_the_canonical_job_token_shape(self) -> None:
+        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        code_job = next(
+            job
+            for job in benchmark.jobs
+            if job.job_id == "job-benchmark_timing_3hr-0-3"
+        )
+        rerank_job = next(
+            job
+            for job in benchmark.jobs
+            if job.job_id == "job-benchmark_timing_3hr-7-2"
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_directory = Path(temporary_directory)
+            code_runtime = materialize_runtime_config(
+                code_job,
+                artifact_directory,
+                "https://runtime.example/v1/chat/completions",
+            )
+            code_document = yaml.safe_load(code_runtime.read_text(encoding="utf-8"))
+            code_prompts = code_document["benchmark"]["dataset"]["prompts"]
+            self.assertEqual(code_prompts["isl"]["mean"], 1800)
+            self.assertEqual(code_prompts["osl"]["mean"], 120)
+
+            rerank_runtime = materialize_runtime_config(
+                rerank_job,
+                artifact_directory,
+                "https://runtime.example/rerank",
+            )
+            rerank_document = yaml.safe_load(rerank_runtime.read_text(encoding="utf-8"))
+            rankings = rerank_document["benchmark"]["dataset"]["rankings"]
+            aggregate_mean = (
+                rankings["queryTokens"]["mean"]
+                + rankings["passages"]["mean"] * rankings["passageTokens"]["mean"]
+            )
+            self.assertAlmostEqual(aggregate_mean, 512)
 
     def test_scheduler_placement_precedes_sending_and_is_released(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

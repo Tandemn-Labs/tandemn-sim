@@ -6,7 +6,7 @@ schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
-  model: Qwen/Qwen2.5-14B-Instruct
+  model: microsoft/phi-4
   endpoint:
     url: http://127.0.0.1:8765/v1/chat/completions
     type: chat

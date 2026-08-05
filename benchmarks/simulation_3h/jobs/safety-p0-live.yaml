@@ -7,6 +7,7 @@
 job:
   user_id: tenant_safety_reasoner
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 900
     isl_token_min: 225
@@ -45,8 +46,6 @@ benchmark:
     entries: 1500
     sampling: random
     prompts:
-      isl: {mean: 455.722, median: 394, min: 256, max: 1949}
-      osl: {mean: 134.296, median: 119, min: 64, max: 499}
     turns: 1
   phases:
     - name: profiling

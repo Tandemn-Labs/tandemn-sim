@@ -7,6 +7,7 @@
 job:
   user_id: tenant_search_rerank
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 512
     isl_token_min: 128
@@ -46,7 +47,6 @@ benchmark:
     sampling: random
     rankings:
       passages: {mean: 3.688, stddev: 2.902, min: 1, max: 6}
-      passageTokens: {mean: 269.960, stddev: 80.381, min: 23, max: 494}
       queryTokens: {mean: 8.031, stddev: 6.237, min: 1, max: 35}
   phases:
     - name: profiling

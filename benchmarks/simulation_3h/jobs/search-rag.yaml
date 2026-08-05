@@ -7,6 +7,7 @@
 job:
   user_id: tenant_search_rag
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 9000
     isl_token_min: 2250
@@ -31,7 +32,7 @@ schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
-  model: Qwen/Qwen2.5-14B-Instruct
+  model: microsoft/phi-4
   endpoint:
     path: /v1/chat/completions
     type: chat
@@ -39,14 +40,12 @@ benchmark:
     timeout: 300
     connectionReuse: pooled
   tokenizer:
-    name: ${TOKENIZER_NAME:Qwen/Qwen2.5-14B-Instruct}
+    name: ${TOKENIZER_NAME:microsoft/phi-4}
   dataset:
     type: synthetic
     entries: 512
     sampling: random
     prompts:
-      isl: {mean: 2969.874, stddev: 976.910, min: 1052, max: 5339}
-      osl: {mean: 277.150, median: 238, min: 7, max: 931}
     turns: 1
   phases:
     - name: profiling

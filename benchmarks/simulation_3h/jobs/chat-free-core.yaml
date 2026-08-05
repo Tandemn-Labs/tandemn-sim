@@ -9,6 +9,7 @@
 job:
   user_id: tenant_chat_free
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 900
     isl_token_min: 225
@@ -47,8 +48,6 @@ benchmark:
     entries: 2000
     sampling: random
     prompts:
-      isl: {mean: 1685.737, median: 918, min: 6, max: 7999}
-      osl: {mean: 107.797, median: 41, min: 1, max: 1200}
     turns: 1
   phases:
     - name: profiling

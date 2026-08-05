@@ -7,6 +7,7 @@
 job:
   user_id: tenant_legal_finance
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 3000
     isl_token_min: 750
@@ -45,8 +46,6 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 5967.968, median: 5515, min: 3041, max: 12146}
-      osl: {mean: 359.935, median: 338, min: 306, max: 500}
     turns: 1
   phases:
     - name: profiling

@@ -372,7 +372,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_embeddings",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-m3",
+                                       "model_id":  "intfloat/multilingual-e5-large",
                                        "job_features":  {
                                                             "isl_token_avg":  384,
                                                             "isl_token_min":  96,
@@ -480,7 +480,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_eval_platform",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  1800,
                                                             "isl_token_min":  450,
@@ -589,7 +589,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_engine_canary",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  4000,
                                                             "isl_token_min":  1000,
@@ -746,7 +746,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_embeddings",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-m3",
+                                       "model_id":  "intfloat/multilingual-e5-large",
                                        "job_features":  {
                                                             "isl_token_avg":  384,
                                                             "isl_token_min":  96,
@@ -806,7 +806,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  9000,
                                                             "isl_token_min":  2250,
@@ -853,7 +853,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  16000,
                                                             "isl_token_min":  4000,
@@ -1023,7 +1023,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  10000,
                                                             "isl_token_min":  2500,
@@ -1237,7 +1237,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_enterprise_chat",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  1600,
                                                             "isl_token_min":  400,
@@ -1344,7 +1344,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_engine_canary",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  4000,
                                                             "isl_token_min":  1000,
@@ -1405,7 +1405,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  24000,
                                                             "isl_token_min":  6000,
@@ -1465,7 +1465,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  16000,
                                                             "isl_token_min":  4000,
@@ -1513,7 +1513,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_moe_eval",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen3-30B-A3B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
@@ -2051,7 +2051,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  9000,
                                                             "isl_token_min":  2250,
@@ -2111,7 +2111,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_reports",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  18000,
                                                             "isl_token_min":  4500,
@@ -2220,7 +2220,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_koi_profiling",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen3-30B-A3B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
@@ -2268,7 +2268,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "user_id":  "tenant_engine_canary",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
                                        "job_features":  {
                                                             "isl_token_avg":  4000,
                                                             "isl_token_min":  1000,

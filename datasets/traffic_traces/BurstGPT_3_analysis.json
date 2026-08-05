@@ -1,0 +1,74 @@
+{
+  "concurrency": {
+    "available": true,
+    "maximum": 116,
+    "mean_time_weighted": 1.4334473708245001,
+    "requests": 5344021
+  },
+  "input": {
+    "end_timestamp_seconds": 28943983.0,
+    "normalized_columns": [
+      "timestamp_seconds",
+      "elapsed_seconds",
+      "input_tokens",
+      "output_tokens"
+    ],
+    "observed_span_seconds": 9503873.0,
+    "records": 5344021,
+    "start_timestamp_seconds": 19440110.0
+  },
+  "interarrival": {
+    "coefficient_of_variation": 17.749616123275096,
+    "count": 5344020,
+    "maximum_ms": 18872000.0,
+    "mean_ms": 1778.4126930662685,
+    "median_ms": 0.0,
+    "minimum_ms": 0.0,
+    "p50_ms": 0.0,
+    "p90_ms": 2000.0,
+    "p95_ms": 6000.0,
+    "p99_ms": 28000.0,
+    "standard_deviation_ms": 31566.142610686125
+  },
+  "request_rate": {
+    "bucket_seconds": 1,
+    "coefficient_of_variation": 3.838305602759385,
+    "count": 9503874,
+    "maximum_rps": 100.0,
+    "mean_rps": 0.5622992266101171,
+    "median_rps": 0.0,
+    "minimum_rps": 0.0,
+    "p50_rps": 0.0,
+    "p90_rps": 1.0,
+    "p95_rps": 3.0,
+    "p99_rps": 11.0,
+    "peak_to_mean_ratio": 177.8412547405783,
+    "standard_deviation_rps": 2.1582762719248816
+  },
+  "tokens": {
+    "input": {
+      "count": 5344021,
+      "maximum_tokens": 125591.0,
+      "mean_tokens": 478.1994492536612,
+      "median_tokens": 327.0,
+      "minimum_tokens": 0.0,
+      "p50_tokens": 327.0,
+      "p90_tokens": 836.0,
+      "p95_tokens": 1405.0,
+      "p99_tokens": 3354.0,
+      "standard_deviation_tokens": 1331.7464840840964
+    },
+    "output": {
+      "count": 5344021,
+      "maximum_tokens": 5383.0,
+      "mean_tokens": 77.82405608061795,
+      "median_tokens": 14.0,
+      "minimum_tokens": 0.0,
+      "p50_tokens": 14.0,
+      "p90_tokens": 129.0,
+      "p95_tokens": 324.0,
+      "p99_tokens": 876.0,
+      "standard_deviation_tokens": 241.0000764006002
+    }
+  }
+}

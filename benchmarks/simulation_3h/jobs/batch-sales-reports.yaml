@@ -2,6 +2,7 @@
 job:
   user_id: tenant_reports
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 18000
     isl_token_min: 4500
@@ -27,7 +28,7 @@ schema_version: "batch-dataset/v1"
 
 dataset:
   id: sales_reports_short
-  model: Qwen/Qwen2.5-72B-Instruct
+  model: Qwen/Qwen3-Next-80B-A3B-Thinking
   endpoint: /v1/chat/completions
   request_format: chat
   record_count: 8000
@@ -36,17 +37,3 @@ dataset:
   partitioning:
     shard_count: 80
     requests_per_shard: 100
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 4500
-      average: 18000
-      maximum: 64000
-      sigma: 0.8
-    output_tokens:
-      distribution: lognormal
-      minimum: 350
-      average: 1400
-      maximum: 5000
-      sigma: 0.8

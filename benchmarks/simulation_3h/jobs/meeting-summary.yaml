@@ -7,6 +7,7 @@
 job:
   user_id: tenant_meeting_summary
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 24000
     isl_token_min: 6000
@@ -31,7 +32,7 @@ schemaVersion: "2.0"
 randomSeed: 101
 
 benchmark:
-  model: Qwen/Qwen2.5-72B-Instruct
+  model: Qwen/Qwen3-Next-80B-A3B-Thinking
   endpoint:
     path: /v1/chat/completions
     type: chat
@@ -39,14 +40,12 @@ benchmark:
     timeout: 1200
     connectionReuse: pooled
   tokenizer:
-    name: ${TOKENIZER_NAME:Qwen/Qwen2.5-72B-Instruct}
+    name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
   dataset:
     type: synthetic
     entries: 64
     sampling: random
     prompts:
-      isl: {mean: 42327.556, median: 33206, min: 24615, max: 92457}
-      osl: {mean: 357.444, stddev: 203.324, min: 3, max: 583}
     turns: 1
   phases:
     - name: profiling

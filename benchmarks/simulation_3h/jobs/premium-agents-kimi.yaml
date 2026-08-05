@@ -7,6 +7,7 @@
 job:
   user_id: tenant_agents_premium
   optimization_goal: latency
+  precision: fp16
   features:
     isl_token_avg: 1400
     isl_token_min: 350
@@ -45,8 +46,6 @@ benchmark:
     entries: 256
     sampling: random
     prompts:
-      isl: {mean: 137750.794, median: 109733, min: 668, max: 407013}
-      osl: {mean: 1157.851, median: 172, min: 3, max: 36498}
     turns: 1
   phases:
     - name: profiling

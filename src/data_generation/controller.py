@@ -1647,6 +1647,7 @@ def materialize_runtime_config(
         dict[str, object],
         mapping(document.get("benchmark"), f"AIPerf benchmark for {job.job_id}"),
     )
+    apply_job_workload_to_aiperf(benchmark_document, job)
     endpoint_document = cast(
         dict[str, object],
         mapping(
@@ -1663,6 +1664,123 @@ def materialize_runtime_config(
         encoding="utf-8",
     )
     return runtime_config
+
+
+def apply_job_workload_to_aiperf(
+    benchmark_document: dict[str, object],
+    job: Job,
+) -> None:
+    """Materialize the canonical job token shape into AIPerf."""
+    if job.submission is None:
+        return
+    features_value = job.submission.spec_json.get("job_features")
+    if not isinstance(features_value, Mapping):
+        return
+    features = cast(Mapping[str, object], features_value)
+    dataset = cast(
+        dict[str, object],
+        mapping(
+            benchmark_document.get("dataset"),
+            f"AIPerf dataset for {job.job_id}",
+        ),
+    )
+    rankings_value = dataset.get("rankings")
+    if isinstance(rankings_value, Mapping):
+        rankings = cast(dict[str, object], rankings_value)
+        passages = mapping(
+            rankings.get("passages"),
+            f"AIPerf passages for {job.job_id}",
+        )
+        query_tokens = mapping(
+            rankings.get("queryTokens"),
+            f"AIPerf query tokens for {job.job_id}",
+        )
+        rankings["passageTokens"] = {
+            "mean": ranking_passage_tokens(
+                features,
+                passages,
+                query_tokens,
+                "avg",
+                "mean",
+                job.job_id,
+            ),
+            "min": ranking_passage_tokens(
+                features,
+                passages,
+                query_tokens,
+                "min",
+                "min",
+                job.job_id,
+            ),
+            "max": ranking_passage_tokens(
+                features,
+                passages,
+                query_tokens,
+                "max",
+                "max",
+                job.job_id,
+            ),
+        }
+        return
+
+    prompts_value = dataset.get("prompts")
+    prompts = (
+        {}
+        if prompts_value is None
+        else dict(mapping(prompts_value, f"AIPerf prompts for {job.job_id}"))
+    )
+    prompts["isl"] = aiperf_token_distribution(features, "isl", job.job_id)
+    prompts["osl"] = aiperf_token_distribution(features, "osl", job.job_id)
+    dataset["prompts"] = prompts
+
+
+def aiperf_token_distribution(
+    features: Mapping[str, object],
+    prefix: str,
+    job_id: str,
+) -> dict[str, float]:
+    """Build one AIPerf token distribution from canonical job features."""
+    return {
+        "mean": nonnegative_number(
+            features.get(f"{prefix}_token_avg"),
+            f"{prefix} average for {job_id}",
+        ),
+        "min": nonnegative_number(
+            features.get(f"{prefix}_token_min"),
+            f"{prefix} minimum for {job_id}",
+        ),
+        "max": nonnegative_number(
+            features.get(f"{prefix}_token_max"),
+            f"{prefix} maximum for {job_id}",
+        ),
+    }
+
+
+def ranking_passage_tokens(
+    features: Mapping[str, object],
+    passages: Mapping[str, object],
+    query_tokens: Mapping[str, object],
+    feature_suffix: str,
+    statistic: str,
+    job_id: str,
+) -> float:
+    """Derive ranking passage length from the aggregate input-token shape."""
+    total = positive_number(
+        features.get(f"isl_token_{feature_suffix}"),
+        f"ranking input {feature_suffix} for {job_id}",
+    )
+    query = nonnegative_number(
+        query_tokens.get(statistic),
+        f"ranking query {statistic} for {job_id}",
+    )
+    passage_count = positive_number(
+        passages.get(statistic),
+        f"ranking passages {statistic} for {job_id}",
+    )
+    passage_tokens = (total - query) / passage_count
+    if passage_tokens <= 0:
+        raise ValueError(f"ranking token shape is invalid for {job_id}")
+    return passage_tokens
 
 
 def job_command(
@@ -1879,31 +1997,32 @@ def load_scheduler_workload(
     """Read the actual sender rate and token shape used for scheduling."""
     if config_document is None:
         return None, None
+    if kind != JobKind.BATCH and driver != "aiperf":
+        return None, None
+    job_definition = mapping(
+        config_document.get("job"),
+        f"job config for {job_id}",
+    )
+    features = mapping(
+        job_definition.get("features"),
+        f"job features for {job_id}",
+    )
+    input_tokens = positive_number(
+        features.get("isl_token_avg"),
+        f"input token average for {job_id}",
+    )
+    output_tokens = positive_number(
+        features.get("osl_token_avg"),
+        f"output token average for {job_id}",
+    )
     if kind == JobKind.BATCH:
         dataset = mapping(
             config_document.get("dataset"),
             f"batch dataset for {job_id}",
         )
-        io = mapping(dataset.get("io"), f"batch io for {job_id}")
-        input_tokens = token_mean(
-            io.get("input_tokens"),
-            f"batch input tokens for {job_id}",
-        )
-        output_tokens = token_mean(
-            io.get("output_tokens"),
-            f"batch output tokens for {job_id}",
-        )
         record_count = positive_number(
             dataset.get("record_count"),
             f"batch record count for {job_id}",
-        )
-        job_definition = mapping(
-            config_document.get("job"),
-            f"job config for {job_id}",
-        )
-        features = mapping(
-            job_definition.get("features"),
-            f"job features for {job_id}",
         )
         deadline_hours = positive_number(
             features.get("deadline_hrs"),
@@ -1917,8 +2036,6 @@ def load_scheduler_workload(
             ),
             text(dataset.get("model"), f"batch model for {job_id}"),
         )
-    if driver != "aiperf":
-        return None, None
     benchmark_document = mapping(
         config_document.get("benchmark"),
         f"AIPerf benchmark for {job_id}",
@@ -1927,11 +2044,6 @@ def load_scheduler_workload(
         benchmark_document.get("model"),
         f"AIPerf benchmark model for {job_id}",
     )
-    dataset = mapping(
-        benchmark_document.get("dataset"),
-        f"AIPerf dataset for {job_id}",
-    )
-    input_tokens, output_tokens = aiperf_token_means(dataset, job_id)
     phases_value = benchmark_document.get("phases")
     if not isinstance(phases_value, list) or not phases_value:
         raise ValueError(f"AIPerf phases for {job_id} must be a non-empty array")
@@ -1961,45 +2073,6 @@ def load_scheduler_workload(
         ),
         sender_model,
     )
-
-
-def aiperf_token_means(
-    dataset: Mapping[str, object],
-    job_id: str,
-) -> tuple[float, float]:
-    """Return mean input and output tokens from an AIPerf dataset."""
-    prompts_value = dataset.get("prompts")
-    if isinstance(prompts_value, Mapping):
-        prompts = cast(Mapping[str, object], prompts_value)
-        return (
-            token_mean(prompts.get("isl"), f"AIPerf ISL for {job_id}"),
-            token_mean(prompts.get("osl"), f"AIPerf OSL for {job_id}"),
-        )
-
-    rankings_value = dataset.get("rankings")
-    if isinstance(rankings_value, Mapping):
-        rankings = cast(Mapping[str, object], rankings_value)
-        passages = token_mean(
-            rankings.get("passages"),
-            f"AIPerf passages for {job_id}",
-        )
-        passage_tokens = token_mean(
-            rankings.get("passageTokens"),
-            f"AIPerf passage tokens for {job_id}",
-        )
-        query_tokens = token_mean(
-            rankings.get("queryTokens"),
-            f"AIPerf query tokens for {job_id}",
-        )
-        return query_tokens + passages * passage_tokens, 1.0
-    raise ValueError(f"AIPerf dataset for {job_id} has no supported token shape")
-
-
-def token_mean(value: object, name: str) -> float:
-    """Read a scalar or distribution mean token count."""
-    if isinstance(value, Mapping):
-        value = value.get("mean", value.get("average"))
-    return nonnegative_number(value, name)
 
 
 def load_job_config_document(
@@ -2048,11 +2121,20 @@ def load_job_submission(
             f"job config for {job_id}.job.optimization_goal",
         )
     )
+    spec_json: dict[str, object] = {
+        "model_id": model_id,
+        "job_features": features,
+    }
+    if definition.get("precision") is not None:
+        spec_json["precision"] = text(
+            definition.get("precision"),
+            f"job config for {job_id}.job.precision",
+        )
     return (
         SubmissionRequest(
             user_id=user_id,
             kind=kind.value,
-            spec_json={"model_id": model_id, "job_features": features},
+            spec_json=spec_json,
         ),
         optimization_goal,
     )

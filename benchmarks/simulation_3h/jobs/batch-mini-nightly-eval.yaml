@@ -2,6 +2,7 @@
 job:
   user_id: tenant_eval_platform
   optimization_goal: throughput
+  precision: fp16
   features:
     isl_token_avg: 1800
     isl_token_min: 450
@@ -36,17 +37,3 @@ dataset:
   partitioning:
     shard_count: 72
     requests_per_shard: 200
-
-  io:
-    input_tokens:
-      distribution: lognormal
-      minimum: 450
-      average: 1800
-      maximum: 6000
-      sigma: 0.8
-    output_tokens:
-      distribution: lognormal
-      minimum: 300
-      average: 1200
-      maximum: 4000
-      sigma: 0.8

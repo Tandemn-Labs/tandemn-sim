@@ -20,7 +20,9 @@ Regions: `us-east`, `eu-west`, `apac`
 
 Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`, `TPU-v5e`
 
-Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-14B-Instruct`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen2.5-72B-Instruct`, `Qwen/Qwen3-30B-A3B-Instruct`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-m3`, `BAAI/bge-reranker-v2-m3`
+Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `intfloat/multilingual-e5-large`, `BAAI/bge-reranker-v2-m3`
+
+Model precision: `fp16`
 
 ## Frozen Cluster Resources
 
@@ -91,6 +93,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -138,6 +141,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -185,6 +189,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1200,
                                                             "isl_token_min":  300,
@@ -232,6 +237,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "Qwen/Qwen2.5-Coder-32B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1800,
                                                             "isl_token_min":  450,
@@ -279,6 +285,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  256,
                                                             "isl_token_min":  64,
@@ -325,7 +332,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_embeddings",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-m3",
+                                       "model_id":  "intfloat/multilingual-e5-large",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  384,
                                                             "isl_token_min":  96,
@@ -386,6 +394,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1800,
                                                             "isl_token_min":  450,
@@ -433,7 +442,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_eval_platform",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1800,
                                                             "isl_token_min":  450,
@@ -482,6 +492,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1200,
                                                             "isl_token_min":  300,
@@ -542,7 +553,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  9000,
                                                             "isl_token_min":  2250,
@@ -590,6 +602,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "BAAI/bge-reranker-v2-m3",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  512,
                                                             "isl_token_min":  128,
@@ -636,7 +649,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_docs_qa",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  7000,
                                                             "isl_token_min":  1750,
@@ -684,6 +698,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1400,
                                                             "isl_token_min":  350,
@@ -743,7 +758,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_embeddings",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-m3",
+                                       "model_id":  "intfloat/multilingual-e5-large",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  384,
                                                             "isl_token_min":  96,
@@ -790,7 +806,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_search_rag",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  16000,
                                                             "isl_token_min":  4000,
@@ -852,6 +869,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1200,
                                                             "isl_token_min":  300,
@@ -900,6 +918,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
@@ -960,7 +979,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  10000,
                                                             "isl_token_min":  2500,
@@ -1008,6 +1028,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1500,
                                                             "isl_token_min":  375,
@@ -1068,6 +1089,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "Qwen/Qwen2.5-Coder-32B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  2200,
                                                             "isl_token_min":  550,
@@ -1115,6 +1137,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  2600,
                                                             "isl_token_min":  650,
@@ -1174,7 +1197,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_enterprise_chat",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1600,
                                                             "isl_token_min":  400,
@@ -1222,6 +1246,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  3000,
                                                             "isl_token_min":  750,
@@ -1281,7 +1306,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_engine_canary",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-14B-Instruct",
+                                       "model_id":  "microsoft/phi-4",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  4000,
                                                             "isl_token_min":  1000,
@@ -1342,7 +1368,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_search_rag",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  24000,
                                                             "isl_token_min":  6000,
@@ -1403,6 +1430,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  8000,
                                                             "isl_token_min":  2000,
@@ -1464,6 +1492,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  850,
                                                             "isl_token_min":  212,
@@ -1511,6 +1540,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  320,
                                                             "isl_token_min":  80,
@@ -1564,13 +1594,14 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
 ```json
 {
     "submit_at_offset_minutes":  465,
-    "description":  "new 72B premium variant overlaps the 70B service for 20 minutes, then replaces it",
+    "description":  "new 80B-A3B premium variant overlaps the 70B service for 20 minutes, then replaces it",
     "jobs":  [
                  {
                      "user_id":  "tenant_chat_premium",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1200,
                                                             "isl_token_min":  300,
@@ -1632,6 +1663,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "meta-llama/Llama-3.3-70B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  2200,
                                                             "isl_token_min":  550,
@@ -1693,6 +1725,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "moonshotai/Kimi-K2-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1400,
                                                             "isl_token_min":  350,
@@ -1740,6 +1773,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "zai-org/GLM-4.5-Air",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1800,
                                                             "isl_token_min":  450,
@@ -1799,7 +1833,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_moe_eval",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen3-30B-A3B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
@@ -1847,7 +1882,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_long_context",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  32000,
                                                             "isl_token_min":  8000,
@@ -1908,7 +1944,8 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "user_id":  "tenant_reports",
                      "kind":  "batch",
                      "spec_json":  {
-                                       "model_id":  "Qwen/Qwen2.5-72B-Instruct",
+                                       "model_id":  "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  18000,
                                                             "isl_token_min":  4500,
@@ -1957,6 +1994,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  16000,
                                                             "isl_token_min":  4000,
@@ -2018,6 +2056,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  900,
                                                             "isl_token_min":  225,
@@ -2065,6 +2104,7 @@ Exact manifest counts: **23 online jobs**, **15 batch campaigns**, **1,912 expan
                      "kind":  "batch",
                      "spec_json":  {
                                        "model_id":  "deepseek-ai/DeepSeek-V3",
+                                       "precision":  "fp16",
                                        "job_features":  {
                                                             "isl_token_avg":  1000,
                                                             "isl_token_min":  250,
