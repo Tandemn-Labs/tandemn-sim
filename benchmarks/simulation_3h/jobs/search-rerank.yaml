@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-7-2
-# Benchmark window: T+7 through T+180. Declared pattern: Bursty.
-# Priority: STANDARD. SLO: p99 TTFT 160 ms; p99 TPOT 1 ms.
-# Trace: datasets/simulation_3h/traces/search_rerank_analysis.json
-# Measured: 0.009 mean RPS, 2.000 max RPS, 2.794 interarrival CV.
-# Mapping: Gamma arrivals; rankings fields use the same RAGPulse window.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-7-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-7-2
+  operation: base_service
+  start_at_offset_minutes: 7
+  stop_at_offset_minutes: 180
+spec:
   user_id: tenant_search_rerank
   optimization_goal: latency
   precision: fp16
@@ -27,28 +31,35 @@ job:
     max_concurrent_streaming: 10000
     target_p99_ttft_ms: 160
     target_p99_tpot_ms: 1
-
-schemaVersion: "2.0"
-randomSeed: 102
-
-benchmark:
-  model: BAAI/bge-reranker-v2-m3
-  endpoint:
-    path: /rerank
-    type: hf_tei_rankings
-    streaming: false
-    timeout: 120
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:BAAI/bge-reranker-v2-m3}
-  dataset:
-    type: synthetic
-    entries: 2000
-    sampling: random
-    rankings:
-      passages: {mean: 3.688, stddev: 2.902, min: 1, max: 6}
-      queryTokens: {mean: 8.031, stddev: 6.237, min: 1, max: 35}
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: BAAI/bge-reranker-v2-m3
+    endpoint:
+      path: /rerank
+      type: hf_tei_rankings
+      streaming: false
+      timeout: 120
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:BAAI/bge-reranker-v2-m3}
+    dataset:
+      type: synthetic
+      entries: 2000
+      sampling: random
+      rankings:
+        passages:
+          mean: 3.688
+          stddev: 2.902
+          min: 1
+          max: 6
+        queryTokens:
+          mean: 8.031
+          stddev: 6.237
+          min: 1
+          max: 35
+    phases:
     - name: profiling
       type: gamma
       duration: 10380

@@ -1,0 +1,12 @@
+schema_version: "metric-profile/v1"
+
+metrics:
+  - batch_jct_p50
+  - batch_jct_p95
+  - batch_jqt_p50
+  - batch_jqt_p95
+  - admission_rate
+  - cost_per_slo_token
+  - slo_attainment
+  - goodput
+  - invalid_plan_rate

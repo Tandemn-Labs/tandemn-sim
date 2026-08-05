@@ -181,32 +181,23 @@ def build_request_record(
 
 
 def load_batch_dataset_spec(path: Path) -> BatchDatasetSpec:
-    """Load and validate one batch dataset YAML."""
-    document = _mapping(
+    """Load batch generation settings from one canonical job YAML."""
+    job_document = _mapping(
         yaml.safe_load(path.read_text(encoding="utf-8")),
-        "batch dataset",
+        "batch job",
     )
+    if job_document.get("schema_version") != "benchmark-job/v1":
+        raise ValueError(f"Unsupported benchmark job schema: {path}")
+    job = _mapping(job_document.get("spec"), "spec")
+    document = _mapping(job_document.get("workload"), "workload")
     if document.get("schema_version") != "batch-dataset/v1":
         raise ValueError(f"Unsupported batch dataset schema: {path}")
 
     dataset = _mapping(document.get("dataset"), "dataset")
     partitioning = _mapping(dataset.get("partitioning"), "dataset.partitioning")
-    job_value = document.get("job")
-    if job_value is None:
-        io = _mapping(dataset.get("io"), "dataset.io")
-        input_tokens = _load_distribution(
-            io.get("input_tokens"),
-            "dataset.io.input_tokens",
-        )
-        output_tokens = _load_distribution(
-            io.get("output_tokens"),
-            "dataset.io.output_tokens",
-        )
-    else:
-        job = _mapping(job_value, "job")
-        features = _mapping(job.get("features"), "job.features")
-        input_tokens = _load_job_distribution(features, "isl")
-        output_tokens = _load_job_distribution(features, "osl")
+    features = _mapping(job.get("features"), "spec.features")
+    input_tokens = _load_job_distribution(features, "isl")
+    output_tokens = _load_job_distribution(features, "osl")
 
     shard_count = _positive_integer(
         partitioning.get("shard_count"),

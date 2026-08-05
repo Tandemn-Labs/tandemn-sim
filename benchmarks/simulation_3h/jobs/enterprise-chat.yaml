@@ -1,12 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-32-2
-# Benchmark window: T+32 through T+152. Declared pattern: Diurnal.
-# Priority: STANDARD. SLO: p99 TTFT 500 ms; p99 TPOT 42 ms.
-# Trace: datasets/simulation_3h/traces/enterprise_chat_analysis.json
-# Measured: 39.700 mean RPS, 75.000 max RPS.
-# Mapping: full-window Gamma traffic at the measured mean RPS.
-# Smoothness is calibrated from second-level variance after removing the
-# trace's 10-minute rate envelope.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-32-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-32-2
+  operation: base_service
+  start_at_offset_minutes: 32
+  stop_at_offset_minutes: 152
+spec:
   user_id: tenant_enterprise_chat
   optimization_goal: latency
   precision: fp16
@@ -29,31 +31,30 @@ job:
     max_concurrent_streaming: 1600
     target_p99_ttft_ms: 500
     target_p99_tpot_ms: 42
-
-schemaVersion: "2.0"
-randomSeed: 102
-
-benchmark:
-  model: microsoft/phi-4
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 180
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:microsoft/phi-4}
-  dataset:
-    type: synthetic
-    entries: 1000
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: microsoft/phi-4
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 180
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:microsoft/phi-4}
+    dataset:
+      type: synthetic
+      entries: 1000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 7200
-      rate: 39.700
+      rate: 39.7
       smoothness: 0.733
       concurrency: 1600
       gracePeriod: 180

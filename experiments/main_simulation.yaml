@@ -1,0 +1,16 @@
+schema_version: "experiment/v1"
+
+experiment:
+  id: main_simulation
+  benchmarks: [simulation_3h, simulation_12h, simulation_24h]
+  methods:
+    - fcfs_first_fit
+    - best_fixed
+    - dynamo_aic
+    - qlm
+    - qoserve
+    - helix
+    - rolling_cp_sat
+    - contextual_bo
+    - koi
+  metrics: main_simulation

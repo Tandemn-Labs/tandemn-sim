@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-145-1
-# Benchmark window: T+145 through T+180. Declared pattern: Diurnal.
-# Priority: HIGH. SLO: p99 TTFT 1000 ms; p99 TPOT 45 ms.
-# Trace: datasets/simulation_3h/traces/legal_finance_review_analysis.json
-# Measured: 0.015 mean RPS, 2.000 max RPS, 0.836 interarrival CV.
-# Mapping: full-window Gamma ramp; smoothness = 1 / interarrival CV^2.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-145-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-145-1
+  operation: base_service
+  start_at_offset_minutes: 145
+  stop_at_offset_minutes: 180
+spec:
   user_id: tenant_legal_finance
   optimization_goal: latency
   precision: fp16
@@ -27,31 +31,30 @@ job:
     max_concurrent_streaming: 240
     target_p99_ttft_ms: 1000
     target_p99_tpot_ms: 45
-
-schemaVersion: "2.0"
-randomSeed: 101
-
-benchmark:
-  model: meta-llama/Llama-3.3-70B-Instruct
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 300
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:meta-llama/Llama-3.3-70B-Instruct}
-  dataset:
-    type: synthetic
-    entries: 256
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: meta-llama/Llama-3.3-70B-Instruct
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 300
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:meta-llama/Llama-3.3-70B-Instruct}
+    dataset:
+      type: synthetic
+      entries: 256
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 2100
-      rate: 0.030
+      rate: 0.03
       smoothness: 1.431
       concurrency: 240
       rateRamp: 2100

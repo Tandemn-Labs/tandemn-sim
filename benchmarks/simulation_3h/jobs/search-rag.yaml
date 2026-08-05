@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-7-1
-# Benchmark window: T+7 through T+180. Declared pattern: Poisson.
-# Priority: STANDARD. SLO: p99 TTFT 1500 ms; p99 TPOT 55 ms.
-# Trace: datasets/simulation_3h/traces/search_rag_analysis.json
-# Measured: 0.020 mean RPS, 2.000 max RPS, 1.064 interarrival CV.
-# Mapping: Poisson arrivals at the measured mean request rate.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-7-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-7-1
+  operation: base_service
+  start_at_offset_minutes: 7
+  stop_at_offset_minutes: 180
+spec:
   user_id: tenant_search_rag
   optimization_goal: latency
   precision: fp16
@@ -27,30 +31,29 @@ job:
     max_concurrent_streaming: 2600
     target_p99_ttft_ms: 1500
     target_p99_tpot_ms: 55
-
-schemaVersion: "2.0"
-randomSeed: 101
-
-benchmark:
-  model: microsoft/phi-4
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 300
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:microsoft/phi-4}
-  dataset:
-    type: synthetic
-    entries: 512
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: microsoft/phi-4
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 300
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:microsoft/phi-4}
+    dataset:
+      type: synthetic
+      entries: 512
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: poisson
       duration: 10380
-      rate: 0.020
+      rate: 0.02
       concurrency: 2600
       gracePeriod: 300

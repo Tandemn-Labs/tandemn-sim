@@ -1,0 +1,33 @@
+schema_version: "benchmark-catalog/v1"
+
+benchmarks:
+  simulation_3h:
+    manifest: simulation_3h/benchmark.yaml
+    environment: simulation
+    duration_hours: 3
+    status: executable
+  simulation_12h:
+    manifest: simulation_12h/benchmark.yaml
+    environment: simulation
+    duration_hours: 12
+    status: definition_only
+  simulation_24h:
+    manifest: simulation_24h/benchmark.yaml
+    environment: simulation
+    duration_hours: 24
+    status: definition_only
+  real_life_3h:
+    manifest: real_life_3h/benchmark.yaml
+    environment: real_hardware
+    duration_hours: 3
+    status: definition_only
+  real_life_12h:
+    manifest: real_life_12h/benchmark.yaml
+    environment: real_hardware
+    duration_hours: 12
+    status: definition_only
+  real_life_24h:
+    manifest: real_life_24h/benchmark.yaml
+    environment: real_hardware
+    duration_hours: 24
+    status: definition_only

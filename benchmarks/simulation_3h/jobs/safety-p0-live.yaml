@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-100-2
-# Benchmark window: T+100 through T+150. Declared pattern: Bursty.
-# Priority: HIGH. SLO: p99 TTFT 350 ms; p99 TPOT 40 ms.
-# Trace: datasets/simulation_3h/traces/safety_p0_live_analysis.json
-# Measured: 0.883 mean RPS, 20.000 max RPS, 20.359 interarrival CV.
-# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-100-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-100-2
+  operation: base_service
+  start_at_offset_minutes: 100
+  stop_at_offset_minutes: 150
+spec:
   user_id: tenant_safety_reasoner
   optimization_goal: latency
   precision: fp16
@@ -27,27 +31,26 @@ job:
     max_concurrent_streaming: 2500
     target_p99_ttft_ms: 350
     target_p99_tpot_ms: 40
-
-schemaVersion: "2.0"
-randomSeed: 102
-
-benchmark:
-  model: microsoft/phi-4
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 180
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:microsoft/phi-4}
-  dataset:
-    type: synthetic
-    entries: 1500
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: microsoft/phi-4
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 180
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:microsoft/phi-4}
+    dataset:
+      type: synthetic
+      entries: 1500
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 3000

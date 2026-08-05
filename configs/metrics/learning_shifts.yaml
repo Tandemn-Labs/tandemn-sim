@@ -1,0 +1,11 @@
+schema_version: "metric-profile/v1"
+
+metrics:
+  - deployments_to_target
+  - engine_regression_recovery
+  - new_model_recovery
+  - workload_shift_recovery
+  - post_shift_slo
+  - calibration_coverage
+  - calibration_width
+  - cost_to_target

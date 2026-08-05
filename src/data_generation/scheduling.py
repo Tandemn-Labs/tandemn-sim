@@ -77,8 +77,18 @@ class HardwarePool:
     devices_per_node: int
     memory_gb: int
     aic_system: str | None
+    markets: Mapping[str, int]
     regions: Mapping[str, int]
     unsupported_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RegionalHardwarePool:
+    """One hardware pool constrained to a specific region and market quota."""
+
+    pool: HardwarePool
+    region: str
+    available_devices: int
 
 
 class ResourceInventory:
@@ -87,37 +97,120 @@ class ResourceInventory:
     def __init__(self, pools: tuple[HardwarePool, ...]) -> None:
         self.pools = pools
         self._available = {pool.pool_id: pool.total_devices for pool in pools}
-        self._allocations: dict[str, tuple[str, int]] = {}
+        self._region_available = {
+            (pool.pool_id, region): devices
+            for pool in pools
+            for region, devices in pool.regions.items()
+        }
+        self._market_available = {
+            (pool.pool_id, market): devices
+            for pool in pools
+            for market, devices in pool.markets.items()
+        }
+        self._allocations: dict[str, tuple[str, str, str, int]] = {}
 
     def available(self, pool_id: str) -> int:
-        """Return currently unallocated devices in one pool."""
+        """Return aggregate currently unallocated devices in one pool."""
         return self._available[pool_id]
 
-    def reserve(self, job_id: str, pool_id: str, devices: int) -> None:
-        """Atomically reserve devices for one accepted job."""
+    def available_in_region(self, pool_id: str, region: str) -> int:
+        """Return currently unallocated devices in one regional sub-pool."""
+        return self._region_available[(pool_id, region)]
+
+    def available_in_market(self, pool_id: str, market: str) -> int:
+        """Return currently unallocated devices under one market quota."""
+        return self._market_available[(pool_id, market)]
+
+    def regional_pools(self) -> tuple[RegionalHardwarePool, ...]:
+        """Return every nonempty hardware-region candidate and its usable quota."""
+        candidates: list[RegionalHardwarePool] = []
+        for pool in self.pools:
+            max_market_devices = max(
+                self.available_in_market(pool.pool_id, market)
+                for market in pool.markets
+            )
+            for region, total_devices in pool.regions.items():
+                if total_devices == 0:
+                    continue
+                candidates.append(
+                    RegionalHardwarePool(
+                        pool=pool,
+                        region=region,
+                        available_devices=min(
+                            self.available(pool.pool_id),
+                            self.available_in_region(pool.pool_id, region),
+                            max_market_devices,
+                        ),
+                    )
+                )
+        return tuple(candidates)
+
+    def available_markets(self, pool_id: str, devices: int) -> tuple[str, ...]:
+        """Return markets whose remaining quota can hold one placement."""
+        pool = next(pool for pool in self.pools if pool.pool_id == pool_id)
+        return tuple(
+            market
+            for market in pool.markets
+            if self.available_in_market(pool_id, market) >= devices
+        )
+
+    def reserve(
+        self,
+        job_id: str,
+        pool_id: str,
+        region: str,
+        market: str,
+        devices: int,
+    ) -> None:
+        """Atomically reserve aggregate, regional, and market capacity."""
         if job_id in self._allocations:
             raise ValueError(f"Job already has an allocation: {job_id}")
         if devices <= 0:
             raise ValueError("Allocation devices must be positive")
-        available = self.available(pool_id)
-        if devices > available:
-            raise ValueError(f"Pool {pool_id} has {available} devices, not {devices}")
-        self._available[pool_id] = available - devices
-        self._allocations[job_id] = (pool_id, devices)
+        aggregate_available = self.available(pool_id)
+        region_available = self.available_in_region(pool_id, region)
+        market_available = self.available_in_market(pool_id, market)
+        if devices > aggregate_available:
+            raise ValueError(
+                f"Pool {pool_id} has {aggregate_available} devices, not {devices}"
+            )
+        if devices > region_available:
+            raise ValueError(
+                f"Region {region} has {region_available} {pool_id} devices, "
+                f"not {devices}"
+            )
+        if devices > market_available:
+            raise ValueError(
+                f"Market {market} has {market_available} {pool_id} devices, "
+                f"not {devices}"
+            )
+        self._available[pool_id] = aggregate_available - devices
+        self._region_available[(pool_id, region)] = region_available - devices
+        self._market_available[(pool_id, market)] = market_available - devices
+        self._allocations[job_id] = (pool_id, region, market, devices)
 
     def release(self, job_id: str) -> None:
         """Return a completed job's allocation to its pool."""
         allocation = self._allocations.pop(job_id, None)
         if allocation is None:
             return
-        pool_id, devices = allocation
+        pool_id, region, market, devices = allocation
         self._available[pool_id] += devices
+        self._region_available[(pool_id, region)] += devices
+        self._market_available[(pool_id, market)] += devices
 
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serializable view of current cluster capacity."""
         allocations = {
-            job_id: {"pool_id": pool_id, "devices": devices}
-            for job_id, (pool_id, devices) in sorted(self._allocations.items())
+            job_id: {
+                "pool_id": pool_id,
+                "region": region,
+                "market": market,
+                "devices": devices,
+            }
+            for job_id, (pool_id, region, market, devices) in sorted(
+                self._allocations.items()
+            )
         }
         pools = [
             {
@@ -128,6 +221,26 @@ class ResourceInventory:
                 "allocated_devices": (
                     pool.total_devices - self.available(pool.pool_id)
                 ),
+                "markets": {
+                    market: {
+                        "total_devices": total_devices,
+                        "available_devices": self.available_in_market(
+                            pool.pool_id,
+                            market,
+                        ),
+                    }
+                    for market, total_devices in pool.markets.items()
+                },
+                "regions": {
+                    region: {
+                        "total_devices": total_devices,
+                        "available_devices": self.available_in_region(
+                            pool.pool_id,
+                            region,
+                        ),
+                    }
+                    for region, total_devices in pool.regions.items()
+                },
             }
             for pool in self.pools
         ]
@@ -140,6 +253,7 @@ class CandidateEvaluation:
 
     pool_id: str
     accelerator: str
+    region: str
     status: CandidateStatus
     available_devices: int
     requested_devices: int | None = None
@@ -156,6 +270,7 @@ class CandidateEvaluation:
         return {
             "pool_id": self.pool_id,
             "accelerator": self.accelerator,
+            "region": self.region,
             "status": self.status.value,
             "available_devices": self.available_devices,
             "requested_devices": self.requested_devices,
@@ -182,6 +297,8 @@ class SchedulingDecision:
     resource_snapshot_after: Mapping[str, object]
     pool_id: str | None = None
     accelerator: str | None = None
+    region: str | None = None
+    market: str | None = None
     devices: int | None = None
     latency_ms: float | None = None
     ttft_ms: float | None = None
@@ -200,6 +317,8 @@ class SchedulingDecision:
             "optimization_goal": self.optimization_goal.value,
             "pool_id": self.pool_id,
             "accelerator": self.accelerator,
+            "region": self.region,
+            "market": self.market,
             "devices": self.devices,
             "latency_ms": self.latency_ms,
             "ttft_ms": self.ttft_ms,
@@ -268,6 +387,19 @@ def load_resource_inventory(path: Path) -> ResourceInventory:
         }
         if sum(regions.values()) != total_devices:
             raise ValueError(f"Regions do not total {total_devices} for {pool_id}")
+        markets_value = _mapping(
+            definition.get("markets"),
+            f"resources[{index}].markets",
+        )
+        markets = {
+            _text(market, f"resources[{index}].markets key"): _nonnegative_int(
+                count,
+                f"resources[{index}].markets.{market}",
+            )
+            for market, count in markets_value.items()
+        }
+        if sum(markets.values()) != total_devices:
+            raise ValueError(f"Markets do not total {total_devices} for {pool_id}")
         aic_system_value = definition.get("aic_system")
         aic_system = (
             None
@@ -297,6 +429,7 @@ def load_resource_inventory(path: Path) -> ResourceInventory:
                     f"resources[{index}].memory_gb",
                 ),
                 aic_system=aic_system,
+                markets=markets,
                 regions=regions,
                 unsupported_reason=unsupported_reason,
             )

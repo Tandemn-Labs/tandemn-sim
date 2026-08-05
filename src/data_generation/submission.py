@@ -63,7 +63,7 @@ class SubmissionError(RuntimeError):
 
 @dataclass(frozen=True)
 class SubmissionRequest:
-    """User-owned Tandemn job inputs loaded from the benchmark overview."""
+    """User-owned Tandemn job inputs loaded from a canonical job spec."""
 
     user_id: str
     kind: str

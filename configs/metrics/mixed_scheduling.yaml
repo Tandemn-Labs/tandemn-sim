@@ -1,0 +1,11 @@
+schema_version: "metric-profile/v1"
+
+metrics:
+  - ttft_slo_attainment
+  - tpot_slo_attainment
+  - admission_rate
+  - batch_jqt_p95
+  - batch_jct_p95
+  - deadline_attainment
+  - worst_tenant_slo_attainment
+  - cost
