@@ -75,20 +75,24 @@ class SubmissionResult:
     """Runtime identity and routing returned by Tandemn."""
 
     tandemn_job_id: str
-    endpoint_url: str
+    endpoint_url: str | None = None
 
     def __post_init__(self) -> None:
         """Enforce the scheduler response contract at the boundary."""
         if not self.tandemn_job_id:
             raise SubmissionError("Tandemn submission returned no job_id")
-        validate_endpoint_url(self.endpoint_url)
+        if self.endpoint_url is not None:
+            validate_endpoint_url(self.endpoint_url)
 
 
 class JobSubmitter(Protocol):
     """Transport boundary between the benchmark controller and Tandemn."""
 
     def submit(self, request: SubmissionRequest) -> SubmissionResult:
-        """Submit one job and return its runtime identity and endpoint."""
+        """Submit one job and return its Tandemn runtime identity."""
+
+    def poll_endpoint(self, tandemn_job_id: str) -> str | None:
+        """Return a deployed endpoint, or None while deployment is pending."""
 
 
 class TandemnStoreSubmitter:
@@ -122,16 +126,47 @@ class TandemnStoreSubmitter:
         except (OSError, ValueError) as error:
             raise SubmissionError(str(error)) from error
 
-        endpoint_url = response_value(response, "endpoint_url")
+        endpoint_url = response_value(response, "endpoint_url", required=False)
         tandemn_job_id = response_value(response, "job_id", required=False)
         if tandemn_job_id is None:
             tandemn_job_id = str(job.job_id)
-        if endpoint_url is None:
-            raise SubmissionError("Tandemn submission returned no endpoint_url")
         return SubmissionResult(
             tandemn_job_id=tandemn_job_id,
             endpoint_url=endpoint_url,
         )
+
+    def poll_endpoint(self, tandemn_job_id: str) -> str | None:
+        """Read a job's endpoint from Tandemn Store while it deploys.
+
+        The store lookup is intentionally kept at this boundary because the
+        final Tandemn response shape is still being defined. The adapter
+        accepts the current/future common JobStore method names and response
+        shapes without exposing them to the benchmark controller.
+        """
+        try:
+            clients = import_module("tandemn_system_data.clients")
+        except ImportError as error:
+            raise SubmissionError(
+                "tandemn-system-data is required to poll benchmark jobs"
+            ) from error
+
+        store = clients.JobStore(clients.PostgresClient())
+        lookup = getattr(store, "get_job", None) or getattr(store, "get", None)
+        if lookup is None:
+            raise SubmissionError(
+                "Tandemn JobStore does not yet expose a job lookup method"
+            )
+        try:
+            response = lookup(tandemn_job_id)
+        except (OSError, ValueError) as error:
+            raise SubmissionError(str(error)) from error
+
+        endpoint_url = response_value(response, "endpoint_url", required=False)
+        if endpoint_url is None:
+            endpoint_url = response_value(response, "url", required=False)
+        if endpoint_url is not None:
+            validate_endpoint_url(endpoint_url)
+        return endpoint_url
 
 
 def response_value(

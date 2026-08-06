@@ -288,6 +288,46 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(saved_job["tandemn_job_id"], "tandemn-test-job")
             self.assertEqual(saved_job["endpoint_url"], submitter.endpoint_url)
 
+    def test_submission_waits_for_endpoint_before_starting_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=0.01,
+                    process_seconds=0.02,
+                    with_submission=True,
+                )
+            )
+            submitter = FakeSubmitter(defer_endpoint=True)
+
+            summary = run_benchmark(
+                benchmark,
+                root / "artifacts",
+                run_id="deferred-endpoint-test",
+                job_submitter=submitter,
+            )
+
+            state_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "unmanaged"
+                / "deferred-endpoint-test"
+                / "benchmark_state.json"
+            )
+            saved_job = json.loads(state_path.read_text())["jobs"][0]
+
+            self.assertEqual(summary.states["test-job"], JobState.COMPLETED)
+            self.assertEqual(len(submitter.requests), 1)
+            self.assertGreaterEqual(len(submitter.polls), 2)
+            self.assertEqual(saved_job["tandemn_job_id"], "tandemn-test-job")
+            self.assertEqual(saved_job["endpoint_url"], submitter.endpoint_url)
+            self.assertEqual(saved_job["launch_count"], 1)
+
     def test_runtime_aiperf_config_owns_the_returned_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -587,15 +627,23 @@ class FakeSubmitter:
 
     endpoint_url = "https://runtime.example/v1/chat/completions"
 
-    def __init__(self) -> None:
+    def __init__(self, *, defer_endpoint: bool = False) -> None:
         self.requests: list[SubmissionRequest] = []
+        self.defer_endpoint = defer_endpoint
+        self.polls: list[str] = []
 
     def submit(self, request: SubmissionRequest) -> SubmissionResult:
         self.requests.append(request)
         return SubmissionResult(
             tandemn_job_id="tandemn-test-job",
-            endpoint_url=self.endpoint_url,
+            endpoint_url=None if self.defer_endpoint else self.endpoint_url,
         )
+
+    def poll_endpoint(self, tandemn_job_id: str) -> str | None:
+        self.polls.append(tandemn_job_id)
+        if len(self.polls) < 2:
+            return None
+        return self.endpoint_url
 
 
 class FakeSchedulingMethod:

@@ -31,6 +31,8 @@ from data_generation.submission import (
     TandemnStoreSubmitter,
 )
 
+TANDEMN_DEPLOYMENT_POLL_INTERVAL_SECONDS = 5.0
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BENCHMARK = "simulation_3h"
 DEFAULT_ARTIFACT_ROOT = ROOT / "artifacts"
@@ -278,6 +280,13 @@ def run_benchmark(
             elapsed_minutes = elapsed_seconds / 60
             new_plan_job_ids: set[str] = set()
 
+            poll_pending_tandemn_jobs(
+                jobs.values(),
+                active_submitter,
+                scheduling_method,
+                run_directory,
+            )
+
             for item in jobs.values():
                 previous_state = item.state
                 previous_launch_count = item.launch_count
@@ -344,7 +353,13 @@ def run_benchmark(
             )
 
             if not all(item.state in TERMINAL_STATES for item in jobs.values()):
-                time.sleep(benchmark.poll_interval_seconds)
+                sleep_interval = benchmark.poll_interval_seconds
+                if has_pending_tandemn_jobs(jobs.values()):
+                    sleep_interval = min(
+                        sleep_interval,
+                        TANDEMN_DEPLOYMENT_POLL_INTERVAL_SECONDS,
+                    )
+                time.sleep(sleep_interval)
     except KeyboardInterrupt:
         elapsed_seconds = elapsed_before_start + max(
             0.0,
@@ -949,6 +964,51 @@ def reconcile_job(
     release_terminal_allocation(item, scheduling_method, run_directory)
 
 
+def has_pending_tandemn_jobs(items: Iterable[RunningJob]) -> bool:
+    """Return whether any submitted job is waiting for a runtime endpoint."""
+    return any(
+        item.state == JobState.PENDING
+        and item.tandemn_job_id is not None
+        and item.endpoint_url is None
+        for item in items
+    )
+
+
+def poll_pending_tandemn_jobs(
+    items: Iterable[RunningJob],
+    job_submitter: JobSubmitter | None,
+    scheduling_method: SchedulingMethod | None,
+    run_directory: Path,
+) -> None:
+    """Resolve all submitted jobs that are waiting for deployed endpoints."""
+    if job_submitter is None:
+        return
+    for item in items:
+        if not (
+            item.state == JobState.PENDING
+            and item.tandemn_job_id is not None
+            and item.endpoint_url is None
+        ):
+            continue
+        try:
+            endpoint_url = job_submitter.poll_endpoint(item.tandemn_job_id)
+        except SubmissionError as error:
+            item.state = JobState.FAILED
+            release_terminal_allocation(item, scheduling_method, run_directory)
+            LOGGER.error(
+                "[failed] %s endpoint polling error: %s", item.job.job_id, error
+            )
+            continue
+        if endpoint_url is not None:
+            item.endpoint_url = endpoint_url
+            LOGGER.info(
+                "[deployed] %s tandemn_job_id=%s endpoint=%s",
+                item.job.job_id,
+                item.tandemn_job_id,
+                endpoint_url,
+            )
+
+
 def start_job(
     item: RunningJob,
     run_directory: Path,
@@ -996,12 +1056,19 @@ def start_job(
                 return
         runtime_config = item.job.config_path
         if item.job.submission is not None:
-            if item.tandemn_job_id is None or item.endpoint_url is None:
+            if item.tandemn_job_id is None:
                 if job_submitter is None:
                     raise SubmissionError("no Tandemn job submitter is configured")
                 submission_result = job_submitter.submit(item.job.submission)
                 item.tandemn_job_id = submission_result.tandemn_job_id
                 item.endpoint_url = submission_result.endpoint_url
+            if item.endpoint_url is None:
+                LOGGER.info(
+                    "[deploying] %s tandemn_job_id=%s",
+                    item.job.job_id,
+                    item.tandemn_job_id,
+                )
+                return
             runtime_config = materialize_runtime_config(
                 item.job,
                 job_directory,
@@ -1629,7 +1696,7 @@ def restore_benchmark_state(
             definition.get("endpoint_url"),
             f"state.jobs.{job_id}.endpoint_url",
         )
-        if (item.tandemn_job_id is None) != (item.endpoint_url is None):
+        if item.tandemn_job_id is None and item.endpoint_url is not None:
             raise ValueError(
                 f"State submission is incomplete for benchmark job {job_id}"
             )
