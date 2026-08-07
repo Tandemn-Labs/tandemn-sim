@@ -38,6 +38,7 @@ PROFILE_ALIASES = {
     "A100-SXM-80GB": "A100-80GB",
     "A100-PCIe-40GB": "A100-40GB",
     "A10G-24GB": "A10G",
+    "L40S": "L40S",
     "L40S-48GB": "L40S",
     # "MI300X-192GB": "MI300X",  # Enable after the MI300X profile is added.
 }
