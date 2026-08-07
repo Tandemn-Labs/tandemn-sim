@@ -18,7 +18,7 @@ Serving mode: aggregate serving with LMCache, no prefill/decode disaggregation
 
 Regions: `us-east`, `eu-west`, `apac`
 
-Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`, `TPU-v5e`
+Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`
 
 Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `intfloat/multilingual-e5-large`, `BAAI/bge-reranker-v2-m3`
 
@@ -26,33 +26,31 @@ Model precision: `fp16`
 
 ## Frozen Cluster Resources
 
-Maximum provisioned capacity: **184 GPUs + 16 TPU chips = 200 typed accelerator devices**. On-demand entries are hard quotas, not guaranteed pre-provisioned devices.
+Maximum provisioned capacity: **200 GPUs**. On-demand entries are hard quotas, not guaranteed pre-provisioned devices.
 
 | Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
 |---|---:|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
+| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 5 | 32 | 8 | 40 |
 | `A100-SXM-80GB` | 8 GPUs, NVLink | 4 | 24 | 8 | 32 |
 | `A100-PCIe-40GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
 | `A10G-24GB` | 8 GPUs, PCIe | 6 | 32 | 16 | 48 |
 | `L40S-48GB` | 8 GPUs, PCIe | 5 | 32 | 8 | 40 |
-| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 2 | 8 | 8 | 16 |
-| `TPU-v5e` | 8-chip slice, ICI | 2 | 8 | 8 | 16 |
+| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 3 | 8 | 16 | 24 |
 | **Total** |  | **25** | **136** | **64** | **200** |
 
 | Accelerator | `us-east` | `eu-west` | `apac` | Total |
 |---|---:|---:|---:|---:|
-| H100 | 16 | 8 | 8 | 32 |
+| H100 | 16 | 8 | 16 | 40 |
 | A100-SXM | 16 | 8 | 8 | 32 |
 | A100-PCIe | 8 | 8 | 0 | 16 |
 | A10G | 24 | 16 | 8 | 48 |
 | L40S | 16 | 16 | 8 | 40 |
-| MI300X | 8 | 8 | 0 | 16 |
-| TPU-v5e | 8 | 0 | 8 | 16 |
+| MI300X | 16 | 8 | 0 | 24 |
 | **Region total** | **96** | **64** | **40** | **200** |
 
-Network caps: 400 Gbps RDMA between H100/A100-SXM/MI300X nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes; TPU ICI inside each slice. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
+Network caps: 400 Gbps RDMA between H100/A100-SXM/MI300X nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
 
-Inactive in this manifest: TPU-v5p, Inferentia2, and Trainium2. They require separate backend/compatibility experiments.
+Inactive in this manifest: Inferentia2 and Trainium2. They require separate backend/compatibility experiments.
 
 
 ## Simulation Independence Gate

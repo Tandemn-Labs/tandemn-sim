@@ -55,5 +55,5 @@ files = ["src"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["aiconfigurator.*", "aiperf.*"]
+module = ["aiconfigurator.*", "aiperf.*", "tandemn_system_data.*"]
 ignore_missing_imports = true

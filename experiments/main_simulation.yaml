@@ -10,7 +10,6 @@ experiment:
     - qlm
     - qoserve
     - helix
-    - rolling_cp_sat
     - contextual_bo
     - koi
   metrics: main_simulation

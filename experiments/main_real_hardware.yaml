@@ -8,6 +8,5 @@ experiment:
     - best_fixed
     - dynamo_aic
     - qlm
-    - rolling_cp_sat
     - koi
   metrics: main_real_hardware

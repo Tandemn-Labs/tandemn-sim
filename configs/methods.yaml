@@ -7,6 +7,11 @@ methods:
   best_fixed:
     display_name: Best fixed configuration
     status: planned
+  vram:
+    display_name: Maximum VRAM best-fit
+    status: implemented
+    settings:
+      default_optimization_goal: throughput
   dynamo_aic:
     display_name: Dynamo Planner + AIConfigurator
     status: implemented
@@ -28,9 +33,6 @@ methods:
     status: planned
   helix:
     display_name: Helix + frozen admission/queue/batch wrapper
-    status: planned
-  rolling_cp_sat:
-    display_name: Rolling CP-SAT
     status: planned
   contextual_bo:
     display_name: Contextual BO/bandit
