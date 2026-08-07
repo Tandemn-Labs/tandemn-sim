@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import sys
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from models import CreatedPlan, PlannerResult
+
+
+@dataclass(frozen=True)
+class PlannerContext:
+    """Dependencies supplied to any benchmark planner by the simulator CLI."""
+
+    user_id: str
+    postgres: object
+    logical_clock: object
+    koi_root: Path | None
+    koi_args: list[str]
 
 
 class PlannerDriver(Protocol):
@@ -108,6 +120,31 @@ class KoiPlannerDriver:
             degraded=context.error is not None,
             error=None if context.error is None else repr(context.error),
         )
+
+
+def build_planner(name: str, context: PlannerContext) -> PlannerDriver:
+    """Build one registered benchmark planner from common simulator context."""
+    try:
+        return PLANNER_BUILDERS[name](context)
+    except KeyError as error:
+        raise ValueError(f"unknown planner {name!r}: {', '.join(PLANNER_BUILDERS)}") from error
+
+
+def _build_koi(context: PlannerContext) -> KoiPlannerDriver:
+    """Build the real Koi adapter from CLI-provided Koi settings."""
+    if context.koi_root is None:
+        raise ValueError("planner 'koi' requires --koi-root")
+    return KoiPlannerDriver.build(
+        context.user_id,
+        context.logical_clock,
+        context.koi_root,
+        context.koi_args,
+    )
+
+
+PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
+    "koi": _build_koi,
+}
 
 
 class SimulationPlanExecutor:
