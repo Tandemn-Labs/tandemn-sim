@@ -1,5 +1,6 @@
 """Run one benchmark and orchestrate all jobs in its manifest."""
 
+import copy
 import json
 import logging
 import os
@@ -111,6 +112,7 @@ class Benchmark:
 
     benchmark_id: str
     poll_interval_seconds: float
+    reoptimization_tick_minutes: int
     shutdown_grace_seconds: float
     jobs: tuple[Job, ...]
 
@@ -301,6 +303,7 @@ def run_benchmark(
                     discard_request_data,
                     active_submitter,
                     scheduling_method,
+                    latest_cluster_plan(plan_ticks),
                 )
                 if not discard_request_data:
                     sync_job_records(item, run_directory)
@@ -311,7 +314,14 @@ def run_benchmark(
                     previous_launch_count,
                     elapsed_seconds,
                 )
-                if previous_decision is None and item.scheduling_decision is not None:
+                if (
+                    item.scheduling_decision is not None
+                    and item.scheduling_decision.status == DecisionStatus.ACCEPTED
+                    and (
+                        previous_decision is None
+                        or previous_decision.status == DecisionStatus.REJECTED
+                    )
+                ):
                     new_plan_job_ids.add(item.job.job_id)
 
             if scheduling_method is not None:
@@ -517,10 +527,7 @@ def run_placement_only(
                 if scheduled_minute == release_minute
             ]
             releases = [release for release in releases if release[0] != release_minute]
-            release_placement_jobs(
-                released_job_ids,
-                scheduling_method,
-            )
+            release_placement_jobs(released_job_ids, scheduling_method)
             if release_minute < start_minute:
                 actions = placement_plan_actions(
                     ordered_jobs,
@@ -543,7 +550,10 @@ def run_placement_only(
         for job in ordered_jobs:
             if job.start_minute != start_minute:
                 continue
-            decision = scheduling_method.schedule(scheduler_job(job))
+            decision = scheduling_method.schedule(
+                scheduler_job(job),
+                latest_cluster_plan(plan_ticks),
+            )
             decisions[job.job_id] = decision
             new_job_ids.add(job.job_id)
             if decision.status == DecisionStatus.ACCEPTED:
@@ -572,10 +582,7 @@ def run_placement_only(
             for scheduled_minute, job_id in releases
             if scheduled_minute == release_minute
         ]
-        release_placement_jobs(
-            released_job_ids,
-            scheduling_method,
-        )
+        release_placement_jobs(released_job_ids, scheduling_method)
         actions = placement_plan_actions(
             ordered_jobs,
             decisions,
@@ -667,7 +674,7 @@ def log_tick_plan(tick: Mapping[str, object]) -> None:
 
 def build_plan_action(
     job: Job,
-    decision: SchedulingDecision,
+    decision: SchedulingDecision | None,
     action_type: PlanActionType | None = None,
 ) -> dict[str, object]:
     """Convert one scheduler decision into the shared plan action schema."""
@@ -675,11 +682,16 @@ def build_plan_action(
         raise ValueError(f"Job {job.job_id} has no scheduler-visible submission")
     features_value = job.submission.spec_json.get("job_features")
     features = features_value if isinstance(features_value, Mapping) else {}
-    resolved_action_type = action_type or (
-        PlanActionType.PLACE
-        if decision.status == DecisionStatus.ACCEPTED
-        else PlanActionType.DEFER
-    )
+    if action_type is None:
+        if decision is None:
+            raise ValueError("decision is required when action_type is omitted")
+        resolved_action_type = (
+            PlanActionType.PLACE
+            if decision.status == DecisionStatus.ACCEPTED
+            else PlanActionType.DEFER
+        )
+    else:
+        resolved_action_type = action_type
     action: dict[str, object] = {
         "job_id": job.job_id,
         "type": resolved_action_type.value,
@@ -687,12 +699,15 @@ def build_plan_action(
         "target_tps": plan_target_tps(job),
         "target_p99_ttft_ms": plan_number(features.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": plan_number(features.get("target_p99_tpot_ms")),
-        "mechanism_id": decision.method,
-        "budget_ref": "",
+        "mechanism_id": None,
+        "budget_ref": None,
         "rationale": plan_action_rationale(decision, resolved_action_type),
         "ladder": [],
     }
-    if resolved_action_type != PlanActionType.DEFER:
+    if decision is not None and resolved_action_type in {
+        PlanActionType.PLACE,
+        PlanActionType.KEEP,
+    }:
         action["ladder"] = [build_plan_ladder(job, decision)]
     return action
 
@@ -709,18 +724,26 @@ def build_plan_ladder(
     gpu_count = plan_integer(configuration.get("num_total_gpus"))
     if gpu_count is None and decision.devices is not None:
         gpu_count = max(1, decision.devices // replicas)
-    accelerator = decision.accelerator or ""
-    pool_id = decision.pool_id or ""
-    region = decision.region or ""
-    market = decision.market or ""
+    accelerator = decision.accelerator
+    pool_id = decision.pool_id
+    region = decision.region
+    market = decision.market
+    rank_id = None
+    if pool_id is not None and region is not None:
+        rank_id = f"{pool_id}:{region}"
+    environment = configuration.get("environment")
+    if not isinstance(environment, list):
+        environment = [market, region, pool_id, accelerator]
+    elif environment:
+        rank_id = "|".join(str(part) for part in environment)
     return {
         "role": "aggregate",
-        "rank_id": f"{pool_id}:{region}",
-        "env": [market, region, pool_id, accelerator],
+        "rank_id": rank_id,
+        "env": environment,
         "config": {
-            "model_id": job.submission.spec_json.get("model_id", ""),
-            "engine_name": configuration.get("backend", ""),
-            "instance_type": "",
+            "model_id": job.submission.spec_json.get("model_id"),
+            "engine_name": configuration.get("backend"),
+            "instance_type": configuration.get("instance_type"),
             "gpu_type": accelerator,
             "gpu_count": gpu_count,
             "count": replicas,
@@ -730,7 +753,6 @@ def build_plan_ladder(
             "ep": (
                 plan_integer(configuration.get("moe_ep"))
                 or plan_integer(configuration.get("ep"))
-                or 1
             ),
             "max_num_seq": plan_integer(configuration.get("max_num_seq")),
             "max_num_batched_tokens": plan_integer(
@@ -740,22 +762,28 @@ def build_plan_ladder(
             "prefix_cache_enabled": configuration.get("prefix_cache_enabled"),
         },
         "n_replicas": replicas,
-        "mechanism_id": decision.method,
+        "mechanism_id": None,
     }
 
 
 def plan_target_tps(job: Job) -> float | None:
-    """Return required output-token throughput for throughput jobs."""
-    if job.optimization_goal != OptimizationGoal.THROUGHPUT or job.workload is None:
+    """Return required output-token throughput from the benchmark workload."""
+    if job.workload is None:
         return None
     return round(job.workload.request_rate * job.workload.output_tokens, 3)
 
 
 def plan_action_rationale(
-    decision: SchedulingDecision,
+    decision: SchedulingDecision | None,
     action_type: PlanActionType,
 ) -> str:
     """Summarize why one action was placed or deferred."""
+    if action_type == PlanActionType.PREEMPT:
+        return "Tandemn Store reports the job finished; release its placement."
+    if action_type == PlanActionType.KEEP and decision is None:
+        return "Tandemn Store reports the job is still running."
+    if decision is None:
+        return "No placement decision is available for this job."
     if action_type == PlanActionType.DEFER:
         category = (
             "unknown"
@@ -765,8 +793,6 @@ def plan_action_rationale(
         return f"Deferred ({category}): {decision.reason or 'no feasible placement'}"
     if action_type == PlanActionType.KEEP:
         return f"Keeping the existing {decision.accelerator} placement."
-    if action_type == PlanActionType.PREEMPT:
-        return f"The job finished; release its {decision.accelerator} placement."
     if decision.reason:
         return decision.reason
     return (
@@ -803,13 +829,25 @@ def update_plan_tick(
                 f"Cluster state at T+{release_minute:g}m after sequential "
                 "placement and lifecycle updates."
             ),
-            "actions": list(actions),
+            "actions": copy.deepcopy(actions),
         },
     }
     if plan_ticks and plan_ticks[-1]["offset_minutes"] == release_minute:
         plan_ticks[-1] = tick
     else:
         plan_ticks.append(tick)
+
+
+def latest_cluster_plan(
+    plan_ticks: list[dict[str, object]],
+) -> Mapping[str, object] | None:
+    """Return the most recent complete plan for scheduler context."""
+    if not plan_ticks:
+        return None
+    plan = plan_ticks[-1].get("plan")
+    if not isinstance(plan, Mapping):
+        raise ValueError("Stored plan tick is missing its plan object")
+    return plan
 
 
 def save_plan_artifact(
@@ -907,6 +945,7 @@ def reconcile_job(
     discard_request_data: bool = False,
     job_submitter: JobSubmitter | None = None,
     scheduling_method: SchedulingMethod | None = None,
+    past_plan: Mapping[str, object] | None = None,
 ) -> None:
     """Apply the current benchmark time to one job."""
     record_process_exit(item)
@@ -930,6 +969,7 @@ def reconcile_job(
                 discard_request_data=discard_request_data,
                 job_submitter=job_submitter,
                 scheduling_method=scheduling_method,
+                past_plan=past_plan,
             )
 
     if item.state == JobState.RUNNING:
@@ -1017,6 +1057,7 @@ def start_job(
     discard_request_data: bool = False,
     job_submitter: JobSubmitter | None = None,
     scheduling_method: SchedulingMethod | None = None,
+    past_plan: Mapping[str, object] | None = None,
 ) -> None:
     """Start one independent AIPerf generator or batch sender."""
     job_directory = ensure_job_artifacts(
@@ -1030,10 +1071,14 @@ def start_job(
         if (
             scheduling_method is not None
             and item.job.submission is not None
-            and item.scheduling_decision is None
+            and (
+                item.scheduling_decision is None
+                or item.scheduling_decision.status == DecisionStatus.REJECTED
+            )
         ):
             item.scheduling_decision = scheduling_method.schedule(
-                scheduler_job(item.job)
+                scheduler_job(item.job),
+                past_plan,
             )
             save_placement_artifacts(
                 run_directory,
@@ -1041,14 +1086,13 @@ def start_job(
                 scheduling_method,
             )
             if item.scheduling_decision.status == DecisionStatus.REJECTED:
-                item.state = JobState.REJECTED
                 category = (
                     "unknown"
                     if item.scheduling_decision.failure_category is None
                     else item.scheduling_decision.failure_category.value
                 )
                 LOGGER.warning(
-                    "[rejected] %s category=%s reason=%s",
+                    "[deferred] %s category=%s reason=%s",
                     item.job.job_id,
                     category,
                     item.scheduling_decision.reason,
@@ -2071,6 +2115,10 @@ def load_benchmark(path: Path) -> Benchmark:
         benchmark_document.get("poll_interval_seconds", 60),
         "benchmark.poll_interval_seconds",
     )
+    reoptimization_tick_minutes = positive_integer(
+        benchmark_document.get("reoptimization_tick_minutes", 1),
+        "benchmark.reoptimization_tick_minutes",
+    )
     shutdown_grace_seconds = positive_number(
         benchmark_document.get("shutdown_grace_seconds", 60),
         "benchmark.shutdown_grace_seconds",
@@ -2090,6 +2138,7 @@ def load_benchmark(path: Path) -> Benchmark:
     return Benchmark(
         benchmark_id=benchmark_id,
         poll_interval_seconds=poll_interval_seconds,
+        reoptimization_tick_minutes=reoptimization_tick_minutes,
         shutdown_grace_seconds=shutdown_grace_seconds,
         jobs=jobs,
     )
@@ -2326,6 +2375,7 @@ def load_job_submission(
             user_id=user_id,
             kind=kind.value,
             spec_json=spec_json,
+            job_id=job_id,
         ),
         optimization_goal,
     )
@@ -2435,6 +2485,14 @@ def whole_number(value: object, name: str) -> int:
     number = optional_integer(value, name)
     if number is None or number < 0:
         raise ValueError(f"{name} must be a nonnegative integer")
+    return number
+
+
+def positive_integer(value: object, name: str) -> int:
+    """Require a positive integer."""
+    number = optional_integer(value, name)
+    if number is None or number <= 0:
+        raise ValueError(f"{name} must be a positive integer")
     return number
 
 

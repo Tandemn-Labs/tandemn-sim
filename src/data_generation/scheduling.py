@@ -340,8 +340,12 @@ class SchedulingMethod(Protocol):
 
     method_name: str
 
-    def schedule(self, job: SchedulerJob) -> SchedulingDecision:
-        """Choose and reserve a placement for one arriving job."""
+    def schedule(
+        self,
+        job: SchedulerJob,
+        past_plan: Mapping[str, object] | None = None,
+    ) -> SchedulingDecision:
+        """Choose and reserve a placement using the latest cluster plan."""
 
     def release(self, job_id: str) -> None:
         """Release a terminal job's allocation."""

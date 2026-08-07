@@ -2,9 +2,9 @@
 
 Benchmark ID: `real_life_3h`
 
-Benchmark name: `KoiBench-Real-3h-160GPU-TPU-Smoke`
+Benchmark name: `KoiBench-Real-3h-192GPU-Smoke`
 
-Purpose: synthetic job replay on a real-cluster smoke run for the 160 GPU + TPU representative fleet. This checks that the spawner, vLLM/Dynamo stack, LMCache, TP/PP/DP/EP choices, quantization filters, and online load generator behave before longer runs.
+Purpose: synthetic job replay on a real-cluster smoke run for the 192 GPU representative fleet. This checks that the spawner, vLLM/Dynamo stack, LMCache, TP/PP/DP/EP choices, quantization filters, and online load generator behave before longer runs.
 
 Horizon: 180 minutes
 
@@ -16,7 +16,7 @@ Markets: `reserved`, `on_demand`
 
 Serving mode: aggregate serving with LMCache, no prefill/decode disaggregation
 
-Real fleet target: 160 GPUs + 32 TPU chips = 192 accelerator units
+Real fleet target: 192 GPUs
 
 
 
@@ -44,31 +44,29 @@ Exact manifest counts: **14 online jobs**, **6 batch campaigns**, **204 expanded
 
 ## Real-Run Capacity Gate
 
-The listed concurrency caps are frozen only after an isolated preflight on the exact engine/model build. Apply one global concurrency multiplier per run so normal offered load consumes 55-65% of measured qualified capacity, business peaks consume 80-90%, and the designated overload burst reaches 105-120%. Freeze that multiplier before comparing systems. TPU results require a validated vLLM-TPU path; otherwise report TPU separately.
+The listed concurrency caps are frozen only after an isolated preflight on the exact engine/model build. Apply one global concurrency multiplier per run so normal offered load consumes 55-65% of measured qualified capacity, business peaks consume 80-90%, and the designated overload burst reaches 105-120%. Freeze that multiplier before comparing systems.
 ## Frozen Real Cluster Resources
 
-Maximum provisioned capacity: **160 GPUs + 32 TPU chips = 192 typed accelerator devices**. Reserved capacity is pre-provisioned; on-demand capacity is a hard launch quota.
+Maximum provisioned capacity: **192 GPUs**. Reserved capacity is pre-provisioned; on-demand capacity is a hard launch quota.
 
 | Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
 |---|---:|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
-| `A100-SXM-80GB` | 8 GPUs, NVLink | 4 | 24 | 8 | 32 |
+| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 5 | 32 | 8 | 40 |
+| `A100-SXM-80GB` | 8 GPUs, NVLink | 5 | 32 | 8 | 40 |
 | `A100-PCIe-40GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
 | `A10G-24GB` | 8 GPUs, PCIe | 4 | 24 | 8 | 32 |
-| `L40S-48GB` | 8 GPUs, PCIe | 4 | 24 | 8 | 32 |
-| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 2 | 8 | 8 | 16 |
-| `TPU-v5e` | 8-chip slice, ICI | 4 | 24 | 8 | 32 |
+| `L40S-48GB` | 8 GPUs, PCIe | 5 | 32 | 8 | 40 |
+| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 3 | 8 | 16 | 24 |
 | **Total** |  | **24** | **136** | **56** | **192** |
 
 | Accelerator | `us-east` | `eu-west` | `apac` | Total |
 |---|---:|---:|---:|---:|
-| H100 | 16 | 8 | 8 | 32 |
-| A100-SXM | 16 | 8 | 8 | 32 |
+| H100 | 24 | 8 | 8 | 40 |
+| A100-SXM | 16 | 16 | 8 | 40 |
 | A100-PCIe | 8 | 8 | 0 | 16 |
 | A10G | 16 | 8 | 8 | 32 |
-| L40S | 16 | 8 | 8 | 32 |
-| MI300X | 8 | 8 | 0 | 16 |
-| TPU-v5e | 16 | 8 | 8 | 32 |
+| L40S | 16 | 8 | 16 | 40 |
+| MI300X | 16 | 8 | 0 | 24 |
 | **Region total** | **96** | **56** | **40** | **192** |
 
 | Region | Reserved Devices | On-Demand Cap | Total Devices |
@@ -77,7 +75,7 @@ Maximum provisioned capacity: **160 GPUs + 32 TPU chips = 192 typed accelerator 
 | `eu-west` | 32 | 24 | 56 |
 | `apac` | 24 | 16 | 40 |
 
-Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A100-PCIe/A10G/L40S nodes; TPU ICI within each slice. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
+Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A100-PCIe/A10G/L40S nodes. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
 
 ## T+00:00 - Warm Core APIs
 
@@ -124,13 +122,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-0-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-0-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  180,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-0-1"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-0-1"
                                   }
                  },
                  {
@@ -171,13 +169,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-0-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-0-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  180,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-0-2"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-0-2"
                                   }
                  },
                  {
@@ -218,13 +216,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-0-3",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-0-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  180,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-0-3"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-0-3"
                                   }
                  },
                  {
@@ -265,13 +263,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-0-4",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-0-4",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  180,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-0-4"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-0-4"
                                   }
                  },
                  {
@@ -312,18 +310,18 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-0-5",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-0-5",
                      "schedule":  {
                                       "release_at_offset_minutes":  0,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  180,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-0-5"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-0-5"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-0"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-0"
 }
 ```
 
@@ -372,13 +370,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-12-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-12-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  12,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  168,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-12-1"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-12-1"
                                   }
                  },
                  {
@@ -419,13 +417,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-12-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-12-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  12,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  168,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-12-2"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-12-2"
                                   }
                  },
                  {
@@ -466,18 +464,18 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-12-3",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-12-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  12,
                                       "active_end_at_offset_minutes":  180,
                                       "duration_minutes":  168,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-12-3"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-12-3"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-12"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-12"
 }
 ```
 
@@ -525,11 +523,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-25-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-25-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  25,
                                       "deadline_at_offset_minutes":  160,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-25-1",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-25-1",
                                       "shard_count":  32,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
@@ -572,11 +570,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "vector_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-25-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-25-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  25,
                                       "deadline_at_offset_minutes":  180,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-25-2",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-25-2",
                                       "shard_count":  72,
                                       "requests_per_shard":  10000,
                                       "expansion_policy":  "required",
@@ -620,11 +618,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "perfdb"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-25-3",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-25-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  25,
                                       "deadline_at_offset_minutes":  120,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-25-3",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-25-3",
                                       "shard_count":  20,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
@@ -633,7 +631,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-25"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-25"
 }
 ```
 
@@ -682,13 +680,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-45-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-45-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  45,
                                       "active_end_at_offset_minutes":  90,
                                       "duration_minutes":  45,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-45-1"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-45-1"
                                   }
                  },
                  {
@@ -729,18 +727,18 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-45-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-45-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  45,
                                       "active_end_at_offset_minutes":  90,
                                       "duration_minutes":  45,
                                       "operation":  "additive_stream",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-45-2"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-45-2"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-45"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-45"
 }
 ```
 
@@ -789,13 +787,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-70-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-70-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  70,
                                       "active_end_at_offset_minutes":  140,
                                       "duration_minutes":  70,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-70-1"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-70-1"
                                   }
                  },
                  {
@@ -836,13 +834,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-70-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-70-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  70,
                                       "active_end_at_offset_minutes":  140,
                                       "duration_minutes":  70,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-70-2"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-70-2"
                                   }
                  },
                  {
@@ -883,18 +881,18 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-70-3",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-70-3",
                      "schedule":  {
                                       "release_at_offset_minutes":  70,
                                       "active_end_at_offset_minutes":  140,
                                       "duration_minutes":  70,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-70-3"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-70-3"
                                   }
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-70"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-70"
 }
 ```
 
@@ -943,13 +941,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "metrics"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-95-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-95-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  95,
                                       "active_end_at_offset_minutes":  150,
                                       "duration_minutes":  55,
                                       "operation":  "base_service",
-                                      "service_id":  "service-benchmark_timing_real_3hr_160gpu_tpu-95-1"
+                                      "service_id":  "service-benchmark_timing_real_3hr_192gpu-95-1"
                                   }
                  },
                  {
@@ -989,11 +987,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "report_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-95-2",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-95-2",
                      "schedule":  {
                                       "release_at_offset_minutes":  95,
                                       "deadline_at_offset_minutes":  170,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-95-2",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-95-2",
                                       "shard_count":  36,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
@@ -1002,7 +1000,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-95"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-95"
 }
 ```
 
@@ -1050,11 +1048,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "safety_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-120-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-120-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  120,
                                       "deadline_at_offset_minutes":  165,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-120-1",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-120-1",
                                       "shard_count":  28,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
@@ -1063,7 +1061,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-120"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-120"
 }
 ```
 
@@ -1111,11 +1109,11 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                      "output_target":  {
                                            "sink":  "eval_store"
                                        },
-                     "job_id":  "job-benchmark_timing_real_3hr_160gpu_tpu-145-1",
+                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-145-1",
                      "schedule":  {
                                       "release_at_offset_minutes":  145,
                                       "deadline_at_offset_minutes":  180,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_160gpu_tpu-145-1",
+                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-145-1",
                                       "shard_count":  16,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
@@ -1124,6 +1122,6 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                  }
              ],
     "schema_version":  "koibench/v1",
-    "event_id":  "event-benchmark_timing_real_3hr_160gpu_tpu-145"
+    "event_id":  "event-benchmark_timing_real_3hr_192gpu-145"
 }
 ```

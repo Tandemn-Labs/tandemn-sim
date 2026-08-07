@@ -38,7 +38,10 @@ class CatalogTests(unittest.TestCase):
             for method_id, definition in methods.items()
             if definition.status == "implemented"
         }
-        self.assertEqual(implemented, {"dynamo_aic", "gpt_only"})
+        self.assertEqual(
+            implemented,
+            {"dynamo_aic", "gpt_only", "vram"},
+        )
 
     def test_main_simulation_resolves_its_complete_matrix(self) -> None:
         experiment = load_experiment("main_simulation")
@@ -50,8 +53,8 @@ class CatalogTests(unittest.TestCase):
         )
 
         self.assertEqual(len(experiment.benchmarks), 3)
-        self.assertEqual(len(experiment.methods), 9)
-        self.assertEqual(len(selections), 27)
+        self.assertEqual(len(experiment.methods), 8)
+        self.assertEqual(len(selections), 24)
         self.assertIn("goodput", experiment.metrics)
         self.assertIn("invalid_plan_rate", experiment.metrics)
 

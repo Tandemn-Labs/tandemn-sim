@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
 from dotenv import load_dotenv
@@ -20,11 +22,13 @@ from data_generation.controller import (
     interrupt_controller,
     load_benchmark,
     log_benchmark,
-    run_benchmark,
     run_placement_only,
 )
+from data_generation.controllers.gpt import GptSchedulingMethod, run_gpt_controller
 from data_generation.experiments.registry import load_experiment
 from data_generation.methods.registry import list_methods, load_method
+from data_generation.submission import TandemnStoreSubmitter
+from data_generation.tandemn_store import TandemnPlanPublisher, TandemnStoreAdapter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,11 +60,6 @@ def main() -> None:
         parser.error("--output and --records require --generate-batch")
     if args.legacy_benchmark is not None and args.benchmark is not None:
         parser.error("use either the positional benchmark or --benchmark, not both")
-    if args.placement_only and args.resume is not None:
-        parser.error("--placement-only cannot be resumed")
-    if args.discard_request_data and args.aiperf_export_level != "summary":
-        parser.error("--discard-request-data requires --aiperf-export-level summary")
-
     benchmark_filter = args.benchmark or args.legacy_benchmark
     try:
         selections = resolve_run_selections(
@@ -111,28 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_ARTIFACT_ROOT,
     )
-    parser.add_argument(
-        "--aiperf-export-level",
-        choices=("summary", "records", "raw"),
-        default="raw",
-        help="AI-Perf output detail; summary excludes per-request payloads",
-    )
-    parser.add_argument(
-        "--discard-request-data",
-        action="store_true",
-        help="do not create controller request files and discard AI-Perf inputs",
-    )
     parser.add_argument("--validate-only", action="store_true")
-    parser.add_argument(
-        "--resume",
-        metavar="RUN_ID",
-        help="resume a paused benchmark run without advancing paused time",
-    )
-    parser.add_argument(
-        "--placement-only",
-        action="store_true",
-        help="simulate placements without waiting or starting data senders",
-    )
     parser.add_argument(
         "--generate-batch",
         type=Path,
@@ -202,24 +180,34 @@ def execute_selection(selection: RunSelection, args: argparse.Namespace) -> None
         benchmark.benchmark_id,
         selection.method_id,
     )
-    if not args.placement_only:
-        log_benchmark(benchmark)
-    if args.placement_only:
-        run_placement_only(
+    log_benchmark(benchmark)
+    if selection.method_id == "gpt_only":
+        store_user_id = os.getenv("TANDEMN_USER_ID")
+        if not store_user_id:
+            raise ValueError("TANDEMN_USER_ID is required for GPT scheduling")
+        job_user_ids = {
+            job.submission.user_id
+            for job in benchmark.jobs
+            if job.submission is not None
+        }
+        run_gpt_controller(
             benchmark,
             args.artifact_root,
-            method,
+            cast(GptSchedulingMethod, method),
+            state_provider=TandemnStoreAdapter(
+                store_user_id,
+                job_user_ids=job_user_ids,
+            ),
+            plan_publisher=TandemnPlanPublisher(store_user_id),
+            job_submitter=TandemnStoreSubmitter(),
             experiment_id=selection.experiment_id,
             method_id=selection.method_id,
         )
         return
-    run_benchmark(
+    run_placement_only(
         benchmark,
         args.artifact_root,
-        resume_run_id=args.resume,
-        aiperf_export_level=args.aiperf_export_level,
-        discard_request_data=args.discard_request_data,
-        scheduling_method=method,
+        method,
         experiment_id=selection.experiment_id,
         method_id=selection.method_id,
     )

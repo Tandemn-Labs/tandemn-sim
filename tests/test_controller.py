@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -24,7 +25,9 @@ from data_generation.controller import (
     run_benchmark,
     sync_job_records,
 )
+from data_generation.controllers.gpt import run_gpt_controller
 from data_generation.scheduling import (
+    DecisionFailureCategory,
     DecisionStatus,
     OptimizationGoal,
     SchedulerJob,
@@ -32,6 +35,7 @@ from data_generation.scheduling import (
     SchedulingDecision,
 )
 from data_generation.submission import SubmissionRequest, SubmissionResult
+from data_generation.tandemn_store import ClusterStateSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +47,7 @@ class ControllerTests(unittest.TestCase):
         benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
 
         self.assertEqual(benchmark.benchmark_id, "simulation_3h")
+        self.assertEqual(benchmark.reoptimization_tick_minutes, 5)
         self.assertEqual(len(benchmark.jobs), 26)
         self.assertEqual(sum(job.enabled for job in benchmark.jobs), 26)
         self.assertEqual(len({job.config_path for job in benchmark.jobs}), 26)
@@ -498,6 +503,394 @@ class ControllerTests(unittest.TestCase):
             final_action = plan_document["ticks"][-1]["plan"]["actions"][0]
             self.assertEqual(final_action["type"], "preempt")
 
+    def test_deferred_job_is_retried_with_the_previous_cluster_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=0.004,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            benchmark = replace(
+                benchmark,
+                jobs=tuple(
+                    replace(
+                        job,
+                        workload=SchedulerWorkload(
+                            input_tokens=10,
+                            output_tokens=10,
+                            request_rate=1,
+                        ),
+                    )
+                    for job in benchmark.jobs
+                ),
+            )
+            method = FakeSchedulingMethod(defer_first=True)
+
+            summary = run_benchmark(
+                benchmark,
+                root / "artifacts",
+                run_id="deferred-retry-test",
+                job_submitter=FakeSubmitter(),
+                scheduling_method=method,
+            )
+
+            self.assertEqual(summary.states["test-job"], JobState.COMPLETED)
+            self.assertGreaterEqual(len(method.scheduled_jobs), 2)
+            self.assertIsNone(method.past_plans[0])
+            second_plan = method.past_plans[1]
+            self.assertIsNotNone(second_plan)
+            self.assertEqual(second_plan["actions"][0]["type"], "defer")
+
+            plan_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "fake"
+                / "deferred-retry-test"
+                / "placement.json"
+            )
+            plan_document = json.loads(plan_path.read_text(encoding="utf-8"))
+            action_types = [
+                tick["plan"]["actions"][0]["type"] for tick in plan_document["ticks"]
+            ]
+            self.assertEqual(action_types[0], "defer")
+            self.assertIn("place", action_types)
+            self.assertEqual(action_types[-1], "preempt")
+
+    def test_planner_retries_deferred_jobs_on_the_next_minute_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=3,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            benchmark = replace(
+                benchmark,
+                jobs=tuple(
+                    replace(
+                        job,
+                        workload=SchedulerWorkload(
+                            input_tokens=10,
+                            output_tokens=10,
+                            request_rate=1,
+                        ),
+                    )
+                    for job in benchmark.jobs
+                ),
+            )
+            method = FakeSchedulingMethod(defer_first=True)
+
+            summary = run_gpt_controller(
+                benchmark,
+                root / "artifacts",
+                method,
+                state_provider=FakeStateProvider(),
+                sleep=lambda _seconds: None,
+                run_id="planner-deferred-retry-test",
+            )
+
+            self.assertEqual(len(method.scheduled_jobs), 2)
+            self.assertEqual(
+                method.scheduled_ticks,
+                [("test-job",), ("test-job",)],
+            )
+            second_plan = method.past_plans[1]
+            self.assertIsNotNone(second_plan)
+            self.assertEqual(second_plan["actions"][0]["type"], "defer")
+            self.assertEqual(
+                summary.decisions["test-job"].status,
+                DecisionStatus.ACCEPTED,
+            )
+
+            plan_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "fake"
+                / "planner-deferred-retry-test"
+                / "placement.json"
+            )
+            plan_document = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [tick["plan"]["actions"][0]["type"] for tick in plan_document["ticks"]],
+                ["defer", "place", "place", "place"],
+            )
+
+    def test_gpt_controller_appends_jobs_and_updates_types_from_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=3,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            first_job = replace(
+                benchmark.jobs[0],
+                workload=SchedulerWorkload(
+                    input_tokens=10,
+                    output_tokens=10,
+                    request_rate=1,
+                ),
+            )
+            second_job = replace(
+                first_job,
+                job_id="second-job",
+                start_minute=1,
+            )
+            benchmark = replace(benchmark, jobs=(first_job, second_job))
+            method = FakeSchedulingMethod()
+            state_provider = FakeStateProvider(
+                snapshots=(
+                    cluster_state(),
+                    cluster_state(running=("test-job",)),
+                    cluster_state(
+                        running=("second-job",),
+                        finished=("test-job",),
+                    ),
+                    cluster_state(
+                        running=("second-job",),
+                        finished=("test-job",),
+                    ),
+                )
+            )
+
+            run_gpt_controller(
+                benchmark,
+                root / "artifacts",
+                method,
+                state_provider=state_provider,
+                sleep=lambda _seconds: None,
+                run_id="planner-batch-test",
+            )
+
+            self.assertEqual(
+                method.scheduled_ticks,
+                [("test-job",), ("second-job",)],
+            )
+            plan_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "fake"
+                / "planner-batch-test"
+                / "placement.json"
+            )
+            plan_document = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(plan_document["ticks"]), 4)
+            self.assertEqual(
+                [
+                    action["type"]
+                    for action in plan_document["ticks"][0]["plan"]["actions"]
+                ],
+                ["place"],
+            )
+            self.assertEqual(
+                [
+                    action["type"]
+                    for action in plan_document["ticks"][1]["plan"]["actions"]
+                ],
+                ["keep", "place"],
+            )
+            self.assertEqual(
+                [
+                    action["type"]
+                    for action in plan_document["ticks"][2]["plan"]["actions"]
+                ],
+                ["preempt", "keep"],
+            )
+            self.assertEqual(
+                [
+                    action["job_id"]
+                    for action in plan_document["ticks"][2]["plan"]["actions"]
+                ],
+                ["test-job", "second-job"],
+            )
+
+    def test_gpt_controller_submits_jobs_and_publishes_state_legal_plans(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=1,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            benchmark = replace(
+                benchmark,
+                jobs=tuple(
+                    replace(
+                        job,
+                        workload=SchedulerWorkload(
+                            input_tokens=10,
+                            output_tokens=10,
+                            request_rate=1,
+                        ),
+                    )
+                    for job in benchmark.jobs
+                ),
+            )
+            method = FakeSchedulingMethod()
+            submitter = ExactJobSubmitter()
+            publisher = FakePlanPublisher()
+            state_provider = FakeStateProvider(
+                snapshots=(
+                    cluster_state(),
+                    cluster_state(waiting=("test-job",)),
+                    cluster_state(running=("test-job",)),
+                )
+            )
+
+            run_gpt_controller(
+                benchmark,
+                root / "artifacts",
+                method,
+                state_provider=state_provider,
+                plan_publisher=publisher,
+                job_submitter=submitter,
+                sleep=lambda _seconds: None,
+                run_id="store-loop-test",
+            )
+
+            self.assertEqual(submitter.requests[0].job_id, "test-job")
+            self.assertEqual(method.scheduled_ticks, [("test-job",)])
+            self.assertEqual(
+                [plan["actions"][0]["type"] for plan in publisher.plans],
+                ["place", "keep"],
+            )
+
+    def test_gpt_controller_does_not_place_paused_or_publish_finished_jobs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=1,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            method = FakeSchedulingMethod()
+            publisher = FakePlanPublisher()
+            state_provider = FakeStateProvider(
+                snapshots=(
+                    cluster_state(paused=("test-job",)),
+                    cluster_state(finished=("test-job",)),
+                )
+            )
+
+            run_gpt_controller(
+                benchmark,
+                root / "artifacts",
+                method,
+                state_provider=state_provider,
+                plan_publisher=publisher,
+                sleep=lambda _seconds: None,
+                run_id="terminal-history-test",
+            )
+
+            self.assertEqual(method.scheduled_ticks, [])
+            self.assertEqual(publisher.plans[0]["actions"], [])
+            self.assertEqual(publisher.plans[1]["actions"], [])
+            plan_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "fake"
+                / "terminal-history-test"
+                / "placement.json"
+            )
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [tick["plan"]["actions"][0]["type"] for tick in plan["ticks"]],
+                ["defer", "preempt"],
+            )
+
+    def test_gpt_controller_uses_reoptimization_interval(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=5,
+                    process_seconds=0.01,
+                    with_submission=True,
+                )
+            )
+            benchmark = replace(benchmark, reoptimization_tick_minutes=2)
+            benchmark = replace(
+                benchmark,
+                jobs=tuple(
+                    replace(
+                        job,
+                        workload=SchedulerWorkload(
+                            input_tokens=10,
+                            output_tokens=10,
+                            request_rate=1,
+                        ),
+                    )
+                    for job in benchmark.jobs
+                ),
+            )
+            sleep_calls: list[float] = []
+
+            run_gpt_controller(
+                benchmark,
+                root / "artifacts",
+                FakeSchedulingMethod(),
+                state_provider=FakeStateProvider(),
+                sleep=sleep_calls.append,
+                run_id="tick-interval-test",
+            )
+
+            plan_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "fake"
+                / "tick-interval-test"
+                / "placement.json"
+            )
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [tick["offset_minutes"] for tick in plan["ticks"]],
+                [0, 2, 4, 5],
+            )
+            self.assertEqual(sleep_calls, [120, 120, 60])
+
     def test_aiperf_raw_records_are_split_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             run_directory = Path(temporary_directory)
@@ -646,18 +1039,82 @@ class FakeSubmitter:
         return self.endpoint_url
 
 
+class ExactJobSubmitter:
+    """Return the benchmark-owned job ID used for Store reconciliation."""
+
+    def __init__(self) -> None:
+        self.requests: list[SubmissionRequest] = []
+
+    def submit(self, request: SubmissionRequest) -> SubmissionResult:
+        self.requests.append(request)
+        if request.job_id is None:
+            raise AssertionError("GPT jobs must carry their canonical job_id")
+        return SubmissionResult(tandemn_job_id=request.job_id)
+
+    def poll_endpoint(self, tandemn_job_id: str) -> str | None:
+        return None
+
+
+class FakePlanPublisher:
+    """Record the state-legal subset published for Orca."""
+
+    def __init__(self) -> None:
+        self.plans: list[Mapping[str, object]] = []
+
+    def publish_plan(
+        self,
+        plan: Mapping[str, object],
+        method_name: str,
+    ) -> str:
+        self.plans.append(plan)
+        return f"plan-{len(self.plans)}"
+
+
 class FakeSchedulingMethod:
     """Accept one placement and record its allocation lifecycle."""
 
     method_name = "fake"
 
-    def __init__(self) -> None:
+    def __init__(self, *, defer_first: bool = False) -> None:
         self.scheduled_jobs: list[str] = []
         self.released_jobs: list[str] = []
+        self.past_plans: list[Mapping[str, object] | None] = []
+        self.scheduled_ticks: list[tuple[str, ...]] = []
+        self.defer_first = defer_first
 
-    def schedule(self, job: SchedulerJob) -> SchedulingDecision:
+    def schedule_tick(
+        self,
+        jobs: tuple[SchedulerJob, ...],
+        past_plan: Mapping[str, object] | None = None,
+        *,
+        cluster_state: ClusterStateSnapshot | None = None,
+        seen_jobs: tuple[SchedulerJob, ...] | None = None,
+    ) -> Mapping[str, SchedulingDecision]:
+        if cluster_state is None:
+            raise AssertionError("controller must supply Tandemn Store state")
+        self.scheduled_ticks.append(tuple(job.job_id for job in jobs))
+        return {job.job_id: self.schedule(job, past_plan) for job in jobs}
+
+    def schedule(
+        self,
+        job: SchedulerJob,
+        past_plan: Mapping[str, object] | None = None,
+    ) -> SchedulingDecision:
         self.scheduled_jobs.append(job.job_id)
+        self.past_plans.append(past_plan)
         before = {"available": 1}
+        if self.defer_first and len(self.scheduled_jobs) == 1:
+            return SchedulingDecision(
+                job_id=job.job_id,
+                method=self.method_name,
+                status=DecisionStatus.REJECTED,
+                optimization_goal=OptimizationGoal.THROUGHPUT,
+                candidates=(),
+                resource_snapshot_before=before,
+                resource_snapshot_after=before,
+                failure_category=DecisionFailureCategory.INSUFFICIENT_CAPACITY,
+                reason="No capacity is currently available",
+            )
         after = {"available": 0}
         return SchedulingDecision(
             job_id=job.job_id,
@@ -682,6 +1139,50 @@ class FakeSchedulingMethod:
         return {
             "available": 1 if self.released_jobs else 0,
         }
+
+
+class FakeStateProvider:
+    """Return one Store snapshot per controller tick."""
+
+    def __init__(
+        self,
+        snapshots: tuple[ClusterStateSnapshot, ...] | None = None,
+    ) -> None:
+        self.snapshots = snapshots or (cluster_state(),)
+        self.calls = 0
+
+    def read_cluster_state(self) -> ClusterStateSnapshot:
+        """Return the next snapshot, retaining the last state when exhausted."""
+        index = min(self.calls, len(self.snapshots) - 1)
+        self.calls += 1
+        return self.snapshots[index]
+
+
+def cluster_state(
+    *,
+    running: tuple[str, ...] = (),
+    waiting: tuple[str, ...] = (),
+    paused: tuple[str, ...] = (),
+    finished: tuple[str, ...] = (),
+) -> ClusterStateSnapshot:
+    """Build a Store snapshot with jobs indexed by benchmark job_id."""
+    return ClusterStateSnapshot(
+        user_id="usr-test",
+        resource_map_version=1,
+        resource_map_updated_at="2026-08-07T18:00:00+00:00",
+        resources={},
+        running_jobs=tuple(
+            {"job_id": job_id, "status": "running", "active_chains": []}
+            for job_id in running
+        ),
+        waiting_jobs=tuple(
+            {"job_id": job_id, "status": "waiting"} for job_id in waiting
+        ),
+        paused_jobs=tuple({"job_id": job_id, "status": "paused"} for job_id in paused),
+        finished_jobs=tuple(
+            {"job_id": job_id, "status": "finished"} for job_id in finished
+        ),
+    )
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:

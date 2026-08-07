@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -55,10 +56,10 @@ METHOD_SETTINGS: dict[str, object] = {
 class DynamoAicTests(unittest.TestCase):
     """Check AIC adaptation, candidate choice, and capacity mutation."""
 
-    def test_three_hour_resource_map_has_all_seven_hardware_types(self) -> None:
+    def test_three_hour_resource_map_has_all_six_hardware_types(self) -> None:
         inventory = load_resource_inventory(BENCHMARK_DIRECTORY / "resources.yaml")
 
-        self.assertEqual(len(inventory.pools), 7)
+        self.assertEqual(len(inventory.pools), 6)
         self.assertEqual(
             sum(pool.total_devices for pool in inventory.pools),
             200,
@@ -72,10 +73,10 @@ class DynamoAicTests(unittest.TestCase):
             200,
         )
         h100 = inventory.pools[0]
-        self.assertEqual(h100.markets, {"reserved": 24, "on_demand": 8})
+        self.assertEqual(h100.markets, {"reserved": 32, "on_demand": 8})
         self.assertEqual(
             h100.regions,
-            {"us-east": 16, "eu-west": 8, "apac": 8},
+            {"us-east": 16, "eu-west": 8, "apac": 16},
         )
 
     def test_inventory_tracks_region_and_market_pressure_together(self) -> None:
@@ -103,13 +104,13 @@ class DynamoAicTests(unittest.TestCase):
         }
         self.assertEqual(
             h100_regions,
-            {"us-east": 0, "eu-west": 0, "apac": 8},
+            {"us-east": 0, "eu-west": 0, "apac": 16},
         )
         h100 = inventory.snapshot()["pools"][0]
-        self.assertEqual(h100["available_devices"], 8)
+        self.assertEqual(h100["available_devices"], 16)
         self.assertEqual(
             h100["markets"]["reserved"]["available_devices"],
-            8,
+            16,
         )
         self.assertEqual(
             h100["markets"]["on_demand"]["available_devices"],
@@ -119,7 +120,7 @@ class DynamoAicTests(unittest.TestCase):
         inventory.release("east-job")
         inventory.release("west-job")
         restored_h100 = inventory.snapshot()["pools"][0]
-        self.assertEqual(restored_h100["available_devices"], 32)
+        self.assertEqual(restored_h100["available_devices"], 40)
 
     def test_three_hour_jobs_explicitly_define_policy_by_kind(self) -> None:
         benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
@@ -151,17 +152,17 @@ class DynamoAicTests(unittest.TestCase):
         self.assertEqual(decision.devices, 8)
         self.assertIn(decision.region, {"us-east", "eu-west", "apac"})
         self.assertIn(decision.market, {"reserved", "on_demand"})
-        self.assertEqual(len(decision.candidates), 18)
+        self.assertEqual(len(decision.candidates), 16)
         self.assertEqual(len(client.requests), 9)
         self.assertEqual(
             sum(
                 candidate.status == CandidateStatus.UNSUPPORTED
                 for candidate in decision.candidates
             ),
-            9,
+            7,
         )
         h100 = decision.resource_snapshot_after["pools"][0]
-        self.assertEqual(h100["available_devices"], 24)
+        self.assertEqual(h100["available_devices"], 32)
         self.assertEqual(
             h100["regions"][decision.region]["available_devices"],
             h100["regions"][decision.region]["total_devices"] - 8,
@@ -176,7 +177,7 @@ class DynamoAicTests(unittest.TestCase):
 
         method.release("throughput-job")
         released_h100 = method.resource_snapshot()["pools"][0]
-        self.assertEqual(released_h100["available_devices"], 32)
+        self.assertEqual(released_h100["available_devices"], 40)
         self.assertEqual(
             released_h100["regions"][decision.region]["available_devices"],
             released_h100["regions"][decision.region]["total_devices"],
@@ -264,7 +265,7 @@ class DynamoAicTests(unittest.TestCase):
         self.assertEqual(request.available_devices, 16)
         self.assertEqual(
             [request.available_devices for request in client.requests[:3]],
-            [16, 8, 8],
+            [16, 8, 16],
         )
         self.assertEqual(
             request.optimization_goal,
@@ -421,7 +422,7 @@ class DynamoAicTests(unittest.TestCase):
             self.assertEqual(len(plans["ticks"][0]["plan"]["actions"]), 5)
             self.assertEqual(len(plans["ticks"][-1]["plan"]["actions"]), 26)
             final_h100 = method.resource_snapshot()["pools"][0]
-            self.assertEqual(final_h100["available_devices"], 32)
+            self.assertEqual(final_h100["available_devices"], 40)
             placement_logs = [line for line in captured_logs.output if "[plan]" in line]
             self.assertEqual(len(placement_logs), 20)
             self.assertIn("T+0m", placement_logs[0])
@@ -431,7 +432,7 @@ class DynamoAicTests(unittest.TestCase):
             first_action = plans["ticks"][0]["plan"]["actions"][0]
             self.assertEqual(first_action["type"], "place")
             self.assertEqual(first_action["tenant_id"], "tenant_chat_free")
-            self.assertIsNone(first_action["target_tps"])
+            self.assertEqual(first_action["target_tps"], 11124.3)
             self.assertEqual(first_action["target_p99_ttft_ms"], 700.0)
             self.assertEqual(first_action["ladder"][0]["config"]["gpu_count"], 1)
             second_tick_actions = plans["ticks"][1]["plan"]["actions"]
@@ -525,11 +526,15 @@ class FailingAfterOneMethod:
         self.delegate = delegate
         self.schedule_calls = 0
 
-    def schedule(self, job: SchedulerJob) -> SchedulingDecision:
+    def schedule(
+        self,
+        job: SchedulerJob,
+        past_plan: Mapping[str, object] | None = None,
+    ) -> SchedulingDecision:
         if self.schedule_calls == 1:
             raise RuntimeError("test interruption")
         self.schedule_calls += 1
-        return self.delegate.schedule(job)
+        return self.delegate.schedule(job, past_plan)
 
     def release(self, job_id: str) -> None:
         self.delegate.release(job_id)

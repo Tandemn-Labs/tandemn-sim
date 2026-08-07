@@ -68,6 +68,7 @@ class SubmissionRequest:
     user_id: str
     kind: str
     spec_json: Mapping[str, object]
+    job_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,11 +118,14 @@ class TandemnStoreSubmitter:
 
         try:
             spec_json = normalize_job_spec(dict(request.spec_json), request.kind)
-            job = models.Job(
-                user_id=request.user_id,
-                kind=tandemn_kind,
-                spec_json=spec_json,
-            )
+            job_values = {
+                "user_id": request.user_id,
+                "kind": tandemn_kind,
+                "spec_json": spec_json,
+            }
+            if request.job_id is not None:
+                job_values["job_id"] = request.job_id
+            job = models.Job(**job_values)
             response = clients.JobStore(clients.PostgresClient()).submit(job)
         except (OSError, ValueError) as error:
             raise SubmissionError(str(error)) from error

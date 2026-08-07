@@ -12,9 +12,11 @@ uv run benchmark --benchmark simulation_3h --method dynamo_aic
 uv run benchmark --experiment main_simulation
 ```
 
-Use `--placement-only` to generate plans without submitting jobs or starting
-data senders. Use `--validate-only` to validate catalog selections without
-running them.
+Placement-only methods generate local plans without submitting jobs or starting
+data senders. GPT runs are Store-backed: they submit newly arrived benchmark jobs
+with their canonical job IDs, read current Store resources and lifecycle state,
+and publish state-legal plans for Orca. Use `--validate-only` to validate catalog
+selections without running the control loop.
 
 ## Repository layout
 
@@ -26,7 +28,7 @@ benchmarks/
     benchmark.yaml                # executable manifest and lifecycle settings
     jobs/
       <job>.yaml                  # schedule, placement spec, and workload
-    resources.yaml                # benchmark resource map
+    resources.yaml                # frozen map for non-Store simulation methods
 
 configs/
   methods.yaml                    # method catalog and lightweight settings
@@ -40,7 +42,9 @@ experiments/
 
 src/data_generation/
   cli.py                          # single repository-level entry point
-  controller.py                   # clock, lifecycle, submission, and artifacts
+  controller.py                   # benchmark timing, placement plans, and artifacts
+  controllers/
+    gpt.py                        # GPT-specific place/defer tick policy
   scheduling.py                   # method-neutral scheduling contracts
   benchmarks/registry.py
   experiments/registry.py
@@ -77,8 +81,8 @@ making it explicit that their executable traces have not yet been converted.
 They cannot be run accidentally.
 
 `configs/methods.yaml` is the authoritative method list. It includes
-FCFS, best fixed, Dynamo+AIC, QLM, QoServe, Helix, rolling CP-SAT, contextual
-BO, GPT-only, and Koi. Currently `dynamo_aic` and `gpt_only` are
+FCFS, best fixed, maximum VRAM, Dynamo+AIC, QLM, QoServe, Helix, contextual
+BO, GPT-only, and Koi. Currently `dynamo_aic`, `gpt_only`, and `vram` are
 implemented; the remaining entries are marked `planned` and fail clearly if
 selected for execution.
 
@@ -108,17 +112,28 @@ only the driver-specific AIPerf or finite batch configuration. Consequently, a
 method never needs to parse AIPerf configuration to understand a job.
 
 The controller resolves both files and converts the result to `SchedulerJob`.
-Methods receive that shared job contract plus the live resource map. An
-accepted method decision reserves capacity before submission, so the next job
-observes the updated map. Terminal jobs release the same capacity.
+Methods receive the shared job contract and latest complete cluster plan. Frozen
+simulation methods use `resources.yaml`. GPT uses only the current Tandemn Store
+snapshot for capacity. Its controller runs at each configured reoptimization tick
+and exact job-arrival offset, maps Store jobs by exact `job_id`, and appends newly
+seen jobs to one ordered benchmark-wide action array. Running jobs become `keep`,
+waiting jobs remain eligible for `place`, paused jobs remain deferred, and finished
+jobs become historical `preempt` entries in the artifact. Only unresolved waiting
+or newly submitted jobs are sent to GPT. Empty GPT calls are skipped.
 
-Method outputs remain placement-specific. `gpt_only` returns only a GPU type
-and the `replicas_needed`, `tp`, `pp`, `dp`, and `ep` parallelism values, or a
-null placement. Shared code deterministically resolves the pool, region,
-market, backend, device total, accelerator metadata, model, targets, plan
-action, ladder, and final plan schema from that response, the canonical job,
-and the benchmark resource map. Methods never generate the repository's plan
-schema themselves.
+Each GPT tick publishes only Store-legal actions to PlanStore: `place`/`defer` for
+waiting jobs and `keep` for running jobs. Paused and finished artifact history is
+not sent to Orca. The controller waits until the next logical offset, allowing
+Orca and Store to apply the plan before the next snapshot.
+
+Method outputs remain placement-specific. `gpt_only` returns a `placements` array
+with one entry per supplied job. Each entry contains only `job_id`, a `place` or
+`defer` decision, an exact Store environment, optional instance type, and a
+`tp`/`pp`/`dp` configuration. Shared code validates the response against that same
+Store snapshot, subtracts pending unapplied placements, and deterministically
+resolves device totals, backend, model, tenant, targets, lifecycle action, ladder,
+and final plan schema. Methods never generate the repository's plan schema
+themselves.
 
 ## Running selections
 
@@ -137,14 +152,14 @@ uv run benchmark \
   --validate-only
 ```
 
-Run GPT-only placement through OpenAI using the configured Luna model:
+Run the live GPT control loop through OpenAI using the configured Luna model. The
+three-hour benchmark follows wall-clock job arrivals and reoptimization intervals:
 
 ```bash
-# Set OPENAI_API_KEY in the repository's ignored .env file first.
+# Set OPENAI_API_KEY, TANDEMN_USER_ID, and TANDEMN_POSTGRES_URL first.
 uv run --group openai benchmark \
   --benchmark simulation_3h \
-  --method gpt_only \
-  --placement-only
+  --method gpt_only
 ```
 
 Run Dynamo+AIC placement only:
@@ -152,8 +167,7 @@ Run Dynamo+AIC placement only:
 ```bash
 uv run --group dynamo benchmark \
   --benchmark simulation_3h \
-  --method dynamo_aic \
-  --placement-only
+  --method dynamo_aic
 ```
 
 Select one cell from an experiment matrix:
@@ -194,10 +208,10 @@ Every run is isolated by the full selection key:
 artifacts/<experiment>/<benchmark>/<method>/<run>/
 ```
 
-Direct benchmark-method runs use `adhoc` as the experiment ID. Normal runs
-write lifecycle state, placement decisions, resource snapshots, process logs,
-and per-job runtime artifacts. Placement-only runs checkpoint `placement.json`
-after every decision.
+Direct benchmark-method runs use `adhoc` as the experiment ID. Runs retain every
+complete tick plan and write the cumulative history to `placement.json` when the
+run completes or exits. GPT logs concise tick counts instead of repeating the full
+plan payload.
 
 ## Adding a benchmark or method
 

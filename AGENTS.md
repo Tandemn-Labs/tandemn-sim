@@ -2,7 +2,7 @@
 
 This file is for coding agents. It is laid out as organization wide rules followed by repo-specific information.
 
-Current repo: tandemn-labs/tandemn-efficiency-index
+Current repo: tandemn-labs/tandemn-sim
 
 ## Organization guide
 
