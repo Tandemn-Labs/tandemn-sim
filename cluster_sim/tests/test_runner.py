@@ -27,7 +27,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
     def test_active_online_job_runs_rank_and_commits_tick_metrics(self) -> None:
         """Route one admitted job through the ServingSim adapter boundary."""
-        source = load_scenario(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
         job = replace(source.online_jobs[0], store_job_id="job_1", stops_at_ns=900_000_000_000)
         scenario = Scenario("runner-smoke", 300_000_000_000, 300_000_000_000, (job,), ())
         chain = SimpleNamespace(

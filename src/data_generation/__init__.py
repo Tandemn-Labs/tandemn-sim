@@ -1,1 +1,1 @@
-"""Benchmark-driven job orchestration with AIPerf."""
+"""Launch AIPerf for benchmark jobs."""

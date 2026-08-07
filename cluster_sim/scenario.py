@@ -5,72 +5,98 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 import yaml
-
-from data_generation.batch_dataset_generator import TokenDistribution, load_batch_dataset_spec
-from data_generation.controller import JobKind, load_benchmark
-
 from models import BatchJob, BatchProgress, OnlineJob, Request, Scenario
-
 
 SECOND = 1_000_000_000
 
 
+@dataclass(frozen=True)
+class TokenDistribution:
+    """Bounded token-length distribution used by the simulator."""
+
+    kind: str
+    minimum: int
+    average: int
+    maximum: int
+    sigma: float = 0.8
+
+    def sample(self, random_source: random.Random) -> int:
+        """Sample one token length within the configured bounds."""
+        if self.kind == "constant":
+            return self.average
+        location = _bounded_lognormal_location(
+            self.minimum,
+            self.average,
+            self.maximum,
+            self.sigma,
+        )
+        sampled = round(random_source.lognormvariate(location, self.sigma))
+        return max(self.minimum, min(self.maximum, sampled))
+
+
 def load_scenario(overview_path: Path) -> Scenario:
     """Load every enabled online and batch job from one benchmark overview."""
-    benchmark = load_benchmark(overview_path)
-    settings = yaml.safe_load(overview_path.read_text())["benchmark"]
+    settings = yaml.safe_load(overview_path.read_text(encoding="utf-8"))["benchmark"]
+    jobs_directory = overview_path.parent / settings["jobs"]
     online_jobs = []
     batch_jobs = []
 
-    for job in benchmark.jobs:
-        if not job.enabled or job.submission is None:
+    for job_path in sorted(jobs_directory.glob("*.yaml")):
+        document = yaml.safe_load(job_path.read_text(encoding="utf-8"))
+        schedule = document["schedule"]
+        if not schedule["enabled"]:
             continue
-        config = yaml.safe_load(job.config.read_text())
-        features = config["job"]["features"]
-        model_name = str(job.submission.spec_json["model_id"])
+        job_id = document["job_id"]
+        features = document["spec"]["features"]
+        workload = document["workload"]
+        kind = schedule["kind"]
 
-        if job.kind is JobKind.ONLINE:
+        if kind == "online":
+            benchmark = workload["benchmark"]
             online_jobs.append(
                 OnlineJob(
-                    name=job.job_id,
-                    store_job_id=job.job_id,
-                    model_name=model_name,
-                    starts_at_ns=_ns(job.start_minute),
-                    stops_at_ns=_ns(job.stop_minute),
+                    name=job_id,
+                    store_job_id=job_id,
+                    model_name=str(benchmark["model"]),
+                    starts_at_ns=_ns(schedule["start_at_offset_minutes"]),
+                    stops_at_ns=_ns(schedule["stop_at_offset_minutes"]),
                     workload={
                         "features": features,
-                        "phases": config["benchmark"]["phases"],
-                        "seed": config["randomSeed"],
+                        "phases": benchmark["phases"],
+                        "seed": workload["randomSeed"],
                     },
                 )
             )
             continue
 
-        batch = load_batch_dataset_spec(job.config)
+        dataset = workload["dataset"]
+        partitioning = dataset["partitioning"]
         batch_jobs.append(
             BatchJob(
-                name=job.job_id,
-                store_job_id=job.job_id,
-                model_name=model_name,
-                releases_at_ns=_ns(job.start_minute),
-                deadline_at_ns=_ns(job.deadline_minute),
-                hard_stop_at_ns=_ns(job.hard_stop_minute),
+                name=job_id,
+                store_job_id=job_id,
+                model_name=str(dataset["model"]),
+                releases_at_ns=_ns(schedule["start_at_offset_minutes"]),
+                deadline_at_ns=_ns(schedule["deadline_at_offset_minutes"]),
+                hard_stop_at_ns=_ns(schedule["hard_stop_at_offset_minutes"]),
                 workload={
                     "features": features,
-                    "input": batch.input_tokens,
-                    "output": batch.output_tokens,
-                    "record_count": batch.record_count,
-                    "requests_per_shard": batch.requests_per_shard,
-                    "seed": batch.seed,
+                    "input": _distribution(features, "isl"),
+                    "output": _distribution(features, "osl"),
+                    "record_count": dataset["record_count"],
+                    "requests_per_shard": partitioning["requests_per_shard"],
+                    "seed": dataset["seed"],
                 },
             )
         )
 
     return Scenario(
-        benchmark_name=benchmark.benchmark_id,
+        benchmark_name=settings["id"],
         tick_duration_ns=_ns(settings["reoptimization_tick_minutes"]),
         drain_end_ns=_ns(settings["hard_stop_at_offset_minutes"]),
         online_jobs=tuple(online_jobs),
@@ -130,7 +156,9 @@ def requests_in_tick(
     requests: tuple[Request, ...], start_ns: int, end_ns: int
 ) -> tuple[Request, ...]:
     """Return one half-open logical tick from a continuous request stream."""
-    return tuple(request for request in requests if start_ns <= request.arrives_at_ns < end_ns)
+    return tuple(
+        request for request in requests if start_ns <= request.arrives_at_ns < end_ns
+    )
 
 
 def build_batch_probe(job: BatchJob, progress: BatchProgress) -> tuple[Request, ...]:
@@ -140,7 +168,9 @@ def build_batch_probe(job: BatchJob, progress: BatchProgress) -> tuple[Request, 
         progress.total_requests - progress.completed_requests,
     )
     requests = []
-    for number in range(progress.next_request_number, progress.next_request_number + count):
+    for number in range(
+        progress.next_request_number, progress.next_request_number + count
+    ):
         tokens = _rng(int(job.workload["seed"]), f"batch:{number}")
         requests.append(
             Request(
@@ -206,6 +236,54 @@ def _distribution(features: dict[str, object], prefix: str) -> TokenDistribution
     )
 
 
+@cache
+def _bounded_lognormal_location(
+    minimum: int,
+    average: int,
+    maximum: int,
+    sigma: float,
+) -> float:
+    """Find the lognormal location whose clipped mean matches the target."""
+    lower = math.log(minimum) - (4 * sigma)
+    upper = math.log(maximum) + (4 * sigma)
+    for _ in range(60):
+        midpoint = (lower + upper) / 2
+        mean = _bounded_lognormal_mean(
+            midpoint,
+            sigma,
+            minimum,
+            maximum,
+        )
+        if mean < average:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2
+
+
+def _bounded_lognormal_mean(
+    location: float,
+    sigma: float,
+    minimum: int,
+    maximum: int,
+) -> float:
+    """Return the analytic mean of a clipped lognormal distribution."""
+    minimum_score = (math.log(minimum) - location) / sigma
+    maximum_score = (math.log(maximum) - location) / sigma
+    unbounded_mean = math.exp(location + (sigma**2 / 2))
+    below_minimum = minimum * _normal_cdf(minimum_score)
+    within_bounds = unbounded_mean * (
+        _normal_cdf(maximum_score - sigma) - _normal_cdf(minimum_score - sigma)
+    )
+    above_maximum = maximum * (1 - _normal_cdf(maximum_score))
+    return below_minimum + within_bounds + above_maximum
+
+
+def _normal_cdf(value: float) -> float:
+    """Return the standard normal cumulative distribution."""
+    return 0.5 * (1 + math.erf(value / math.sqrt(2)))
+
+
 def _prefix_keys(job_name: str, average_length: int) -> tuple[str, ...]:
     """Create six hot-prefix families for cache-hit variation.
 
@@ -213,8 +291,14 @@ def _prefix_keys(job_name: str, average_length: int) -> tuple[str, ...]:
     session then chooses one stable family so repeated turns can reuse a
     realistic mix of short and long cached context.
     """
-    lengths = (average_length // 4, average_length // 2, average_length * 3 // 4,
-               average_length, average_length * 5 // 4, average_length * 3 // 2)
+    lengths = (
+        average_length // 4,
+        average_length // 2,
+        average_length * 3 // 4,
+        average_length,
+        average_length * 5 // 4,
+        average_length * 3 // 2,
+    )
     return tuple(f"{job_name}/prefix-{max(1, length)}" for length in lengths)
 
 
