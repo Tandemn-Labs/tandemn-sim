@@ -93,6 +93,7 @@ class ClusterSimulator:
         while self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns:
             results.append(self.run_tick(tick_number))
             tick_number += 1
+        self._hard_stop()
         return tuple(results)
 
     def run_tick(self, tick_number: int) -> PlannerResult:
@@ -243,10 +244,17 @@ class ClusterSimulator:
     ) -> tuple[list[object], tuple[RankResult, ...]]:
         """Run one job's ranks concurrently and return its staged telemetry."""
         deployments = build_rank_deployments(running.job, running.chains)
+        if len(deployments) == 1:
+            rank_shares = {deployments[0].rank_name: 1.0}
+        else:
+            rank_shares = {
+                deployment.rank_name: float(deployment.shape["rank_traffic_share"])
+                for deployment in deployments
+            }
         routed = self._router.route(
             job_name,
             requests,
-            tuple(deployment.rank_name for deployment in deployments),
+            rank_shares,
         )
         rank_runs = []
         for deployment in deployments:
@@ -308,6 +316,24 @@ class ClusterSimulator:
                 [ChainStatus.LAUNCHING, ChainStatus.RUNNING],
             )
         self.jobs.transition(running.job.job_id, JobStatus.FINISHED, [JobStatus.RUNNING])
+
+    def _hard_stop(self) -> None:
+        """Cancel every job still running at the benchmark's logical hard stop."""
+        from tandemn_system_data.models.enums import ChainStatus, JobStatus
+
+        for running in self.jobs.running_jobs(self.user_id):
+            for chain in running.chains:
+                self.jobs.set_chain_status(
+                    chain.chain_id,
+                    ChainStatus.STOPPED,
+                    [ChainStatus.LAUNCHING, ChainStatus.RUNNING],
+                )
+            self.jobs.transition(
+                running.job.job_id,
+                JobStatus.FINISHED,
+                [JobStatus.RUNNING],
+                finish_reason="SIMULATION_HARD_STOP",
+            )
 
 
 def verify_store_user(user_id: str, postgres: object) -> None:
