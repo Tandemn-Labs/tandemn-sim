@@ -79,8 +79,8 @@ class KoiPlannerDriverTest(unittest.TestCase):
 
         self.assertEqual(normalized.actions[0].ladder[0].config["rank_traffic_share"], 1.0)
 
-    def test_multi_rank_without_koi_share_is_rejected(self) -> None:
-        """Never invent traffic allocation when Koi supplied none."""
+    def test_multi_rank_without_share_uses_uniform_traffic(self) -> None:
+        """Give baseline planners equal traffic when they supply no split."""
         plan = SimpleNamespace(
             actions=[
                 SimpleNamespace(
@@ -90,8 +90,10 @@ class KoiPlannerDriverTest(unittest.TestCase):
             ]
         )
 
-        with self.assertRaises(ValueError):
-            normalize_plan_for_simulation(plan)
+        normalized = normalize_plan_for_simulation(plan)
+
+        self.assertEqual(normalized.actions[0].ladder[0].config["rank_traffic_share"], 0.5)
+        self.assertEqual(normalized.actions[0].ladder[1].config["rank_traffic_share"], 0.5)
 
     def test_executor_delegates_normalized_plan(self) -> None:
         """Write only the normalized simulation plan through Koi's Store executor."""
