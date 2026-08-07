@@ -26,6 +26,7 @@ from serving import (
     commit_tick_metrics,
     gpu_metrics_from_results,
     parse_rank_result,
+    prepare_rank_run,
     resolve_rank_hardware,
     write_rank_workload,
 )
@@ -129,6 +130,29 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual([row["arrival_time_ns"] for row in rows], [5_000_000_000, 30_000_000_000])
         self.assertEqual(rows[0]["input_tok_ids"][:50], rows[1]["input_tok_ids"])
         self.assertEqual(len(rows[0]["input_tok_ids"]), 75)
+
+    def test_prepare_rank_run_writes_isolated_input_files(self) -> None:
+        """Prepare one unique rank directory before its Docker process starts."""
+        deployment = build_rank_deployments(self.job, self.chains)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "outputs" / "run-rank-0"
+            rank_run = prepare_rank_run(
+                deployment,
+                (Request("r0", "s0", 0, 0, 16, 8, None),),
+                self.hardware,
+                root,
+                run_dir,
+                "servingsim_docker",
+                "run-rank-0",
+                0,
+                30,
+            )
+
+            self.assertEqual(rank_run.cleanup_dir, run_dir)
+            self.assertTrue((run_dir / "cluster.json").is_file())
+            self.assertTrue((run_dir / "workload.jsonl").is_file())
+            self.assertEqual(rank_run.output_path, run_dir / "requests.csv")
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""

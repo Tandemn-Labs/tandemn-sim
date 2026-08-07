@@ -9,9 +9,11 @@ description = "Run benchmark jobs and generate their request data."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-  "aiperf==0.11.0",
-  "python-dotenv>=1.0,<2",
-  "pyyaml>=6.0,<7",
+    "aiperf==0.11.0",
+    "python-dotenv>=1.0,<2",
+    "tandemn-orca",
+    "tandemn-store",
+    "pyyaml>=6.0,<7",
 ]
 
 [project.scripts]
@@ -35,6 +37,10 @@ dynamo = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+tandemn-orca = { path = "../Tandemn-orca", editable = true }
+tandemn-store = { path = "../tandemn-store", editable = true }
 
 [tool.ruff]
 line-length = 88
