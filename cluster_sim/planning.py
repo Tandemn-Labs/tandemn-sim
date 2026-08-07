@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -89,6 +90,7 @@ class KoiPlannerDriver:
         runner, _, agent, llm = build_runner(args)
         runner.tick_interval_sec = 0
         runner.telemetry.now_fn = logical_clock.now
+        runner.executor = SimulationPlanExecutor(runner.executor)
         return cls(user_id, runner, agent, llm)
 
     def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
@@ -111,15 +113,49 @@ class KoiPlannerDriver:
 class SimulationPlanExecutor:
     """Normalize simulation plan metadata before writing Store plans."""
 
-    def __init__(self) -> None:
-        """Create the executor around Koi's existing Store plan executor."""
-        pass
+    def __init__(self, delegate: object) -> None:
+        """Wrap Koi's existing Store executor without changing its behavior."""
+        self.delegate = delegate
 
     def send_to_executor(self, plan: object) -> list[dict[str, str]]:
         """Validate and persist one Koi-validated plan for simulation."""
-        pass
+        return self.delegate.send_to_executor(normalize_plan_for_simulation(plan))
 
 
 def normalize_plan_for_simulation(plan: object) -> object:
-    """Validate rank shapes and add equal initial rank traffic shares."""
-    pass
+    """Persist Koi's multi-rank arrival split as normalized traffic shares."""
+    normalized = deepcopy(plan)
+    for action in normalized.actions:
+        action_type = getattr(action.type, "value", action.type)
+        ranks = action.ladder or []
+        if action_type not in {"place", "swap"} or not ranks:
+            continue
+        if len(ranks) == 1:
+            ranks[0].config["rank_traffic_share"] = 1.0
+            continue
+
+        shares = [_rank_share(rank.config) for rank in ranks]
+        if all(share is None for share in shares):
+            for rank in ranks:
+                rank.config["rank_traffic_share"] = 1.0 / len(ranks)
+            continue
+        if any(share is None for share in shares):
+            raise ValueError("multi-rank simulation plans cannot mix specified and missing shares")
+        numeric_shares = [float(share) for share in shares]
+        total = sum(numeric_shares)
+        if total <= 0:
+            raise ValueError("multi-rank simulation traffic shares must be positive")
+        for rank, share in zip(ranks, numeric_shares, strict=True):
+            rank.config["rank_traffic_share"] = share / total
+    return normalized
+
+
+def _rank_share(config: dict) -> float | None:
+    """Read Koi's explicit share or its sized arrival-rate decision."""
+    for key in ("rank_traffic_share", "traffic_share", "_arrival_share_rps"):
+        if key in config:
+            share = float(config[key])
+            if share < 0:
+                raise ValueError(f"{key} cannot be negative")
+            return share
+    return None
