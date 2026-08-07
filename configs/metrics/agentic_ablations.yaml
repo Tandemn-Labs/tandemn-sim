@@ -1,0 +1,16 @@
+schema_version: "metric-profile/v1"
+
+metrics:
+  - batch_jct_delta
+  - batch_jqt_delta
+  - admission_delta
+  - cost_per_token_delta
+  - slo_delta
+  - goodput_risk_delta
+  - convergence_time_delta
+  - decision_time
+  - valid_plan_rate
+  - timeout_rate
+  - llm_tokens_per_decision
+  - planner_cost
+  - actions_per_tick

@@ -1,0 +1,7 @@
+schema_version: "experiment/v1"
+
+experiment:
+  id: heterogeneous_placement
+  benchmarks: [simulation_3h, simulation_12h, simulation_24h]
+  methods: [best_fixed, helix, rolling_cp_sat, koi]
+  metrics: heterogeneous_placement

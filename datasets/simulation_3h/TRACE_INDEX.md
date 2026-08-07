@@ -81,7 +81,6 @@ benchmark-specific Python.
 
 | Analysis | Source | Scope | Attached jobs |
 | --- | --- | --- | --- |
-| [`traces/BurstGPT_3_analysis.json`](traces/BurstGPT_3_analysis.json) | `BURST` | Complete source; no filters or selected window | None |
 | [`traces/chat_free_analysis.json`](traces/chat_free_analysis.json) | `AZ-CONV` | No filter; `2024-05-12T22:15:00Z`–`2024-05-13T01:15:00Z`; 400,476 requests | Chat Free |
 | [`traces/chat_premium_analysis.json`](traces/chat_premium_analysis.json) | `BURST` | GPT-4 conversation; `26637060`–`26647860` seconds; 122 requests | Chat Premium |
 | [`traces/code_autocomplete_analysis.json`](traces/code_autocomplete_analysis.json) | `BAIL-CODER` | No filter; `0`–`7200` seconds; 43,011 requests | Code Autocomplete |

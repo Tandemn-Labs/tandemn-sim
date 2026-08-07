@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-125-1
-# Benchmark window: T+125 through T+170. Declared pattern: Bursty.
-# Priority: STANDARD. SLO: p99 TTFT 3000 ms; p99 TPOT 65 ms.
-# Trace: datasets/simulation_3h/traces/meeting_summary_analysis.json
-# Measured: 0.003 mean RPS and nine requests at one source timestamp.
-# Mapping: Gamma arrivals with minimum smoothness to preserve an extreme cluster.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-125-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-125-1
+  operation: base_service
+  start_at_offset_minutes: 125
+  stop_at_offset_minutes: 170
+spec:
   user_id: tenant_meeting_summary
   optimization_goal: latency
   precision: fp16
@@ -27,27 +31,26 @@ job:
     max_concurrent_streaming: 180
     target_p99_ttft_ms: 3000
     target_p99_tpot_ms: 65
-
-schemaVersion: "2.0"
-randomSeed: 101
-
-benchmark:
-  model: Qwen/Qwen3-Next-80B-A3B-Thinking
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 1200
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
-  dataset:
-    type: synthetic
-    entries: 64
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: Qwen/Qwen3-Next-80B-A3B-Thinking
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 1200
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
+    dataset:
+      type: synthetic
+      entries: 64
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 2700

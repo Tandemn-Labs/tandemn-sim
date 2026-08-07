@@ -1,5 +1,15 @@
-# job-benchmark_timing_3hr-145-2
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-145-2
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_3hr-145-2
+  start_at_offset_minutes: 145
+  deadline_at_offset_minutes: 180
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 210
+spec:
   user_id: tenant_new_model_eval
   optimization_goal: throughput
   precision: fp16
@@ -23,17 +33,15 @@ job:
     deadline_hrs: 0.5833
     target_p99_ttft_ms: 12000
     target_p99_tpot_ms: 160
-
-schema_version: "batch-dataset/v1"
-
-dataset:
-  id: heldout_frontier_eval
-  model: deepseek-ai/DeepSeek-V3
-  endpoint: /v1/chat/completions
-  request_format: chat
-  record_count: 6400
-  seed: 207
-
-  partitioning:
-    shard_count: 32
-    requests_per_shard: 200
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: heldout_frontier_eval
+    model: deepseek-ai/DeepSeek-V3
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 6400
+    seed: 207
+    partitioning:
+      shard_count: 32
+      requests_per_shard: 200

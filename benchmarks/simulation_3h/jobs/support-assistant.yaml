@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-7-3
-# Benchmark window: T+7 through T+180. Declared pattern: Bursty.
-# Priority: STANDARD. SLO: p99 TTFT 700 ms; p99 TPOT 50 ms.
-# Trace: datasets/simulation_3h/traces/support_assistant_analysis.json
-# Measured: 0.009 mean RPS, 1.000 max RPS, 1.605 interarrival CV.
-# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-7-3
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-7-3
+  operation: base_service
+  start_at_offset_minutes: 7
+  stop_at_offset_minutes: 180
+spec:
   user_id: tenant_support
   optimization_goal: latency
   precision: fp16
@@ -27,27 +31,26 @@ job:
     max_concurrent_streaming: 4500
     target_p99_ttft_ms: 700
     target_p99_tpot_ms: 50
-
-schemaVersion: "2.0"
-randomSeed: 103
-
-benchmark:
-  model: mistralai/Mixtral-8x7B-Instruct-v0.1
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 180
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:mistralai/Mixtral-8x7B-Instruct-v0.1}
-  dataset:
-    type: synthetic
-    entries: 1500
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 103
+  benchmark:
+    model: mistralai/Mixtral-8x7B-Instruct-v0.1
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 180
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:mistralai/Mixtral-8x7B-Instruct-v0.1}
+    dataset:
+      type: synthetic
+      entries: 1500
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 10380

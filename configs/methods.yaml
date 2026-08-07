@@ -1,0 +1,48 @@
+schema_version: "method-catalog/v2"
+
+methods:
+  fcfs_first_fit:
+    display_name: FCFS + first-fit
+    status: planned
+  best_fixed:
+    display_name: Best fixed configuration
+    status: planned
+  dynamo_aic:
+    display_name: Dynamo Planner + AIConfigurator
+    status: implemented
+    settings:
+      backend: vllm
+      backend_version: null
+      backend_versions:
+        h100-sxm-80gb: "0.24.0"
+        a100-sxm-80gb: "0.22.0"
+        l40s-48gb: "0.24.0"
+      database_mode: HYBRID
+      serving_mode: agg
+      default_optimization_goal: throughput
+  qlm:
+    display_name: QLM artifact/port + common admission
+    status: planned
+  qoserve:
+    display_name: QoServe + frozen placement/scaling wrapper
+    status: planned
+  helix:
+    display_name: Helix + frozen admission/queue/batch wrapper
+    status: planned
+  rolling_cp_sat:
+    display_name: Rolling CP-SAT
+    status: planned
+  contextual_bo:
+    display_name: Contextual BO/bandit
+    status: planned
+  gpt_only:
+    display_name: GPT-only placement + common safety checks
+    status: implemented
+    settings:
+      model: gpt-5.6-luna
+      max_tokens: 4096
+      backend: vllm
+      default_optimization_goal: throughput
+  koi:
+    display_name: Koi
+    status: planned

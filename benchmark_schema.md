@@ -80,7 +80,7 @@ Operations:
 Overlapping `base_service` and `additive_stream` traffic is additive. A model swap is not additive after its cutover point; executable manifests must set `supersedes_job_id` and a cutover offset.
 
 Simulation jobs declare `precision` beside `model_id` in `spec_json`.
-Executable per-job YAML stores the same value as `job.precision`. The current
+Executable per-job YAML stores the same value as `spec.precision`. The current
 simulation benchmarks fix every model to `fp16`; real-hardware precision is
 defined separately when those manifests are made executable.
 
@@ -109,7 +109,7 @@ Traffic intent is mutually exclusive exactly as in `submit_job.py`:
 
 `max_concurrent_streaming` is concurrency, not requests per second. The API generator and surrogate never exceed it. Orca derives an equivalent request rate as `concurrency / target_service_time`. Do not submit both concurrency and request rate.
 
-Executable job YAMLs define token shape once in `job.features`. Scheduler
+Executable job YAMLs define token shape once in `spec.features`. Scheduler
 adapters consume those values directly, and the controller materializes them
 into runtime AIPerf or batch-generator configuration. Online offered load still
 comes from `phases[].rate`; AIPerf `concurrency` remains only an execution

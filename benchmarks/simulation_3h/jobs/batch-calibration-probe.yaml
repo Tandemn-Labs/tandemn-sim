@@ -1,5 +1,15 @@
-# job-benchmark_timing_3hr-85-1
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-85-1
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_3hr-85-1
+  start_at_offset_minutes: 85
+  deadline_at_offset_minutes: 170
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 210
+spec:
   user_id: tenant_koi_profiling
   optimization_goal: throughput
   precision: fp16
@@ -23,17 +33,15 @@ job:
     deadline_hrs: 1.4167
     target_p99_ttft_ms: 12000
     target_p99_tpot_ms: 200
-
-schema_version: "batch-dataset/v1"
-
-dataset:
-  id: calibration_probe
-  model: microsoft/phi-4
-  endpoint: /v1/chat/completions
-  request_format: chat
-  record_count: 12000
-  seed: 204
-
-  partitioning:
-    shard_count: 24
-    requests_per_shard: 500
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: calibration_probe
+    model: microsoft/phi-4
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 12000
+    seed: 204
+    partitioning:
+      shard_count: 24
+      requests_per_shard: 500

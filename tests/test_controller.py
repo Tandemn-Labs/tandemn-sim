@@ -40,12 +40,12 @@ class ControllerTests(unittest.TestCase):
     """Check benchmark loading, job lifecycles, pause, and resume."""
 
     def test_three_hour_benchmark_loads_all_jobs(self) -> None:
-        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
 
         self.assertEqual(benchmark.benchmark_id, "simulation_3h")
         self.assertEqual(len(benchmark.jobs), 26)
         self.assertEqual(sum(job.enabled for job in benchmark.jobs), 26)
-        self.assertEqual(len({job.config for job in benchmark.jobs}), 26)
+        self.assertEqual(len({job.config_path for job in benchmark.jobs}), 26)
         self.assertTrue(all(job.submission is not None for job in benchmark.jobs))
         self.assertTrue(
             all(
@@ -67,13 +67,14 @@ class ControllerTests(unittest.TestCase):
             "osl_distribution_type",
         }
         for job in benchmark.jobs:
-            document = yaml.safe_load(job.config.read_text(encoding="utf-8"))
-            features = document["job"]["features"]
+            document = yaml.safe_load(job.config_path.read_text(encoding="utf-8"))
+            features = document["spec"]["features"]
+            workload = document["workload"]
             self.assertTrue(token_fields <= features.keys(), job.job_id)
             if job.kind == JobKind.BATCH:
-                self.assertNotIn("io", document["dataset"], job.job_id)
+                self.assertNotIn("io", workload["dataset"], job.job_id)
                 continue
-            dataset = document["benchmark"]["dataset"]
+            dataset = workload["benchmark"]["dataset"]
             if "rankings" in dataset:
                 self.assertNotIn(
                     "passageTokens",
@@ -87,7 +88,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_aiperf_summary_export_excludes_raw_payload_level(self) -> None:
         """Build an AI-Perf command that requests aggregate output only."""
-        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
         job = next(job for job in benchmark.jobs if job.driver == "aiperf")
 
         command = job_command(
@@ -209,8 +210,9 @@ class ControllerTests(unittest.TestCase):
             checkpoint_path = (
                 root
                 / "artifacts"
-                / "benchmarks"
+                / "adhoc"
                 / "test-benchmark"
+                / "unmanaged"
                 / "resume-test"
                 / "benchmark_state.json"
             )
@@ -273,8 +275,9 @@ class ControllerTests(unittest.TestCase):
             state_path = (
                 root
                 / "artifacts"
-                / "benchmarks"
+                / "adhoc"
                 / "test-benchmark"
+                / "unmanaged"
                 / "submission-resume-test"
                 / "benchmark_state.json"
             )
@@ -285,6 +288,46 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(saved_job["tandemn_job_id"], "tandemn-test-job")
             self.assertEqual(saved_job["endpoint_url"], submitter.endpoint_url)
 
+    def test_submission_waits_for_endpoint_before_starting_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark = load_benchmark(
+                write_benchmark(
+                    root,
+                    kind="online",
+                    end_field="stop_at_offset_minutes",
+                    end_minute=0.01,
+                    process_seconds=0.02,
+                    with_submission=True,
+                )
+            )
+            submitter = FakeSubmitter(defer_endpoint=True)
+
+            summary = run_benchmark(
+                benchmark,
+                root / "artifacts",
+                run_id="deferred-endpoint-test",
+                job_submitter=submitter,
+            )
+
+            state_path = (
+                root
+                / "artifacts"
+                / "adhoc"
+                / "test-benchmark"
+                / "unmanaged"
+                / "deferred-endpoint-test"
+                / "benchmark_state.json"
+            )
+            saved_job = json.loads(state_path.read_text())["jobs"][0]
+
+            self.assertEqual(summary.states["test-job"], JobState.COMPLETED)
+            self.assertEqual(len(submitter.requests), 1)
+            self.assertGreaterEqual(len(submitter.polls), 2)
+            self.assertEqual(saved_job["tandemn_job_id"], "tandemn-test-job")
+            self.assertEqual(saved_job["endpoint_url"], submitter.endpoint_url)
+            self.assertEqual(saved_job["launch_count"], 1)
+
     def test_runtime_aiperf_config_owns_the_returned_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -292,15 +335,23 @@ class ControllerTests(unittest.TestCase):
             source_config.write_text(
                 yaml.safe_dump(
                     {
-                        "job": {
+                        "schema_version": "benchmark-job/v1",
+                        "job_id": "online-job",
+                        "schedule": {},
+                        "spec": {
                             "user_id": "test-user",
                             "optimization_goal": "latency",
                             "features": {},
                         },
-                        "schemaVersion": "2.0",
-                        "benchmark": {
-                            "model": "test-model",
-                            "endpoint": {"type": "chat", "streaming": True},
+                        "workload": {
+                            "schemaVersion": "2.0",
+                            "benchmark": {
+                                "model": "test-model",
+                                "endpoint": {
+                                    "type": "chat",
+                                    "streaming": True,
+                                },
+                            },
                         },
                     },
                     sort_keys=False,
@@ -313,7 +364,7 @@ class ControllerTests(unittest.TestCase):
                 output_to_terminal=False,
                 kind=JobKind.ONLINE,
                 driver="aiperf",
-                config=source_config,
+                config_path=source_config,
                 command=None,
                 start_minute=0,
                 stop_minute=1,
@@ -337,7 +388,10 @@ class ControllerTests(unittest.TestCase):
             source = yaml.safe_load(source_config.read_text())
             runtime = yaml.safe_load(runtime_config.read_text())
 
-            self.assertNotIn("url", source["benchmark"]["endpoint"])
+            self.assertNotIn(
+                "url",
+                source["workload"]["benchmark"]["endpoint"],
+            )
             self.assertNotIn("job", runtime)
             self.assertEqual(
                 runtime["benchmark"]["endpoint"]["url"],
@@ -345,7 +399,7 @@ class ControllerTests(unittest.TestCase):
             )
 
     def test_runtime_aiperf_uses_the_canonical_job_token_shape(self) -> None:
-        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        benchmark = load_benchmark(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
         code_job = next(
             job
             for job in benchmark.jobs
@@ -423,8 +477,9 @@ class ControllerTests(unittest.TestCase):
             placement_path = (
                 root
                 / "artifacts"
-                / "benchmarks"
+                / "adhoc"
                 / "test-benchmark"
+                / "fake"
                 / "scheduled-send-test"
                 / "jobs"
                 / "test-job"
@@ -435,6 +490,13 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(method.released_jobs, ["test-job"])
             self.assertEqual(len(submitter.requests), 1)
             self.assertTrue(placement_path.is_file())
+            plan_path = placement_path.parents[2] / "placement.json"
+            plan_document = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan_action = plan_document["ticks"][0]["plan"]["actions"][0]
+            self.assertEqual(plan_action["job_id"], "test-job")
+            self.assertEqual(plan_action["type"], "place")
+            final_action = plan_document["ticks"][-1]["plan"]["actions"][0]
+            self.assertEqual(final_action["type"], "preempt")
 
     def test_aiperf_raw_records_are_split_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -466,7 +528,7 @@ class ControllerTests(unittest.TestCase):
                     output_to_terminal=False,
                     kind=JobKind.ONLINE,
                     driver="aiperf",
-                    config=run_directory / "job.yaml",
+                    config_path=run_directory / "job.yaml",
                     command=None,
                     start_minute=0,
                     stop_minute=1,
@@ -503,25 +565,21 @@ def write_benchmark(
     with_submission: bool = False,
 ) -> Path:
     """Write one small command-backed benchmark."""
-    config = root / "job.yaml"
-    config_document: dict[str, object] = {}
+    jobs_directory = root / "jobs"
+    jobs_directory.mkdir()
+    config = jobs_directory / "test-job.yaml"
+    spec: dict[str, object] | None = None
     if with_submission:
-        config_document["job"] = {
+        spec = {
             "user_id": "test-user",
             "optimization_goal": "latency",
             "model_id": "test-model",
             "features": {},
         }
-    config.write_text(
-        yaml.safe_dump(config_document, sort_keys=False) if config_document else "",
-        encoding="utf-8",
-    )
-    overview_path = root / "overview.yaml"
-    job_definition: dict[str, object] = {
+    schedule: dict[str, object] = {
         "enabled": True,
         "kind": kind,
         "driver": "external_mock_data",
-        "config": "job.yaml",
         "command": [
             sys.executable,
             "-c",
@@ -530,22 +588,38 @@ def write_benchmark(
         "start_at_offset_minutes": 0,
         end_field: end_minute,
     }
-    overview_path.write_text(
+    config.write_text(
         yaml.safe_dump(
             {
-                "schema_version": "benchmark/v1",
+                "schema_version": "benchmark-job/v1",
+                "job_id": "test-job",
+                "schedule": schedule,
+                "spec": spec,
+                "workload": {},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = root / "benchmark.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "benchmark-manifest/v1",
                 "benchmark": {
                     "id": "test-benchmark",
+                    "status": "executable",
+                    "jobs": "jobs",
                     "poll_interval_seconds": 0.01,
                     "shutdown_grace_seconds": 0.05,
                     "hard_stop_at_offset_minutes": 2,
                 },
-                "jobs": {"test-job": job_definition},
             },
             sort_keys=False,
-        )
+        ),
+        encoding="utf-8",
     )
-    return overview_path
+    return manifest_path
 
 
 class FakeSubmitter:
@@ -553,15 +627,23 @@ class FakeSubmitter:
 
     endpoint_url = "https://runtime.example/v1/chat/completions"
 
-    def __init__(self) -> None:
+    def __init__(self, *, defer_endpoint: bool = False) -> None:
         self.requests: list[SubmissionRequest] = []
+        self.defer_endpoint = defer_endpoint
+        self.polls: list[str] = []
 
     def submit(self, request: SubmissionRequest) -> SubmissionResult:
         self.requests.append(request)
         return SubmissionResult(
             tandemn_job_id="tandemn-test-job",
-            endpoint_url=self.endpoint_url,
+            endpoint_url=None if self.defer_endpoint else self.endpoint_url,
         )
+
+    def poll_endpoint(self, tandemn_job_id: str) -> str | None:
+        self.polls.append(tandemn_job_id)
+        if len(self.polls) < 2:
+            return None
+        return self.endpoint_url
 
 
 class FakeSchedulingMethod:

@@ -1,0 +1,10 @@
+schema_version: "benchmark-manifest/v1"
+
+benchmark:
+  id: real_life_3h
+  environment: real_hardware
+  duration_minutes: 180
+  status: definition_only
+  definition: benchmark.md
+  jobs: null
+  resources: null

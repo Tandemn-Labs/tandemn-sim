@@ -1,5 +1,15 @@
-# job-benchmark_timing_3hr-125-2
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-125-2
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_3hr-125-2
+  start_at_offset_minutes: 125
+  deadline_at_offset_minutes: 180
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 210
+spec:
   user_id: tenant_reports
   optimization_goal: throughput
   precision: fp16
@@ -23,17 +33,15 @@ job:
     deadline_hrs: 0.9167
     target_p99_ttft_ms: 10000
     target_p99_tpot_ms: 120
-
-schema_version: "batch-dataset/v1"
-
-dataset:
-  id: sales_reports_short
-  model: Qwen/Qwen3-Next-80B-A3B-Thinking
-  endpoint: /v1/chat/completions
-  request_format: chat
-  record_count: 8000
-  seed: 206
-
-  partitioning:
-    shard_count: 80
-    requests_per_shard: 100
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: sales_reports_short
+    model: Qwen/Qwen3-Next-80B-A3B-Thinking
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 8000
+    seed: 206
+    partitioning:
+      shard_count: 80
+      requests_per_shard: 100

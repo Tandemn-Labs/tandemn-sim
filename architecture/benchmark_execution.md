@@ -1,200 +1,147 @@
-# Benchmark Execution Architecture
+# Benchmark execution architecture
 
-This document describes how a benchmark moves from a controller command to
-scheduler placement, data generation, and run artifacts.
+The repository models a run as one cell in an experiment matrix:
 
-## Entry points
+```text
+experiment -> benchmark x method -> metric profile
+```
 
-Run the three-hour simulation with your choice of method. For example, to run Dynamo+AIC:
+This keeps comparison design separate from workload definitions and method
+implementations. The benchmark controller executes a resolved cell; it does
+not decide which methods belong in a paper table.
+
+## Resolution flow
+
+```text
+benchmark CLI
+  -> experiment registry (optional matrix expansion)
+  -> benchmark registry + method registry + metric registry
+  -> load benchmark manifest and split job definitions
+  -> construct the selected SchedulingMethod
+  -> controller execution or placement-only simulation
+  -> artifacts/<experiment>/<benchmark>/<method>/<run>/
+```
+
+The primary entry point is `data_generation.cli:main`, exposed as
+`uv run benchmark`. The `controller` script is a compatibility alias to the
+same entry point.
+
+Direct execution names one benchmark and method:
 
 ```bash
-uv run --group dynamo controller simulation_3h --method dynamo-aic
+uv run benchmark --benchmark simulation_3h --method dynamo_aic
 ```
 
-Generate placements without submitting jobs or sending prompts:
+Experiment execution expands the declared cross product. Optional flags filter
+it to one benchmark, one method, or one pair:
 
 ```bash
-uv run --group dynamo controller simulation_3h --method dynamo-aic --placement-only
+uv run benchmark \
+  --experiment agentic_ablations \
+  --benchmark simulation_3h \
+  --method gpt_only \
+  --placement-only
 ```
 
-The `controller` command is registered in [`pyproject.toml`](../pyproject.toml)
-and invokes `data_generation.controller:main`.
+## Configuration ownership
 
-## End-to-end flow
+| Layer | Owns | Does not own |
+|---|---|---|
+| Benchmark catalog | Benchmark identity, environment, duration, readiness | Job details or method settings |
+| Benchmark manifest | Clock, resource map, job schedule location | Method implementation |
+| Job file | Schedule, placement spec, and driver workload | Method implementation |
+| Method catalog/config | Method identity, readiness, runtime settings | Python implementation |
+| Method module | Candidate evaluation, selection, reservation, release | Benchmark lifecycle |
+| Experiment | Compared benchmarks, methods, and metric profile | Runtime behavior |
+| Metric profile | Ordered reported measurements | Metric collection implementation |
+| Controller | Clock, process lifecycle, submission, resume, artifacts | Concrete placement algorithm |
+
+Method metadata and settings therefore live in `configs/methods.yaml`, while
+each executable scheduler is one module under `src/data_generation/methods/`.
+The shared registry constructs concrete methods and is the only method-aware
+boundary used by the CLI.
+
+## Benchmark loading
+
+`load_benchmark()` reads `benchmark.yaml`, verifies that the benchmark is
+executable, then loads every YAML file from its `jobs` directory. Each job has
+one canonical document:
+
+```yaml
+schema_version: benchmark-job/v1
+job_id: <job_id>
+schedule: {}
+spec: {}
+workload: {}
+```
+
+The loader turns those three sections into the controller's `Job`.
+`scheduler_job()` then narrows that value to the method-neutral `SchedulerJob`
+contract.
+
+## Scheduling boundary
+
+Every method receives the same two inputs for each arriving job:
+
+1. `SchedulerJob`, containing model and workload requirements.
+2. Its method-owned live resource inventory, initialized from the selected
+   benchmark's `resources.yaml`.
+
+Every method returns `SchedulingDecision`. Accepted decisions reserve capacity
+before Tandemn submission or data generation begins. Rejected decisions use
+the shared failure categories. When a job becomes terminal, the controller
+calls the method's `release(job_id)` operation.
+
+`gpt_only` sends the canonical job and current resource map to the configured
+OpenAI model. The model returns only a GPU type and parallelism values, or a
+null placement. Shared code deterministically resolves its pool, region,
+market, backend, and device count before validating and reserving capacity.
+`dynamo_aic` evaluates supported hardware-region candidates through AIC and
+greedily reserves the best feasible result.
+
+Neither method produces the cluster-plan schema. The controller deterministically
+builds that shared schema from `SchedulingDecision`, the canonical job, and the
+benchmark resource map. This supplies job and tenant IDs, model, accelerator,
+device totals, targets, mechanism ID, lifecycle action, and ladder fields through
+one common path for every method.
+
+## Timed execution
+
+For a normal run, the controller:
+
+1. Creates the fully keyed run directory.
+2. Starts or restores the benchmark clock.
+3. Reconciles jobs at every poll.
+4. Schedules an eligible job before submission.
+5. Submits accepted work and starts its workload driver.
+6. Synchronizes runtime records and state.
+7. Stops or drains terminal workloads and releases their capacity.
+
+Placement-only execution processes the same arrivals and releases without
+waiting for wall time, submitting jobs, or starting drivers. It checkpoints
+the aggregate plan after each completed decision.
+
+## Artifact identity
+
+Run output is keyed by every dimension that can change results:
 
 ```text
-CLI command
-  -> controller.main()
-  -> load benchmark and job definitions
-  -> load the selected scheduling method and resource inventory
-  -> start the benchmark clock
-  -> process each job at its arrival time
-       -> create scheduler-neutral job input
-       -> schedule and reserve hardware
-       -> persist the placement
-       -> submit the accepted job
-       -> start its data sender
-  -> monitor jobs and persist runtime state
-  -> stop senders and release hardware
+artifacts/<experiment>/<benchmark>/<method>/<run>/
 ```
 
-## 1. Controller initialization
+The `adhoc` experiment ID is used for direct benchmark-method selections. This
+prevents two methods running the same benchmark from sharing state or
+overwriting placement evidence.
 
-[`controller.main()`](../src/data_generation/controller.py) performs the
-top-level setup:
+Normal run artifacts include `benchmark_state.json`, `placement.json`, the
+latest `resource_map.json`, and per-job runtime files. Placement-only execution
+writes its checkpointed `placement.json` in the same selection-specific run
+directory.
 
-1. Load the repository's local `.env` file.
-2. Resolve `simulation_3h` to
-   [`benchmarks/simulation_3h/overview.yaml`](../benchmarks/simulation_3h/overview.yaml).
-3. Load and validate the benchmark and all referenced job files.
-4. Load the scheduler selected by `--method`.
-5. Enter normal execution or placement-only execution.
+## Extension rules
 
-## 2. Benchmark and job loading
-
-`load_benchmark()` reads `overview.yaml`. For every job, `load_job()` resolves
-its referenced YAML under
-[`benchmarks/simulation_3h/jobs/`](../benchmarks/simulation_3h/jobs/).
-
-Scheduler input currently comes from two benchmark layers:
-
-| Input | Authoritative source |
-|---|---|
-| Job ID and lifecycle | `overview.yaml` |
-| Model | AIPerf or batch dataset section |
-| Token shape | Job `job.features` section |
-| Online request rate | AIPerf phase |
-| Batch size and deadline | Batch dataset and overview schedule |
-| Model precision | Job `job.precision` field |
-| SLO and submission features | Job `job.features` section |
-| Latency or throughput policy | Job `job.optimization_goal` field |
-
-The loader verifies schedule windows, referenced files, supported drivers, and
-required per-job metadata.
-
-## 3. Scheduling method initialization
-
-For `--method dynamo-aic`, `load_dynamo_aic_method()` creates a fresh method
-instance for the run using:
-
-- [`resources.yaml`](../benchmarks/simulation_3h/resources.yaml): frozen
-  hardware pools and initial capacity;
-- [`methods/dynamo_aic.yaml`](../benchmarks/simulation_3h/methods/dynamo_aic.yaml):
-  AIC backend, database, and optimization defaults.
-
-Shared job, resource, candidate, and decision contracts are defined in
-[`scheduling.py`](../src/data_generation/scheduling.py). Dynamo-specific code
-is isolated under
-[`methods/dynamo_aic/`](../src/data_generation/methods/dynamo_aic/).
-
-## 4. Timed benchmark execution
-
-`run_benchmark()` creates a run directory and begins the benchmark clock. On
-each controller poll, it calls `reconcile_job()` for every job.
-
-When the current benchmark offset reaches a pending job's start time,
-`reconcile_job()` calls `start_job()`. Scheduling happens before submission or
-data generation.
-
-## 5. Per-job placement
-
-`scheduler_job()` converts the controller job into the scheduler-neutral
-`SchedulerJob` contract. `DynamoAicMethod.schedule()` then:
-
-1. Captures the current resource snapshot.
-2. Evaluates every hardware pool supported by AIC.
-3. Passes the job's model, SLO, workload, policy, and each pool's available
-   device count to AIC.
-4. Rejects configurations that violate the SLO or available capacity.
-5. Compares the feasible hardware candidates using the job's policy.
-6. Selects a winner and immediately reserves its devices.
-
-Because reservation occurs inside `schedule()`, the next arriving job observes
-the updated resource inventory.
-
-## 6. Submission and data generation
-
-If the decision is rejected, the job becomes `rejected`; no submission or
-sender is started.
-
-If the decision is accepted, `start_job()`:
-
-1. Submits the job to Tandemn.
-2. Receives a Tandemn job ID and endpoint URL.
-3. Writes a runtime AIPerf configuration containing that endpoint.
-4. Starts AIPerf as an independent child process.
-
-The controller monitors the process on subsequent polls. At the online job's
-stop offset, it stops new requests, drains the sender, and releases the
-reserved devices when the job becomes terminal.
-
-## 7. Artifacts and traceability
-
-Run data is stored under:
-
-```text
-artifacts/benchmarks/<benchmark-id>/<run-id>/
-```
-
-Normal benchmark artifacts include:
-
-```text
-benchmark_state.json
-resource_map.json
-jobs/<job-id>/placement.json
-jobs/<job-id>/runtime-aiperf.yaml
-jobs/<job-id>/process.log
-jobs/<job-id>/prompts.jsonl
-jobs/<job-id>/responses.jsonl
-```
-
-`placement.json` records the AIC request, all evaluated hardware candidates,
-predicted performance, selected parallelism, and the resource snapshots before
-and after placement. `resource_map.json` records the latest available and
-allocated capacity. `benchmark_state.json` records benchmark and job lifecycle
-state.
-
-An unplaced decision records both `failure_category` and `reason`. Capacity,
-SLO, and load infeasibility are kept distinct from unsupported models,
-unavailable models, unsupported hardware, and method errors. Candidate records
-retain the complete per-hardware error details.
-
-The benchmark artifact parent also contains `runs.json`, which indexes run IDs
-and their latest state.
-
-## Placement-only execution
-
-`run_placement_only()` processes enabled jobs in arrival order using their
-benchmark offsets without waiting for wall-clock time. It schedules and
-releases resources but never submits jobs or starts data senders.
-
-Online demand uses AIPerf's request rate and the canonical job token shape.
-Batch demand uses the dataset record count divided by its deadline and the same
-canonical job token shape.
-The simulated batch allocation is released at that deadline because AIC sizes
-the configuration to finish the work by then.
-
-In addition to per-job placement files and `resource_map.json`, this mode writes
-`placements.json`, containing every decision and the complete resource-event
-timeline for the simulated run. Each completed decision is logged to the
-terminal with its original `T+` release offset, hardware, device count,
-replica count, and parallelism. AIC's internal reports are suppressed;
-`placements.json` retains the complete metrics and candidate details. The file
-is atomically checkpointed after every decision, so completed placements remain
-available if a later AIC evaluation is interrupted.
-
-## Ownership boundaries
-
-| Component | Responsibility |
-|---|---|
-| Benchmark folder | Workload, schedule, SLO, policy, resources, method settings |
-| Controller | Clock, job lifecycle, submission, sender processes, artifacts |
-| Shared scheduling contracts | Stable interface between controller and methods |
-| Scheduler method | Candidate evaluation, selection, reservation, release |
-| AIPerf | Prompt generation and request sending |
-| Artifacts | Placement evidence, resource state, runtime state, requests, responses |
-
-New scheduler implementations should remain under
-`src/data_generation/methods/<method-name>/` and implement the shared
-`SchedulingMethod` contract without placing method-specific logic in benchmark
-loading or job execution.
+A new benchmark changes benchmark manifests and catalogs, not method code. A
+new method implements `SchedulingMethod`, adds an optional global config, and
+registers one loader; it does not add controller branches. A new comparison
+changes an experiment manifest and metric profile, not benchmark or method
+implementation.

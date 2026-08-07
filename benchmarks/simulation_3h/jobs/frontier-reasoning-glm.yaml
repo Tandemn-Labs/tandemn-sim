@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-67-2
-# Benchmark window: T+67 through T+142. Declared pattern: Bursty.
-# Priority: STANDARD. SLO: p99 TTFT 2200 ms; p99 TPOT 50 ms.
-# Trace: datasets/simulation_3h/traces/frontier_glm_reasoning_analysis.json
-# Measured: 1.641 mean RPS, 40.000 max RPS, 1.378 interarrival CV.
-# Mapping: Gamma arrivals; smoothness = 1 / interarrival CV^2.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-67-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-67-2
+  operation: base_service
+  start_at_offset_minutes: 67
+  stop_at_offset_minutes: 142
+spec:
   user_id: tenant_frontier_glm
   optimization_goal: latency
   precision: fp16
@@ -27,27 +31,26 @@ job:
     max_concurrent_streaming: 300
     target_p99_ttft_ms: 2200
     target_p99_tpot_ms: 50
-
-schemaVersion: "2.0"
-randomSeed: 102
-
-benchmark:
-  model: zai-org/GLM-4.5-Air
-  endpoint:
-    path: /v1/chat/completions
-    type: chat
-    streaming: true
-    timeout: 600
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:zai-org/GLM-4.5-Air}
-  dataset:
-    type: synthetic
-    entries: 256
-    sampling: random
-    prompts:
-    turns: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: zai-org/GLM-4.5-Air
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 600
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:zai-org/GLM-4.5-Air}
+    dataset:
+      type: synthetic
+      entries: 256
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
     - name: profiling
       type: gamma
       duration: 4500

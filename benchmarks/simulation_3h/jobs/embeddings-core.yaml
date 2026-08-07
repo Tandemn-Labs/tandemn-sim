@@ -1,10 +1,14 @@
-# Benchmark job: job-benchmark_timing_3hr-0-5
-# Benchmark window: T+0 through T+180. Declared pattern: Constant.
-# Priority: STANDARD. SLO: p99 TTFT 120 ms; p99 TPOT 1 ms.
-# Trace: datasets/simulation_3h/traces/embeddings_analysis.json
-# Measured: 0.025 mean RPS, 2.000 max RPS, 6.596 mean input tokens.
-# Mapping: fixed interarrival timing at the measured mean request rate.
-job:
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_3hr-0-5
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_3hr-0-5
+  operation: base_service
+  start_at_offset_minutes: 0
+  stop_at_offset_minutes: 180
+spec:
   user_id: tenant_embeddings
   optimization_goal: latency
   precision: fp16
@@ -27,27 +31,26 @@ job:
     max_concurrent_streaming: 40000
     target_p99_ttft_ms: 120
     target_p99_tpot_ms: 1
-
-schemaVersion: "2.0"
-randomSeed: 105
-
-benchmark:
-  model: intfloat/multilingual-e5-large
-  endpoint:
-    path: /v1/embeddings
-    type: embeddings
-    streaming: false
-    timeout: 120
-    connectionReuse: pooled
-  tokenizer:
-    name: ${TOKENIZER_NAME:intfloat/multilingual-e5-large}
-  dataset:
-    type: synthetic
-    entries: 5000
-    sampling: random
-    prompts:
-      batchSize: 1
-  phases:
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 105
+  benchmark:
+    model: intfloat/multilingual-e5-large
+    endpoint:
+      path: /v1/embeddings
+      type: embeddings
+      streaming: false
+      timeout: 120
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:intfloat/multilingual-e5-large}
+    dataset:
+      type: synthetic
+      entries: 5000
+      sampling: random
+      prompts:
+        batchSize: 1
+    phases:
     - name: profiling
       type: constant
       duration: 10800

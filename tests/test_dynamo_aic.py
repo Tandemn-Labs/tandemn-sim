@@ -12,18 +12,17 @@ from unittest import mock
 import pandas as pd
 
 from data_generation.controller import (
+    build_plan_action,
     load_benchmark,
     run_placement_only,
     scheduler_job,
 )
-from data_generation.methods.dynamo_aic.client import (
+from data_generation.methods.dynamo_aic import (
     AicEvaluationError,
     AicRequest,
     AicResult,
-    NvidiaAicClient,
-)
-from data_generation.methods.dynamo_aic.method import (
     DynamoAicMethod,
+    NvidiaAicClient,
     load_dynamo_aic_method,
 )
 from data_generation.scheduling import (
@@ -39,6 +38,18 @@ from data_generation.scheduling import (
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIRECTORY = ROOT / "benchmarks" / "simulation_3h"
+METHOD_SETTINGS: dict[str, object] = {
+    "backend": "vllm",
+    "backend_version": None,
+    "backend_versions": {
+        "h100-sxm-80gb": "0.24.0",
+        "a100-sxm-80gb": "0.22.0",
+        "l40s-48gb": "0.24.0",
+    },
+    "database_mode": "HYBRID",
+    "serving_mode": "agg",
+    "default_optimization_goal": "throughput",
+}
 
 
 class DynamoAicTests(unittest.TestCase):
@@ -56,9 +67,62 @@ class DynamoAicTests(unittest.TestCase):
             sum(pool.aic_system is not None for pool in inventory.pools),
             3,
         )
+        self.assertEqual(
+            sum(sum(pool.markets.values()) for pool in inventory.pools),
+            200,
+        )
+        h100 = inventory.pools[0]
+        self.assertEqual(h100.markets, {"reserved": 24, "on_demand": 8})
+        self.assertEqual(
+            h100.regions,
+            {"us-east": 16, "eu-west": 8, "apac": 8},
+        )
+
+    def test_inventory_tracks_region_and_market_pressure_together(self) -> None:
+        inventory = load_resource_inventory(BENCHMARK_DIRECTORY / "resources.yaml")
+
+        inventory.reserve(
+            "east-job",
+            "h100-sxm-80gb",
+            "us-east",
+            "reserved",
+            16,
+        )
+        inventory.reserve(
+            "west-job",
+            "h100-sxm-80gb",
+            "eu-west",
+            "on_demand",
+            8,
+        )
+
+        h100_regions = {
+            candidate.region: candidate.available_devices
+            for candidate in inventory.regional_pools()
+            if candidate.pool.pool_id == "h100-sxm-80gb"
+        }
+        self.assertEqual(
+            h100_regions,
+            {"us-east": 0, "eu-west": 0, "apac": 8},
+        )
+        h100 = inventory.snapshot()["pools"][0]
+        self.assertEqual(h100["available_devices"], 8)
+        self.assertEqual(
+            h100["markets"]["reserved"]["available_devices"],
+            8,
+        )
+        self.assertEqual(
+            h100["markets"]["on_demand"]["available_devices"],
+            0,
+        )
+
+        inventory.release("east-job")
+        inventory.release("west-job")
+        restored_h100 = inventory.snapshot()["pools"][0]
+        self.assertEqual(restored_h100["available_devices"], 32)
 
     def test_three_hour_jobs_explicitly_define_policy_by_kind(self) -> None:
-        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
 
         for job in benchmark.jobs:
             expected = (
@@ -76,6 +140,7 @@ class DynamoAicTests(unittest.TestCase):
         client = FakeAicClient()
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=client,
         )
 
@@ -84,25 +149,47 @@ class DynamoAicTests(unittest.TestCase):
         self.assertEqual(decision.status, DecisionStatus.ACCEPTED)
         self.assertEqual(decision.pool_id, "h100-sxm-80gb")
         self.assertEqual(decision.devices, 8)
-        self.assertEqual(len(decision.candidates), 7)
-        self.assertEqual(len(client.requests), 3)
+        self.assertIn(decision.region, {"us-east", "eu-west", "apac"})
+        self.assertIn(decision.market, {"reserved", "on_demand"})
+        self.assertEqual(len(decision.candidates), 18)
+        self.assertEqual(len(client.requests), 9)
         self.assertEqual(
             sum(
                 candidate.status == CandidateStatus.UNSUPPORTED
                 for candidate in decision.candidates
             ),
-            4,
+            9,
         )
         h100 = decision.resource_snapshot_after["pools"][0]
         self.assertEqual(h100["available_devices"], 24)
+        self.assertEqual(
+            h100["regions"][decision.region]["available_devices"],
+            h100["regions"][decision.region]["total_devices"] - 8,
+        )
+        self.assertEqual(
+            h100["markets"][decision.market]["available_devices"],
+            h100["markets"][decision.market]["total_devices"] - 8,
+        )
+        allocation = decision.resource_snapshot_after["allocations"]["throughput-job"]
+        self.assertEqual(allocation["region"], decision.region)
+        self.assertEqual(allocation["market"], decision.market)
 
         method.release("throughput-job")
         released_h100 = method.resource_snapshot()["pools"][0]
         self.assertEqual(released_h100["available_devices"], 32)
+        self.assertEqual(
+            released_h100["regions"][decision.region]["available_devices"],
+            released_h100["regions"][decision.region]["total_devices"],
+        )
+        self.assertEqual(
+            released_h100["markets"][decision.market]["available_devices"],
+            released_h100["markets"][decision.market]["total_devices"],
+        )
 
     def test_rejection_documents_insufficient_capacity(self) -> None:
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=FakeAicClient(devices=64),
         )
 
@@ -122,6 +209,7 @@ class DynamoAicTests(unittest.TestCase):
     def test_rejection_documents_unsupported_model(self) -> None:
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=FailingAicClient(
                 "The model's architecture Phi3ForCausalLM is not supported"
             ),
@@ -138,12 +226,31 @@ class DynamoAicTests(unittest.TestCase):
             "AIC does not support model architecture Phi3ForCausalLM",
         )
 
+    def test_empty_aic_result_is_load_infeasible(self) -> None:
+        method = load_dynamo_aic_method(
+            BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
+            client=FailingAicClient("AIC returned no aggregate configuration"),
+        )
+
+        decision = method.schedule(test_job("infeasible-job"))
+
+        self.assertEqual(
+            decision.failure_category,
+            DecisionFailureCategory.LOAD_INFEASIBLE,
+        )
+        self.assertEqual(
+            decision.reason,
+            "AIC found no configuration meeting the job load and SLO",
+        )
+
     def test_first_job_uses_canonical_rate_and_token_shape(self) -> None:
-        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
         first_job = benchmark.jobs[0]
         client = FakeAicClient(devices=1)
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=client,
         )
 
@@ -154,18 +261,23 @@ class DynamoAicTests(unittest.TestCase):
         self.assertIsNone(request.target_concurrency)
         self.assertEqual(request.input_tokens, 900)
         self.assertEqual(request.output_tokens, 300)
-        self.assertEqual(request.available_devices, 32)
+        self.assertEqual(request.available_devices, 16)
+        self.assertEqual(
+            [request.available_devices for request in client.requests[:3]],
+            [16, 8, 8],
+        )
         self.assertEqual(
             request.optimization_goal,
             OptimizationGoal.LATENCY,
         )
 
     def test_batch_job_uses_deadline_load_and_throughput_policy(self) -> None:
-        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
         batch_job = next(job for job in benchmark.jobs if job.kind.value == "batch")
         client = FakeAicClient(devices=1)
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=client,
         )
 
@@ -180,6 +292,7 @@ class DynamoAicTests(unittest.TestCase):
     def test_latency_goal_selects_lowest_aic_ttft(self) -> None:
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=FakeAicClient(a100_ttft_ms=0.5),
         )
 
@@ -248,26 +361,30 @@ class DynamoAicTests(unittest.TestCase):
     def test_next_job_observes_the_updated_capacity(self) -> None:
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
-            client=FakeAicClient(h100_devices=32),
+            METHOD_SETTINGS,
+            client=FakeAicClient(devices=8),
         )
 
         first = method.schedule(test_job("first-job"))
         second = method.schedule(test_job("second-job"))
 
         self.assertEqual(first.pool_id, "h100-sxm-80gb")
-        self.assertEqual(second.pool_id, "a100-sxm-80gb")
+        self.assertEqual(second.pool_id, "h100-sxm-80gb")
         second_h100 = next(
             candidate
             for candidate in second.candidates
-            if candidate.pool_id == "h100-sxm-80gb"
+            if candidate.pool_id == "h100-sxm-80gb" and candidate.region == first.region
         )
-        self.assertEqual(second_h100.status, CandidateStatus.INFEASIBLE)
-        self.assertEqual(second_h100.available_devices, 0)
+        region_total = next(
+            pool for pool in method.inventory.pools if pool.pool_id == "h100-sxm-80gb"
+        ).regions[first.region or ""]
+        self.assertEqual(second_h100.available_devices, region_total - 8)
 
     def test_placement_only_simulates_without_starting_data_senders(self) -> None:
-        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
         method = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=FakeAicClient(devices=1),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -285,39 +402,91 @@ class DynamoAicTests(unittest.TestCase):
                 )
 
             run_directory = (
-                artifact_root / "benchmarks" / "simulation_3h" / "placement-test"
+                artifact_root
+                / "adhoc"
+                / "simulation_3h"
+                / "dynamo_aic"
+                / "placement-test"
             )
-            document = json.loads(
-                (run_directory / "placements.json").read_text(encoding="utf-8")
+            plans = json.loads(
+                (run_directory / "placement.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(summary.decisions), 26)
-            self.assertEqual(len(document["decisions"]), 26)
-            first_job_directory = run_directory / "jobs" / next(iter(summary.decisions))
-            self.assertFalse((first_job_directory / "prompts.jsonl").exists())
-            final_h100 = document["final_resource_snapshot"]["pools"][0]
-            self.assertEqual(final_h100["available_devices"], 32)
-            placement_logs = [
-                line for line in captured_logs.output if "[placement]" in line
-            ]
-            self.assertEqual(len(placement_logs), 26)
-            self.assertIn("T+0m", placement_logs[0])
-            self.assertIn("parallel=tp1", placement_logs[0])
-            self.assertNotIn("ttft", placement_logs[0])
-            first_decision = document["decisions"][0]
-            self.assertEqual(first_decision["ttft_ms"], 1.0)
-            self.assertEqual(first_decision["tpot_ms"], 0.5)
-            first_batch_release = next(
-                event
-                for event in document["resource_events"]
-                if event["event"] == "released"
-                and event["job_id"] == "job-benchmark_timing_3hr-15-1"
+            self.assertEqual(
+                sorted(path.name for path in run_directory.iterdir()),
+                ["placement.json"],
             )
-            self.assertEqual(first_batch_release["offset_minutes"], 150)
+            self.assertEqual(plans["schema_version"], "cluster-plans/v1")
+            self.assertEqual(len(plans["ticks"]), 20)
+            self.assertEqual(len(plans["ticks"][0]["plan"]["actions"]), 5)
+            self.assertEqual(len(plans["ticks"][-1]["plan"]["actions"]), 26)
+            final_h100 = method.resource_snapshot()["pools"][0]
+            self.assertEqual(final_h100["available_devices"], 32)
+            placement_logs = [line for line in captured_logs.output if "[plan]" in line]
+            self.assertEqual(len(placement_logs), 20)
+            self.assertIn("T+0m", placement_logs[0])
+            self.assertIn('"type": "place"', placement_logs[0])
+            self.assertIn('"tp": 1', placement_logs[0])
+            self.assertIn('"target_p99_ttft_ms": 700.0', placement_logs[0])
+            first_action = plans["ticks"][0]["plan"]["actions"][0]
+            self.assertEqual(first_action["type"], "place")
+            self.assertEqual(first_action["tenant_id"], "tenant_chat_free")
+            self.assertIsNone(first_action["target_tps"])
+            self.assertEqual(first_action["target_p99_ttft_ms"], 700.0)
+            self.assertEqual(first_action["ladder"][0]["config"]["gpu_count"], 1)
+            second_tick_actions = plans["ticks"][1]["plan"]["actions"]
+            self.assertEqual(
+                [action["type"] for action in second_tick_actions[:5]],
+                ["keep"] * 5,
+            )
+            self.assertEqual(
+                [action["type"] for action in second_tick_actions[5:]],
+                ["place"] * 3,
+            )
+            final_actions = plans["ticks"][-1]["plan"]["actions"]
+            self.assertEqual(
+                {action["type"] for action in final_actions},
+                {"preempt"},
+            )
+            batch_action = next(
+                action
+                for action in final_actions
+                if action["job_id"] == "job-benchmark_timing_3hr-15-1"
+            )
+            self.assertAlmostEqual(batch_action["target_tps"], 2133.333)
+            first_decision = next(iter(summary.decisions.values()))
+            self.assertEqual(first_decision.ttft_ms, 1.0)
+            self.assertEqual(first_decision.tpot_ms, 0.5)
+            batch_release_tick = next(
+                tick for tick in plans["ticks"] if tick["offset_minutes"] == 150
+            )
+            batch_release_action = next(
+                action
+                for action in batch_release_tick["plan"]["actions"]
+                if action["job_id"] == "job-benchmark_timing_3hr-15-1"
+            )
+            self.assertEqual(batch_release_action["type"], "preempt")
+
+    def test_rejected_decision_becomes_a_deferred_plan_action(self) -> None:
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
+        method = load_dynamo_aic_method(
+            BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
+            client=FakeAicClient(devices=64),
+        )
+        job = benchmark.jobs[0]
+
+        action = build_plan_action(job, method.schedule(scheduler_job(job)))
+
+        self.assertEqual(action["type"], "defer")
+        self.assertEqual(action["ladder"], [])
+        self.assertIn("Deferred (insufficient_capacity)", action["rationale"])
 
     def test_placement_only_checkpoints_each_completed_decision(self) -> None:
-        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "overview.yaml")
+        benchmark = load_benchmark(BENCHMARK_DIRECTORY / "benchmark.yaml")
         delegate = load_dynamo_aic_method(
             BENCHMARK_DIRECTORY,
+            METHOD_SETTINGS,
             client=FakeAicClient(devices=1),
         )
         method = FailingAfterOneMethod(delegate)
@@ -334,16 +503,16 @@ class DynamoAicTests(unittest.TestCase):
 
             placement_path = (
                 artifact_root
-                / "benchmarks"
+                / "adhoc"
                 / "simulation_3h"
+                / "failing_after_one"
                 / "interrupted-placement-test"
-                / "placements.json"
+                / "placement.json"
             )
             document = json.loads(placement_path.read_text(encoding="utf-8"))
-            self.assertEqual(len(document["decisions"]), 1)
             self.assertEqual(
-                document["decisions"][0]["job_id"],
-                benchmark.jobs[0].job_id,
+                len(document["ticks"][0]["plan"]["actions"]),
+                1,
             )
 
 

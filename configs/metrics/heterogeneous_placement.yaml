@@ -1,0 +1,11 @@
+schema_version: "metric-profile/v1"
+
+metrics:
+  - throughput_tokens_per_second
+  - prompt_latency_p95
+  - decode_latency_p95
+  - end_to_end_latency_p95
+  - total_cost
+  - utilization_by_sku
+  - planning_time
+  - feasible_plan_rate
