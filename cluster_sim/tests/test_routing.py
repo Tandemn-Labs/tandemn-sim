@@ -36,7 +36,7 @@ class StickyRoundRobinRouterTest(unittest.TestCase):
         first = router.route(
             "job",
             (request("s0"), request("s1"), request("s2"), request("s3")),
-            ("rank_0", "rank_1", "rank_2"),
+            {"rank_0": 1.0, "rank_1": 1.0, "rank_2": 1.0},
         )
 
         self.assertEqual([item.session_name for item in first["rank_0"]], ["s0", "s3"])
@@ -46,7 +46,7 @@ class StickyRoundRobinRouterTest(unittest.TestCase):
         second = router.route(
             "job",
             (request("s1", 1), request("s4")),
-            ("rank_0", "rank_1", "rank_2"),
+            {"rank_0": 1.0, "rank_1": 1.0, "rank_2": 1.0},
         )
 
         self.assertEqual([item.session_name for item in second["rank_1"]], ["s1", "s4"])
@@ -54,17 +54,28 @@ class StickyRoundRobinRouterTest(unittest.TestCase):
     def test_removed_rank_reassigns_its_sessions(self) -> None:
         """Drop a stale assignment so the next session turn gets a live rank."""
         router = StickyRoundRobinRouter()
-        router.route("job", (request("s0"), request("s1")), ("rank_0", "rank_1"))
+        router.route("job", (request("s0"), request("s1")), {"rank_0": 1.0, "rank_1": 1.0})
         router.remove_rank("job", "rank_1")
 
-        routed = router.route("job", (request("s1", 1),), ("rank_0", "rank_2"))
+        routed = router.route("job", (request("s1", 1),), {"rank_0": 1.0, "rank_2": 1.0})
 
         self.assertEqual([item.session_name for item in routed["rank_0"]], ["s1"])
 
-    def test_duplicate_ranks_are_rejected(self) -> None:
-        """Reject ambiguous rank names before assigning any session."""
+    def test_negative_share_is_rejected(self) -> None:
+        """Reject an invalid Koi rank traffic share."""
         with self.assertRaises(ValueError):
-            StickyRoundRobinRouter().route("job", (), ("rank_0", "rank_0"))
+            StickyRoundRobinRouter().route("job", (), {"rank_0": -1.0})
+
+    def test_new_sessions_follow_koi_traffic_shares(self) -> None:
+        """Route ten new sessions in the exact 60/40 Koi rank proportion."""
+        routed = StickyRoundRobinRouter().route(
+            "job",
+            tuple(request(f"s{number}") for number in range(10)),
+            {"rank_0": 0.6, "rank_1": 0.4},
+        )
+
+        self.assertEqual(len(routed["rank_0"]), 6)
+        self.assertEqual(len(routed["rank_1"]), 4)
 
 
 if __name__ == "__main__":
