@@ -5,20 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "data-generation"
 version = "0.1.0"
-description = "Run benchmark jobs and generate their request data."
+description = "Launch AIPerf for one benchmark job."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "aiperf==0.11.0",
-    "python-dotenv>=1.0,<2",
-    "tandemn-orca",
-    "tandemn-store",
     "pyyaml>=6.0,<7",
 ]
 
 [project.scripts]
-benchmark = "data_generation.cli:main"
-controller = "data_generation.cli:main"
+controller = "data_generation.controller:main"
 
 [dependency-groups]
 dev = [
@@ -27,20 +23,8 @@ dev = [
   "ruff>=0.12",
   "types-pyyaml>=6.0",
 ]
-openai = [
-  "openai>=2,<3",
-]
-dynamo = [
-  "aiconfigurator @ git+https://github.com/ai-dynamo/aiconfigurator.git@4b0a812c3fb9ea0b679206af442a7107a2583b07",
-  "aiconfigurator-core @ git+https://github.com/ai-dynamo/aiconfigurator.git@4b0a812c3fb9ea0b679206af442a7107a2583b07#subdirectory=aic-core",
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.uv.sources]
-tandemn-orca = { path = "../Tandemn-orca", editable = true }
-tandemn-store = { path = "../tandemn-store", editable = true }
 
 [tool.ruff]
 line-length = 88
@@ -53,7 +37,3 @@ select = ["B", "E", "F", "I", "UP"]
 python_version = "3.12"
 files = ["src"]
 strict = true
-
-[[tool.mypy.overrides]]
-module = ["aiconfigurator.*", "aiperf.*", "tandemn_system_data.*"]
-ignore_missing_imports = true

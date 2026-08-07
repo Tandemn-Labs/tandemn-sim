@@ -6,12 +6,12 @@ import argparse
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from models import Scenario
 from planning import PlannerContext, build_planner
 from runner import ClusterSimulator, LogicalClock
 from scenario import load_scenario
-
 
 ROOT = Path(__file__).resolve().parents[1]
 TANDEMN_ROOT = ROOT.parent
@@ -53,7 +53,6 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--parallel-ranks-per-job must be positive")
 
     from tandemn_system_data.clients import PostgresClient
-    from tandemn_system_data.ids import new_job_id
 
     scenario = _fresh_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
     clock = LogicalClock(epoch.astimezone(UTC))
@@ -88,20 +87,18 @@ def _benchmark_path(value: str) -> Path:
     path = Path(value)
     if path.is_file():
         return path
-    return ROOT / "benchmarks" / value / "overview.yaml"
+    return ROOT / "benchmarks" / value / "benchmark.yaml"
 
 
 def _fresh_store_job_ids(scenario: Scenario) -> Scenario:
     """Assign fresh Store IDs so repeated runs never collide with old jobs."""
-    from tandemn_system_data.ids import new_job_id
-
     return replace(
         scenario,
         online_jobs=tuple(
-            replace(job, store_job_id=new_job_id()) for job in scenario.online_jobs
+            replace(job, store_job_id=f"job-{uuid4()}") for job in scenario.online_jobs
         ),
         batch_jobs=tuple(
-            replace(job, store_job_id=new_job_id()) for job in scenario.batch_jobs
+            replace(job, store_job_id=f"job-{uuid4()}") for job in scenario.batch_jobs
         ),
     )
 

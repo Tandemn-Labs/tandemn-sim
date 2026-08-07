@@ -41,12 +41,12 @@ class CliTest(unittest.TestCase):
         """Resolve the existing benchmark name without planner-specific logic."""
         self.assertEqual(
             _benchmark_path("simulation_3h"),
-            ROOT / "benchmarks" / "simulation_3h" / "overview.yaml",
+            ROOT / "benchmarks" / "simulation_3h" / "benchmark.yaml",
         )
 
     def test_each_run_receives_fresh_store_job_ids(self) -> None:
         """Avoid Store primary-key collisions when repeating one benchmark run."""
-        scenario = load_scenario(ROOT / "benchmarks" / "simulation_3h" / "overview.yaml")
+        scenario = load_scenario(ROOT / "benchmarks" / "simulation_3h" / "benchmark.yaml")
         fresh = _fresh_store_job_ids(scenario)
 
         original = (*scenario.online_jobs, *scenario.batch_jobs)

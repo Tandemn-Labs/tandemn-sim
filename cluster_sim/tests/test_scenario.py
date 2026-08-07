@@ -27,7 +27,7 @@ class ScenarioTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Load the benchmark once for deterministic workload checks."""
-        cls.scenario = load_scenario(ROOT / "benchmarks/simulation_3h/overview.yaml")
+        cls.scenario = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
 
     def test_loads_all_jobs(self) -> None:
         """Load the benchmark's complete online and batch workload set."""
