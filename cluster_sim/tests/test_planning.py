@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from planning import KoiPlannerDriver
+from planning import KoiPlannerDriver, SimulationPlanExecutor, normalize_plan_for_simulation
 
 
 class KoiPlannerDriverTest(unittest.TestCase):
@@ -55,6 +55,64 @@ class KoiPlannerDriverTest(unittest.TestCase):
         self.assertTrue(result.degraded)
         self.assertIn("planner failed", result.error)
         self.assertEqual(result.plans[0].plan_id, "plan_fallback")
+
+    def test_multi_rank_arrival_rates_become_normalized_shares(self) -> None:
+        """Preserve Koi's 60/40 rank sizing decision for next-tick deployment X."""
+        first = SimpleNamespace(config={"_arrival_share_rps": 60.0})
+        second = SimpleNamespace(config={"_arrival_share_rps": 40.0})
+        plan = SimpleNamespace(actions=[SimpleNamespace(type="place", ladder=[first, second])])
+
+        normalized = normalize_plan_for_simulation(plan)
+
+        ranks = normalized.actions[0].ladder
+        self.assertEqual(ranks[0].config["rank_traffic_share"], 0.6)
+        self.assertEqual(ranks[1].config["rank_traffic_share"], 0.4)
+        self.assertNotIn("rank_traffic_share", first.config)
+
+    def test_single_rank_share_is_one(self) -> None:
+        """Declare complete job traffic for a one-rank placement."""
+        plan = SimpleNamespace(
+            actions=[SimpleNamespace(type="place", ladder=[SimpleNamespace(config={})])]
+        )
+
+        normalized = normalize_plan_for_simulation(plan)
+
+        self.assertEqual(normalized.actions[0].ladder[0].config["rank_traffic_share"], 1.0)
+
+    def test_multi_rank_without_koi_share_is_rejected(self) -> None:
+        """Never invent traffic allocation when Koi supplied none."""
+        plan = SimpleNamespace(
+            actions=[
+                SimpleNamespace(
+                    type="place",
+                    ladder=[SimpleNamespace(config={}), SimpleNamespace(config={})],
+                )
+            ]
+        )
+
+        with self.assertRaises(ValueError):
+            normalize_plan_for_simulation(plan)
+
+    def test_executor_delegates_normalized_plan(self) -> None:
+        """Write only the normalized simulation plan through Koi's Store executor."""
+        captured = []
+        delegate = SimpleNamespace(send_to_executor=lambda plan: captured.append(plan) or [{"plan_id": "p"}])
+        plan = SimpleNamespace(
+            actions=[
+                SimpleNamespace(
+                    type="place",
+                    ladder=[
+                        SimpleNamespace(config={"_arrival_share_rps": 1}),
+                        SimpleNamespace(config={"_arrival_share_rps": 3}),
+                    ],
+                )
+            ]
+        )
+
+        result = SimulationPlanExecutor(delegate).send_to_executor(plan)
+
+        self.assertEqual(result, [{"plan_id": "p"}])
+        self.assertEqual(captured[0].actions[0].ladder[0].config["rank_traffic_share"], 0.25)
 
 
 if __name__ == "__main__":
