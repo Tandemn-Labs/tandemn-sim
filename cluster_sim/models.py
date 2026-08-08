@@ -89,6 +89,16 @@ class RankDeployment:
 
 
 @dataclass(frozen=True)
+class RankMetricSample:
+    """One periodic LLMServingSim metric payload for one rank instance."""
+
+    sim_time_ns: int
+    sample_interval_ns: int
+    instance_id: int
+    metrics: dict[str, float | None]
+
+
+@dataclass(frozen=True)
 class CreatedPlan:
     """Reference one Store plan created during a logical control tick."""
 

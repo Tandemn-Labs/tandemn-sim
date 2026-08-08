@@ -15,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from models import BatchProgress, Scenario
+from models import BatchProgress, RankMetricSample, Scenario
 from routing import StickyRoundRobinRouter
 from runner import ClusterSimulator, LogicalClock, advance_batch_progress
 from scenario import load_scenario
@@ -139,7 +139,14 @@ class RunnerDataPlaneTest(unittest.TestCase):
                             "TPOT": 100_000,
                         },
                     ),
-                    {0: {"kv_cache_util": 0.5}},
+                    (
+                        RankMetricSample(
+                            10_000_000_000,
+                            10_000_000_000,
+                            0,
+                            {"kv_cache_util": 0.5},
+                        ),
+                    ),
                     "",
                     "",
                 ),
@@ -174,7 +181,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 }
                 for _ in range(20)
             ),
-            metrics_by_instance={},
+            metric_samples=(),
             stdout="",
             stderr="",
         )
