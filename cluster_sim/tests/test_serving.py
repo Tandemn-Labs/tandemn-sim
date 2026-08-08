@@ -16,7 +16,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from models import Request
+from models import RankMetricSample, Request
 from serving import (
     CSV_HEADER,
     RankRun,
@@ -28,6 +28,7 @@ from serving import (
     parse_rank_result,
     prepare_rank_run,
     resolve_rank_hardware,
+    _tick_kvcache_hit_rate,
     write_rank_workload,
 )
 
@@ -153,6 +154,7 @@ class ServingInputTest(unittest.TestCase):
             self.assertTrue((run_dir / "cluster.json").is_file())
             self.assertTrue((run_dir / "workload.jsonl").is_file())
             self.assertEqual(rank_run.output_path, run_dir / "requests.csv")
+            self.assertEqual(rank_run.metrics_path, run_dir / "metrics.jsonl")
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""
@@ -177,9 +179,46 @@ class ServingInputTest(unittest.TestCase):
                             "TTFT": 100,
                             "TPOT": 10,
                             "ITL": 10,
+                            "npu_prefix_hit_tokens": 50,
+                            "prefix_cache_requested_tokens": 100,
+                            "prefix_cache_hit_ratio": 0.5,
                         }
                     )
-            rank_run = RankRun(deployment, (), output_path, 2, 30)
+            metrics_path = Path(directory) / "metrics.jsonl"
+            metrics_path.write_text(
+                "\n".join(
+                    (
+                        json.dumps(
+                            {
+                                "sim_time_ns": 10_000_000_000,
+                                "sample_interval_ns": 10_000_000_000,
+                                "sample_kind": "periodic",
+                                "instance_id": 0,
+                                "kv_cache_util": 0.5,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "sim_time_ns": 10_000_000_000,
+                                "sample_interval_ns": 10_000_000_000,
+                                "sample_kind": "periodic",
+                                "instance_id": 1,
+                                "kv_cache_util": 0.6,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "sim_time_ns": 11_000_000_000,
+                                "sample_kind": "final",
+                                "instance_id": 0,
+                                "kv_cache_util": 0.0,
+                            }
+                        ),
+                    )
+                )
+                + "\n"
+            )
+            rank_run = RankRun(deployment, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (),
                 0,
@@ -195,8 +234,9 @@ class ServingInputTest(unittest.TestCase):
             result = parse_rank_result(rank_run, completed)
 
         self.assertEqual(len(result.request_rows), 2)
-        self.assertEqual(result.metrics_by_instance[0]["kv_cache_util"], 0.5)
-        self.assertEqual(result.metrics_by_instance[1]["kv_cache_util"], 0.6)
+        self.assertEqual(len(result.metric_samples), 2)
+        self.assertEqual(result.metric_samples[0].metrics["kv_cache_util"], 0.5)
+        self.assertEqual(result.metric_samples[1].metrics["kv_cache_util"], 0.6)
 
     def test_parse_rank_result_rejects_missing_replica_metrics(self) -> None:
         """Require final runtime metrics from every chain replica."""
@@ -208,7 +248,19 @@ class ServingInputTest(unittest.TestCase):
                 writer.writeheader()
                 for request_id in range(2):
                     writer.writerow(dict.fromkeys(CSV_HEADER, request_id))
-            rank_run = RankRun(deployment, (), output_path, 2, 30)
+            metrics_path = Path(directory) / "metrics.jsonl"
+            metrics_path.write_text(
+                json.dumps(
+                    {
+                        "sim_time_ns": 10_000_000_000,
+                        "sample_interval_ns": 10_000_000_000,
+                        "sample_kind": "periodic",
+                        "instance_id": 0,
+                    }
+                )
+                + "\n"
+            )
+            rank_run = RankRun(deployment, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (),
                 0,
@@ -231,6 +283,9 @@ class ServingInputTest(unittest.TestCase):
                     "end_time": 2_000_000_000,
                     "TTFT": 100_000_000,
                     "TPOT": 10_000_000,
+                    "npu_prefix_hit_tokens": 25,
+                    "prefix_cache_requested_tokens": 100,
+                    "prefix_cache_hit_ratio": 0.25,
                 },
                 {
                     "instance id": 1,
@@ -239,12 +294,15 @@ class ServingInputTest(unittest.TestCase):
                     "end_time": 2_000_000_000,
                     "TTFT": 200_000_000,
                     "TPOT": 20_000_000,
+                    "npu_prefix_hit_tokens": 100,
+                    "prefix_cache_requested_tokens": 200,
+                    "prefix_cache_hit_ratio": 0.5,
                 },
             ),
-            metrics_by_instance={
-                0: {"kv_cache_util": 0.5},
-                1: {"kv_cache_util": 0.7},
-            },
+            metric_samples=(
+                RankMetricSample(10_000_000_000, 10_000_000_000, 0, {"kv_cache_util": 0.5}),
+                RankMetricSample(10_000_000_000, 10_000_000_000, 1, {"kv_cache_util": 0.7}),
+            ),
             stdout="",
             stderr="",
         )
@@ -253,16 +311,36 @@ class ServingInputTest(unittest.TestCase):
             (deployment,),
             (result,),
             datetime(2026, 1, 1, tzinfo=UTC),
+            300_000_000_000,
             {"sim.h100.8gpu": 10.0},
         )
 
-        self.assertEqual(len(metrics), 4)
-        chain_a = [metric for metric in metrics if metric.chain_id == "chain_a"]
+        periodic = [metric for metric in metrics if metric.ts == datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)]
+        self.assertEqual(len(periodic), 4)
+        chain_a = [metric for metric in periodic if metric.chain_id == "chain_a"]
         self.assertEqual([metric.local_rank for metric in chain_a], ["0", "1"])
         self.assertEqual(chain_a[0].rank_id, "rank_0")
-        self.assertEqual(chain_a[0].throughput_token_per_sec, 50.0)
+        self.assertEqual(chain_a[0].throughput_token_per_sec, 10.0)
         self.assertEqual(chain_a[0].p99_ttft_ms, 100.0)
         self.assertEqual(chain_a[0].kv_cache_util, 0.5)
+
+        tick_summary = [metric for metric in metrics if metric.kvcache_hit_rate is not None]
+        self.assertEqual(len(tick_summary), 4)
+        self.assertTrue(all(metric.kvcache_hit_rate == 125 / 300 for metric in tick_summary))
+        self.assertTrue(all(metric.kv_cache_util is None for metric in tick_summary))
+
+    def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
+        rows = (
+            {"npu_prefix_hit_tokens": 1, "prefix_cache_requested_tokens": 10},
+            {"npu_prefix_hit_tokens": 90, "prefix_cache_requested_tokens": 90},
+        )
+
+        self.assertEqual(_tick_kvcache_hit_rate(rows), 91 / 100)
+        self.assertIsNone(_tick_kvcache_hit_rate(()))
+        with self.assertRaises(ValueError):
+            _tick_kvcache_hit_rate(
+                ({"npu_prefix_hit_tokens": 11, "prefix_cache_requested_tokens": 10},)
+            )
 
     def test_commit_tick_metrics_uses_one_store_batch(self) -> None:
         """Delegate one completed tick's fully staged metrics to put_many once."""

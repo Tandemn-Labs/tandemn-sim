@@ -5,16 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import csv
-import re
+import math
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from models import ChainBinding, RankDeployment, Request
+from models import ChainBinding, RankDeployment, RankMetricSample, Request
 
 
 CSV_HEADER = [
@@ -30,9 +30,12 @@ CSV_HEADER = [
     "TTFT",
     "TPOT",
     "ITL",
+    "npu_prefix_hit_tokens",
+    "prefix_cache_requested_tokens",
+    "prefix_cache_hit_ratio",
 ]
-METRICS_LINE = re.compile(r"^SIM_METRICS instance=(\d+) (.*)$", re.MULTILINE)
 SECOND = 1_000_000_000
+SAMPLE_BUCKET_NS = 10 * SECOND
 PROFILE_ALIASES = {
     "H100-SXM-80GB": "H100",
     "A100-SXM-80GB": "A100-80GB",
@@ -51,6 +54,7 @@ class RankRun:
     deployment: RankDeployment
     command: tuple[str, ...]
     output_path: Path
+    metrics_path: Path
     request_count: int
     timeout_seconds: float
     cleanup_dir: Path | None = None
@@ -58,11 +62,11 @@ class RankRun:
 
 @dataclass(frozen=True)
 class RankResult:
-    """Validated request results and final runtime metrics for one rank."""
+    """Validated request results and periodic runtime metrics for one rank."""
 
     deployment: RankDeployment
     request_rows: tuple[dict[str, float], ...]
-    metrics_by_instance: dict[int, dict[str, float | None]]
+    metric_samples: tuple[RankMetricSample, ...]
     stdout: str
     stderr: str
 
@@ -211,6 +215,7 @@ def build_rank_command(
     cluster_path: Path,
     workload_path: Path,
     output_path: Path,
+    metrics_path: Path,
     run_name: str,
     request_count: int,
 ) -> tuple[str, ...]:
@@ -239,6 +244,8 @@ def build_rank_command(
         relative(workload_path),
         "--output",
         relative(output_path),
+        "--metrics-output",
+        relative(metrics_path),
         "--num-reqs",
         str(request_count),
         "--request-routing-policy",
@@ -267,6 +274,7 @@ def prepare_rank_run(
     cluster_path = run_dir / "cluster.json"
     workload_path = run_dir / "workload.jsonl"
     output_path = run_dir / "requests.csv"
+    metrics_path = run_dir / "metrics.jsonl"
     cluster_path.write_text(json.dumps(build_rank_cluster(deployment, hardware)))
     write_rank_workload(requests, workload_path, tick_start_ns)
     return RankRun(
@@ -277,10 +285,12 @@ def prepare_rank_run(
             cluster_path,
             workload_path,
             output_path,
+            metrics_path,
             run_name,
             len(requests),
         ),
         output_path,
+        metrics_path,
         len(requests),
         timeout_seconds,
         run_dir,
@@ -318,7 +328,7 @@ def parse_rank_result(
     rank_run: RankRun,
     completed: subprocess.CompletedProcess[str],
 ) -> RankResult:
-    """Parse one rank's request CSV and final SIM_METRICS output."""
+    """Parse one rank's request CSV and periodic metrics artifact."""
     output = f"{completed.stdout}\n{completed.stderr}"
     if completed.returncode:
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
@@ -337,17 +347,12 @@ def parse_rank_result(
     if len({row["request id"] for row in rows}) != len(rows):
         raise ValueError("LLMServingSim returned duplicate request IDs")
 
-    metrics = {
-        instance: values
-        for instance, values in (_metrics(match) for match in METRICS_LINE.finditer(output))
-    }
     expected_instances = set(range(len(rank_run.deployment.chains)))
-    if set(metrics) != expected_instances:
-        raise ValueError(f"missing final metrics for rank instances: {expected_instances - set(metrics)}")
     if any(int(row["instance id"]) not in expected_instances for row in rows):
         raise ValueError("LLMServingSim returned an unknown instance ID")
+    metric_samples = _read_metric_samples(rank_run.metrics_path, expected_instances)
 
-    return RankResult(rank_run.deployment, rows, metrics, completed.stdout, completed.stderr)
+    return RankResult(rank_run.deployment, rows, metric_samples, completed.stdout, completed.stderr)
 
 
 def _row(row: Mapping[str, str]) -> dict[str, float]:
@@ -362,31 +367,68 @@ def _row(row: Mapping[str, str]) -> dict[str, float]:
         raise ValueError("LLMServingSim CSV contains a nonnumeric value") from error
 
 
-def _metrics(match: re.Match[str]) -> tuple[int, dict[str, float | None]]:
-    """Parse one final runtime-metrics line for one simulator instance."""
-    values: dict[str, float | None] = {}
-    for pair in match.group(2).split():
-        key, value = pair.split("=", 1)
-        values[key] = None if value == "N/A" else float(value)
-    return int(match.group(1)), values
+def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[RankMetricSample, ...]:
+    """Read every periodic LLMServingSim JSONL metric sample for one rank."""
+    if not path.is_file():
+        raise ValueError(f"LLMServingSim wrote no metrics JSONL: {path}")
+
+    samples = []
+    by_time: dict[int, set[int]] = {}
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid metrics JSONL at line {line_number}") from error
+        if not isinstance(row, dict):
+            raise ValueError(f"metrics JSONL line {line_number} must be an object")
+        if row.get("sample_kind") not in {"periodic", "final"}:
+            raise ValueError(f"metrics JSONL line {line_number} has invalid sample_kind")
+        if row["sample_kind"] == "final":
+            continue
+        try:
+            sim_time_ns = int(row["sim_time_ns"])
+            sample_interval_ns = int(row["sample_interval_ns"])
+            instance_id = int(row["instance_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"metrics JSONL line {line_number} has invalid identity") from error
+        if sim_time_ns < 0 or sample_interval_ns <= 0:
+            raise ValueError(f"metrics JSONL line {line_number} has invalid interval")
+        if instance_id not in expected_instances:
+            raise ValueError(f"metrics JSONL line {line_number} has unknown instance")
+
+        values = {}
+        for name, value in row.items():
+            if name in {"sim_time_ns", "sample_interval_ns", "sample_kind", "instance_id"}:
+                continue
+            if value is None:
+                values[name] = None
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"metrics JSONL line {line_number} has invalid {name}") from error
+            if not math.isfinite(numeric):
+                raise ValueError(f"metrics JSONL line {line_number} has non-finite {name}")
+            values[name] = numeric
+        samples.append(RankMetricSample(sim_time_ns, sample_interval_ns, instance_id, values))
+        by_time.setdefault(sim_time_ns, set()).add(instance_id)
+
+    for sim_time_ns, instances in by_time.items():
+        if instances != expected_instances:
+            raise ValueError(f"metrics sample at {sim_time_ns} is missing rank instances")
+    return tuple(samples)
 
 
 def gpu_metrics_from_results(
     job: object,
     deployments: Sequence[RankDeployment],
     results: Sequence[RankResult],
-    sample_time: datetime,
+    tick_start: datetime,
+    tick_duration_ns: int,
     price_by_instance_type: Mapping[str, float],
 ) -> list[object]:
     """Derive per-chain and per-GPU Store telemetry from rank results."""
     from tandemn_system_data.models import GpuMetric
-
-    horizon_ns = max(
-        (row["end_time"] for result in results for row in result.request_rows),
-        default=0,
-    )
-    if horizon_ns <= 0:
-        raise ValueError("rank results require a positive simulation horizon")
 
     results_by_rank = {result.deployment.rank_name: result for result in results}
     metrics = []
@@ -396,32 +438,104 @@ def gpu_metrics_from_results(
         instance_type = str(shape["instance_type"])
         target_ttft = float(shape.get("target_p99_ttft_ms", 0))
         price_per_hour = price_by_instance_type.get(instance_type)
+        tick_kvcache_hit_rate = _tick_kvcache_hit_rate(result.request_rows)
+        samples = _latest_samples_per_bucket(result.metric_samples, tick_duration_ns)
 
         for instance_id, binding in enumerate(deployment.chains):
             rows = [row for row in result.request_rows if int(row["instance id"]) == instance_id]
-            direct = {
-                name: value
-                for name, value in result.metrics_by_instance[instance_id].items()
-                if name in GpuMetric.model_fields
-            }
-            observed = _observed_y(rows, horizon_ns, target_ttft, price_per_hour)
-            values = {**direct, **observed}
-            for local_rank in range(binding.gpu_count):
-                metrics.append(
-                    GpuMetric(
-                        ts=sample_time,
-                        job_id=job.job_id,
-                        gpu_uuid=f"sim:{binding.chain_id}:{local_rank}",
-                        rank_id=deployment.rank_name,
-                        chain_id=binding.chain_id,
-                        local_rank=str(local_rank),
-                        role="aggregate",
-                        instance_type=instance_type,
-                        model_name=deployment.model_name,
-                        **values,
-                    )
+            for sample in samples.get(instance_id, ()):
+                direct = {
+                    name: value
+                    for name, value in sample.metrics.items()
+                    if name in GpuMetric.model_fields and name != "kvcache_hit_rate"
+                }
+                observed = _observed_y(
+                    _completed_in_sample(rows, sample),
+                    sample.sample_interval_ns,
+                    target_ttft,
+                    price_per_hour,
                 )
+                values = {**direct, **observed}
+                for local_rank in range(binding.gpu_count):
+                    metrics.append(
+                        GpuMetric(
+                            ts=_logical_sample_time(tick_start, sample.sim_time_ns),
+                            job_id=job.job_id,
+                            gpu_uuid=f"sim:{binding.chain_id}:{local_rank}",
+                            rank_id=deployment.rank_name,
+                            chain_id=binding.chain_id,
+                            local_rank=str(local_rank),
+                            role="aggregate",
+                            instance_type=instance_type,
+                            model_name=deployment.model_name,
+                            **values,
+                        )
+                    )
+
+            if tick_kvcache_hit_rate is not None:
+                for local_rank in range(binding.gpu_count):
+                    metrics.append(
+                        GpuMetric(
+                            ts=_logical_sample_time(tick_start, tick_duration_ns - 1_000),
+                            job_id=job.job_id,
+                            gpu_uuid=f"sim:{binding.chain_id}:{local_rank}",
+                            rank_id=deployment.rank_name,
+                            chain_id=binding.chain_id,
+                            local_rank=str(local_rank),
+                            role="aggregate",
+                            instance_type=instance_type,
+                            model_name=deployment.model_name,
+                            kvcache_hit_rate=tick_kvcache_hit_rate,
+                        )
+                    )
     return metrics
+
+
+def _latest_samples_per_bucket(
+    samples: Sequence[RankMetricSample], tick_duration_ns: int
+) -> dict[int, tuple[RankMetricSample, ...]]:
+    """Keep the latest periodic sample per instance in each Koi-sized bucket."""
+    selected: dict[tuple[int, int], RankMetricSample] = {}
+    for sample in samples:
+        if sample.sim_time_ns >= tick_duration_ns:
+            continue
+        key = (sample.instance_id, sample.sim_time_ns // SAMPLE_BUCKET_NS)
+        previous = selected.get(key)
+        if previous is None or sample.sim_time_ns > previous.sim_time_ns:
+            selected[key] = sample
+    by_instance: dict[int, list[RankMetricSample]] = {}
+    for sample in selected.values():
+        by_instance.setdefault(sample.instance_id, []).append(sample)
+    return {
+        instance_id: tuple(sorted(instance_samples, key=lambda sample: sample.sim_time_ns))
+        for instance_id, instance_samples in by_instance.items()
+    }
+
+
+def _completed_in_sample(
+    rows: Sequence[dict[str, float]], sample: RankMetricSample
+) -> tuple[dict[str, float], ...]:
+    """Return requests completed in one half-open simulator sample interval."""
+    start_ns = max(0, sample.sim_time_ns - sample.sample_interval_ns)
+    return tuple(
+        row for row in rows if start_ns < row["end_time"] <= sample.sim_time_ns
+    )
+
+
+def _logical_sample_time(tick_start: datetime, sim_time_ns: int) -> datetime:
+    """Map a simulator-local sample to its logical cluster timestamp."""
+    return tick_start + timedelta(microseconds=max(0, sim_time_ns) // 1_000)
+
+
+def _tick_kvcache_hit_rate(rows: Sequence[dict[str, float]]) -> float | None:
+    """Return the token-weighted NPU prefix-cache hit rate for one rank tick."""
+    requested = sum(row.get("prefix_cache_requested_tokens", 0.0) for row in rows)
+    hits = sum(row.get("npu_prefix_hit_tokens", 0.0) for row in rows)
+    if requested <= 0:
+        return None
+    if hits < 0 or hits > requested:
+        raise ValueError("invalid NPU prefix-cache hit totals")
+    return hits / requested
 
 
 def _observed_y(
