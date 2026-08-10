@@ -1,4 +1,4 @@
-"""Run static benchmark-aware best-fit placement in the cluster simulator."""
+"""Run preferred best-fit placement with a VRAM fallback."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 from models import CreatedPlan, PlannerResult, Scenario
+from vram import (
+    VRAM_REQUIREMENTS_GIB,
+    ResourceTarget,
+    reserve_vram_placement,
+    select_vram_placement,
+)
 
 BEST_FIT_CONFIGURATIONS: dict[
     str,
@@ -891,17 +897,6 @@ class StoreSnapshot:
     finished_jobs: tuple[dict[str, Any], ...]
 
 
-@dataclass(frozen=True)
-class ResourceTarget:
-    """One concrete Store target matching a mapped accelerator."""
-
-    environment_key: str
-    environment: dict[str, Any]
-    pool: dict[str, Any] | None
-    gpu_type: str
-    instance_type: str | None
-
-
 class JobStoreClient(Protocol):
     """Read canonical lifecycle groups from Tandemn Store."""
 
@@ -933,7 +928,7 @@ class PlanStoreClient(Protocol):
 
 
 class BestFitPlannerDriver:
-    """Create canonical Store plans from fixed per-benchmark placements."""
+    """Prefer benchmark placements and fall back to memory best-fit."""
 
     method_name = "bestfit"
 
@@ -946,9 +941,11 @@ class BestFitPlannerDriver:
         plan_store: PlanStoreClient,
         backend: str,
     ) -> None:
-        """Keep Store clients and select the scenario's static mapping."""
+        """Keep Store clients and benchmark-to-Store job identity."""
         self.user_id = user_id
         self.benchmark_name = scenario.benchmark_name
+        jobs = (*scenario.online_jobs, *scenario.batch_jobs)
+        self.benchmark_job_ids = {job.store_job_id: job.name for job in jobs}
         self.job_store = job_store
         self.resource_map_store = resource_map_store
         self.plan_store = plan_store
@@ -1046,21 +1043,32 @@ class BestFitPlannerDriver:
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
-        """Place waiting jobs greedily and include every lifecycle action."""
+        """Place greedily using preferred mappings, then VRAM fallbacks."""
         benchmark = BEST_FIT_CONFIGURATIONS.get(self.benchmark_name, {})
+        vram_requirements = VRAM_REQUIREMENTS_GIB.get(self.benchmark_name, {})
         resources = deepcopy(snapshot.resources)
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
             actions.append({"job_id": running["job_id"], "type": "keep"})
         for waiting in snapshot.waiting_jobs:
             job_id = _text(waiting.get("job_id"), "waiting Store job_id")
-            mapped = benchmark.get(job_id)
+            benchmark_job_id = self.benchmark_job_ids.get(job_id, job_id)
+            mapped = benchmark.get(benchmark_job_id)
             placement = None if mapped is None else _mapped_placement(mapped, resources)
+            used_vram_fallback = False
+            if placement is None:
+                required_vram_gib = vram_requirements.get(benchmark_job_id)
+                if required_vram_gib is not None:
+                    placement = select_vram_placement(required_vram_gib, resources)
+                    used_vram_fallback = placement is not None
             if placement is None:
                 actions.append({"job_id": job_id, "type": "defer"})
                 continue
             target, tp, pp, dp = placement
-            _reserve(target, tp * pp * dp)
+            if used_vram_fallback:
+                reserve_vram_placement(target, tp * pp * dp)
+            else:
+                _reserve(target, tp * pp * dp)
             actions.append(
                 _place_action(
                     job_id,
