@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from config_policy import load_config_policy
 from models import OnlineJob, Scenario
+from policy import load_config_policy
 from vram import (
     MODEL_ARCHITECTURES,
     VRAM_REQUIREMENTS_GIB,

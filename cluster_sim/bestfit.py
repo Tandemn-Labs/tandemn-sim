@@ -761,7 +761,7 @@ BEST_FIT_CONFIGURATIONS: dict[
     },
     "simulation_3h": {
         "job-benchmark_timing_3hr-0-1": {
-            "hardware": "L40S-48GB",
+            "hardware": "A10G-24GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-2": {
@@ -777,11 +777,11 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-5": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "L40S-48GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-7-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "A100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-7-2": {
@@ -789,19 +789,19 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-7-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "A100-SXM-80GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_3hr-15-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+            "hardware": "A100-PCIe-40GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-15-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+            "hardware": "A10G-24GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-15-3": {
-            "hardware": "L40S-48GB",
+            "hardware": "A100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-32-1": {
@@ -809,12 +809,12 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_3hr-32-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "A100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-49-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 20},
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_3hr-49-2": {
             "hardware": "H100-SXM-80GB",
@@ -829,12 +829,12 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-67-3": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+            "hardware": "A100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-85-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+            "hardware": "A100-PCIe-40GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-100-1": {
             "hardware": "MI300X-192GB",
@@ -845,24 +845,24 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-125-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-125-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 12},
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-145-1": {
             "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-145-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 3},
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 1},
         },
         "job-benchmark_timing_3hr-160-1": {
             "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
+            "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
     },
 }
