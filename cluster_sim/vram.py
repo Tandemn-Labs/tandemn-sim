@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from config_policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 from models import CreatedPlan, PlannerResult, Scenario
 
 VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
@@ -544,6 +545,7 @@ class VramPlannerDriver:
         resource_map_store: ResourceMapStoreClient,
         plan_store: PlanStoreClient,
         backend: str,
+        config_policy: ConfigPolicy,
     ) -> None:
         """Keep Store clients and benchmark-to-Store job identity."""
         self.user_id = user_id
@@ -554,6 +556,7 @@ class VramPlannerDriver:
         self.resource_map_store = resource_map_store
         self.plan_store = plan_store
         self.backend = backend
+        self.config_policy = config_policy
 
     @classmethod
     def build(
@@ -579,6 +582,7 @@ class VramPlannerDriver:
             resource_map_store=ResourceMapStore(postgres, user_id=user_id),
             plan_store=PlanStore(postgres),
             backend=_text(settings.get("backend"), "backend"),
+            config_policy=load_config_policy(),
         )
 
     def create_plans(
@@ -655,12 +659,19 @@ class VramPlannerDriver:
             actions.append({"job_id": running["job_id"], "type": "keep"})
         for waiting in snapshot.waiting_jobs:
             job_id = _text(waiting.get("job_id"), "waiting Store job_id")
+            known = _known_job_fields(waiting)
+            model_id = _text(known.get("model_id"), "model_id")
             benchmark_job_id = self.benchmark_job_ids.get(job_id, job_id)
             required_vram_gib = benchmark.get(benchmark_job_id)
             placement = (
                 None
                 if required_vram_gib is None
-                else select_vram_placement(required_vram_gib, resources)
+                else select_vram_placement(
+                    required_vram_gib,
+                    resources,
+                    model_id=model_id,
+                    config_policy=self.config_policy,
+                )
             )
             if placement is None:
                 actions.append({"job_id": job_id, "type": "defer"})
@@ -676,6 +687,7 @@ class VramPlannerDriver:
                     pp,
                     dp,
                     self.backend,
+                    self.config_policy,
                 )
             )
         for paused in snapshot.paused_jobs:
@@ -689,8 +701,14 @@ class VramPlannerDriver:
 def select_vram_placement(
     required_vram_gib: float,
     resources: dict[str, dict[str, Any]],
+    *,
+    model_id: str | None = None,
+    config_policy: ConfigPolicy | None = None,
 ) -> tuple[ResourceTarget, int, int, int] | None:
     """Choose the feasible hardware with the lowest provisioned VRAM."""
+    if (model_id is None) != (config_policy is None):
+        raise ValueError("model_id and config_policy must be supplied together")
+
     feasible = []
     for target in _resource_targets(resources):
         hardware = _canonical_hardware(target.gpu_type)
@@ -698,9 +716,16 @@ def select_vram_placement(
         if memory_gib is None:
             continue
         minimum_gpus = math.ceil(required_vram_gib / memory_gib)
-        tp = min(minimum_gpus, 8)
-        pp = 1
-        dp = math.ceil(minimum_gpus / tp)
+        desired_tp = min(minimum_gpus, 8)
+        if config_policy is None or model_id is None:
+            tp = desired_tp
+        else:
+            rule = config_policy.rule_for(target.gpu_type, model_id)
+            if rule is None:
+                continue
+            tp = _policy_tp(desired_tp, rule)
+        pp = math.ceil(minimum_gpus / tp)
+        dp = 1
         gpu_count = tp * pp * dp
         footprint = _target_footprint(target, gpu_count)
         if footprint is None or footprint > _target_available(target):
@@ -761,9 +786,17 @@ def _place_action(
     pp: int,
     dp: int,
     backend: str,
+    config_policy: ConfigPolicy | None = None,
 ) -> dict[str, object]:
     """Combine deterministic Store fields with one mapped placement."""
     known = _known_job_fields(store_job)
+    model_id = _text(known.get("model_id"), "model_id")
+    precision = None
+    if config_policy is not None:
+        rule = config_policy.rule_for(target.gpu_type, model_id)
+        if rule is None or tp not in rule.allowed_tp:
+            raise RuntimeError("selected VRAM placement violates config policy")
+        precision = rule.precision
     gpu_count = tp * pp * dp
     return {
         "job_id": job_id,
@@ -781,7 +814,8 @@ def _place_action(
                 "rank_id": known.get("rank_id") or "rank_0",
                 "env": target.environment_key.split("|"),
                 "config": {
-                    "model_id": known.get("model_id"),
+                    "model_id": model_id,
+                    "precision": precision,
                     "engine_name": known.get("engine_name") or backend,
                     "instance_type": target.instance_type,
                     "gpu_type": target.gpu_type,
@@ -810,6 +844,14 @@ def _target_available(target: ResourceTarget) -> int:
     if target.pool is not None:
         available = min(available, int(target.pool.get("free", 0)))
     return max(0, available)
+
+
+def _policy_tp(desired_tp: int, rule: ConfigPolicyRule) -> int:
+    """Choose the closest allowed TP while preserving the VRAM preference."""
+    larger = [tp for tp in rule.allowed_tp if tp >= desired_tp]
+    if larger:
+        return min(larger)
+    return max(rule.allowed_tp)
 
 
 def _target_footprint(target: ResourceTarget, gpu_count: int) -> int | None:
