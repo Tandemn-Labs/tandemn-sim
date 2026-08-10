@@ -166,9 +166,7 @@ class ClusterSimulator:
         if catalog is None:
             raise ValueError("hardware catalog is required for rank simulation")
         prices = self._prices(ResourceMapStore(self.postgres, user_id=self.user_id).get())
-        sample_time = self.clock.now() + timedelta(
-            microseconds=self.scenario.tick_duration_ns // 1_000 - 1
-        )
+        tick_start = self.clock.now()
         metrics = []
 
         running_jobs = self.jobs.running_jobs(self.user_id)
@@ -200,7 +198,7 @@ class ClusterSimulator:
                 start_offset_ns,
                 catalog.catalog,
                 prices,
-                sample_time,
+                tick_start,
             )
             metrics.extend(job_metrics)
 
@@ -221,7 +219,7 @@ class ClusterSimulator:
                 start_offset_ns,
                 catalog.catalog,
                 prices,
-                sample_time,
+                tick_start,
             )
             metrics.extend(job_metrics)
             advance_batch_progress(progress, results, self.scenario.tick_duration_ns)
@@ -240,7 +238,7 @@ class ClusterSimulator:
         tick_start_ns: int,
         catalog,
         prices: dict[str, float],
-        sample_time: datetime,
+        tick_start: datetime,
     ) -> tuple[list[object], tuple[RankResult, ...]]:
         """Run one job's ranks concurrently and return its staged telemetry."""
         deployments = build_rank_deployments(running.job, running.chains)
@@ -289,7 +287,8 @@ class ClusterSimulator:
                 running.job,
                 tuple(rank_run.deployment for rank_run in rank_runs),
                 results,
-                sample_time,
+                tick_start,
+                self.scenario.tick_duration_ns,
                 prices,
             ),
             results,

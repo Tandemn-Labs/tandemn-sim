@@ -61,6 +61,7 @@ class LLMServingSimSmokeTest(unittest.TestCase):
         cluster_path = run_dir / "cluster.json"
         workload_path = run_dir / "workload.jsonl"
         output_path = run_dir / "requests.csv"
+        metrics_path = run_dir / "metrics.jsonl"
         run_dir.mkdir(parents=True)
         completed = False
 
@@ -79,7 +80,7 @@ class LLMServingSimSmokeTest(unittest.TestCase):
             write_rank_workload(
                 (
                     Request("request_0", "session_0", 0, 0, 16, 8, "smoke/prefix-8"),
-                    Request("request_1", "session_1", 0, 5_000_000, 24, 12, "smoke/prefix-8"),
+                    Request("request_1", "session_1", 0, 15_000_000_000, 24, 12, "smoke/prefix-8"),
                 ),
                 workload_path,
                 0,
@@ -90,13 +91,16 @@ class LLMServingSimSmokeTest(unittest.TestCase):
                 cluster_path,
                 workload_path,
                 output_path,
+                metrics_path,
                 run_name,
                 2,
             )
-            result = run_ranks((RankRun(deployment, command, output_path, 2, 300),), 1)[0]
+            result = run_ranks(
+                (RankRun(deployment, command, output_path, metrics_path, 2, 300),), 1
+            )[0]
 
             self.assertEqual(len(result.request_rows), 2)
-            self.assertIn(0, result.metrics_by_instance)
+            self.assertTrue(result.metric_samples)
             completed = True
         finally:
             if completed:
