@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
+from config_policy import load_config_policy
 from models import OnlineJob, Scenario
 from vram import (
     MODEL_ARCHITECTURES,
@@ -23,6 +24,18 @@ from vram import (
 
 class VramPlannerDriverTest(unittest.TestCase):
     """Verify generated requirements and capacity-aware placement."""
+
+    def test_policy_normalizes_store_hardware_name(self) -> None:
+        """Resolve a Store hardware label to the matching policy section."""
+        rule = load_config_policy().rule_for(
+            "H100-SXM-80GB",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+
+        self.assertIsNotNone(rule)
+        assert rule is not None
+        self.assertEqual(rule.precision, "bf16")
+        self.assertEqual(rule.allowed_tp, (2, 4, 8))
 
     def test_mapping_covers_all_six_benchmarks(self) -> None:
         """Keep one positive VRAM requirement for every benchmark job."""
@@ -92,6 +105,10 @@ class VramPlannerDriverTest(unittest.TestCase):
         config = actions[0]["ladder"][0]["config"]
         self.assertEqual(config["gpu_type"], "H100")
         self.assertEqual(config["gpu_count"], 7)
+        self.assertEqual(config["tp"], 1)
+        self.assertEqual(config["pp"], 7)
+        self.assertEqual(config["dp"], 1)
+        self.assertEqual(config["precision"], "fp16")
 
     def test_fresh_store_id_resolves_to_benchmark_requirement(self) -> None:
         """Look up requirements by benchmark identity after CLI ID replacement."""
@@ -114,6 +131,44 @@ class VramPlannerDriverTest(unittest.TestCase):
         self.assertEqual(actions[0]["type"], "place")
         self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_type"], "A10G")
 
+    def test_policy_skips_unsupported_model_hardware_pair(self) -> None:
+        """Defer when capacity exists only on policy-incompatible hardware."""
+        driver = _driver()
+        job_id = "job-benchmark_timing_3hr-15-3"
+
+        actions = driver._build_actions(
+            _snapshot(
+                job_id,
+                a10g_free=0,
+                h100_free=0,
+                l40s_free=8,
+                model_id="microsoft/phi-4",
+            )
+        )
+
+        self.assertEqual(actions, [{"job_id": job_id, "type": "defer"}])
+
+    def test_policy_selects_allowed_tp_and_precision(self) -> None:
+        """Emit policy-approved TP and precision for the selected hardware."""
+        driver = _driver()
+        job_id = "job-benchmark_timing_3hr-67-3"
+
+        actions = driver._build_actions(
+            _snapshot(
+                job_id,
+                a10g_free=0,
+                h100_free=8,
+                model_id="Qwen/Qwen3-Next-80B-A3B-Thinking",
+            )
+        )
+
+        config = actions[0]["ladder"][0]["config"]
+        self.assertEqual(config["gpu_type"], "H100")
+        self.assertEqual(config["tp"], 8)
+        self.assertEqual(config["pp"], 1)
+        self.assertEqual(config["dp"], 1)
+        self.assertEqual(config["precision"], "bf16")
+
 
 def _driver(
     jobs: tuple[OnlineJob, ...] = (),
@@ -128,6 +183,7 @@ def _driver(
         resource_map_store=object(),
         plan_store=object(),
         backend="vllm",
+        config_policy=load_config_policy(),
     )
 
 
@@ -136,6 +192,8 @@ def _snapshot(
     a10g_free: int,
     h100_free: int,
     mi300x_free: int = 0,
+    l40s_free: int = 0,
+    model_id: str = "intfloat/multilingual-e5-large",
 ) -> StoreSnapshot:
     """Create one tick snapshot with independently controlled hardware."""
     return StoreSnapshot(
@@ -158,6 +216,12 @@ def _snapshot(
                 "free": mi300x_free,
                 "pools": [],
             },
+            "reserved|aws|us-east|use1-az1|L40S": {
+                "gpu_type": "L40S",
+                "total": l40s_free,
+                "free": l40s_free,
+                "pools": [],
+            },
         },
         running_jobs=(),
         waiting_jobs=(
@@ -166,7 +230,7 @@ def _snapshot(
                 "user_id": "tenant",
                 "kind": "online",
                 "spec_json": {
-                    "model_id": "intfloat/multilingual-e5-large",
+                    "model_id": model_id,
                     "job_features": {
                         "target_p99_ttft_ms": 120,
                         "target_p99_tpot_ms": 1,
