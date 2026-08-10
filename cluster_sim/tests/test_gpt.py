@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from gpt import GptPlacement, GptPlannerDriver, StoreSnapshot
+from gpt import GptPlacement, GptPlannerDriver, StoreSnapshot, _build_user_prompt
 from models import OnlineJob, Scenario
+from policy import load_config_policy
 
 
 class GptPlannerDriverTest(unittest.TestCase):
@@ -56,9 +59,79 @@ class GptPlannerDriverTest(unittest.TestCase):
         placed = actions[1]
         self.assertEqual(placed["tenant_id"], "tenant")
         self.assertEqual(placed["target_p99_ttft_ms"], 700.0)
-        self.assertEqual(placed["ladder"][0]["config"]["model_id"], "model")
+        self.assertEqual(
+            placed["ladder"][0]["config"]["model_id"],
+            "meta-llama/Llama-3.2-1B-Instruct",
+        )
         self.assertEqual(placed["ladder"][0]["config"]["tp"], 1)
+        self.assertEqual(placed["ladder"][0]["config"]["precision"], "bf16")
         self.assertIsNone(placed["ladder"][0]["config"]["ep"])
+
+    def test_prompt_contains_relevant_config_policy(self) -> None:
+        """Give GPT the supported configurations for this tick."""
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 8,
+                    "free": 8,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+
+        prompt = _build_user_prompt(
+            1,
+            datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot,
+            tuple(driver.jobs.values()),
+            load_config_policy(),
+        )
+
+        document = json.loads(prompt)
+        self.assertEqual(
+            document["config_policy"],
+            [
+                {
+                    "allowed_tp": [1, 2, 4, 8],
+                    "gpu_type": "H100",
+                    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                    "precision": "bf16",
+                }
+            ],
+        )
+
+    def test_rejects_policy_invalid_tp(self) -> None:
+        """Reject a positive TP value that the selected policy disallows."""
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 3,
+                    "free": 3,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+        placement = GptPlacement(
+            decision="place",
+            environment="reserved|aws|us-east|use1-az1|H100",
+            instance_type=None,
+            configuration={"replicas_needed": 1, "tp": 3, "pp": 1, "dp": 1},
+        )
+
+        with self.assertRaisesRegex(ValueError, "tp=3 is not allowed"):
+            driver._build_actions(snapshot, (placement,))
 
     def test_requires_one_decision_per_known_waiting_job(self) -> None:
         """Reject incomplete GPT output before creating partial actions."""
@@ -80,7 +153,7 @@ def _driver() -> GptPlannerDriver:
     job = OnlineJob(
         name="waiting",
         store_job_id="waiting",
-        model_name="model",
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
         starts_at_ns=0,
         stops_at_ns=1,
         workload={
@@ -112,7 +185,7 @@ def _store_job() -> dict[str, object]:
         "user_id": "tenant",
         "kind": "online",
         "spec_json": {
-            "model_id": "model",
+            "model_id": "meta-llama/Llama-3.2-1B-Instruct",
             "job_features": {
                 "target_p99_ttft_ms": 700,
                 "target_p99_tpot_ms": 55,
