@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from bestfit import BEST_FIT_CONFIGURATIONS, BestFitPlannerDriver, StoreSnapshot
-from models import Scenario
+from models import OnlineJob, Scenario
 
 
 class BestFitPlannerDriverTest(unittest.TestCase):
-    """Verify static lookup, greedy capacity, and canonical actions."""
+    """Verify preferred lookup, VRAM fallback, and greedy capacity."""
 
     def test_mapping_covers_all_six_benchmarks(self) -> None:
         """Keep one positive hardware configuration for every mapped job."""
@@ -76,8 +76,8 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         self.assertEqual(placed["ladder"][0]["config"]["dp"], 1)
         self.assertIsNone(placed["ladder"][0]["config"]["ep"])
 
-    def test_deferred_job_retries_only_its_fixed_mapping(self) -> None:
-        """Place on a later tick only after the mapped hardware becomes free."""
+    def test_unavailable_fixed_mapping_uses_vram_fallback(self) -> None:
+        """Use memory best-fit until the preferred hardware becomes free."""
         driver = _driver()
         job_id = "job-benchmark_timing_real_12hr_192gpu-0-1"
         unavailable = _snapshot(job_id, l40s_free=0, h100_free=8)
@@ -85,17 +85,75 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         first_tick = driver._build_actions(unavailable)
         second_tick = driver._build_actions(_snapshot(job_id, l40s_free=1, h100_free=8))
 
-        self.assertEqual(first_tick, [{"job_id": job_id, "type": "defer"}])
+        first_config = first_tick[0]["ladder"][0]["config"]
+        self.assertEqual(first_tick[0]["type"], "place")
+        self.assertEqual(first_config["gpu_type"], "H100")
+        self.assertEqual(first_config["gpu_count"], 5)
         self.assertEqual(second_tick[0]["type"], "place")
         self.assertEqual(
             second_tick[0]["ladder"][0]["config"]["gpu_type"],
             "L40S",
         )
 
+    def test_vram_fallback_reserves_capacity_greedily(self) -> None:
+        """Let an earlier fallback reduce capacity for later jobs in the tick."""
+        driver = _driver()
+        first = "job-benchmark_timing_real_12hr_192gpu-0-1"
+        second = "job-benchmark_timing_real_12hr_192gpu-0-2"
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 7,
+                    "free": 7,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(first), _store_job(second)),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
 
-def _driver() -> BestFitPlannerDriver:
+        actions = driver._build_actions(snapshot)
+
+        self.assertEqual([action["type"] for action in actions], ["place", "defer"])
+        self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_count"], 5)
+
+    def test_job_defers_when_primary_and_vram_fallback_do_not_fit(self) -> None:
+        """Defer only after exhausting the fixed and memory-based choices."""
+        driver = _driver()
+        job_id = "job-benchmark_timing_real_12hr_192gpu-0-1"
+
+        actions = driver._build_actions(_snapshot(job_id, l40s_free=0, h100_free=0))
+
+        self.assertEqual(actions, [{"job_id": job_id, "type": "defer"}])
+
+    def test_fresh_store_id_resolves_fixed_and_fallback_mappings(self) -> None:
+        """Preserve benchmark identity after the CLI replaces Store job IDs."""
+        benchmark_job_id = "job-benchmark_timing_real_12hr_192gpu-0-1"
+        store_job_id = "job-fresh-store-id"
+        scenario_job = OnlineJob(
+            name=benchmark_job_id,
+            store_job_id=store_job_id,
+            model_name="model",
+            starts_at_ns=0,
+            stops_at_ns=1,
+            workload={},
+        )
+        driver = _driver((scenario_job,))
+
+        actions = driver._build_actions(
+            _snapshot(store_job_id, l40s_free=1, h100_free=0)
+        )
+
+        self.assertEqual(actions[0]["type"], "place")
+        self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_type"], "L40S")
+
+
+def _driver(jobs: tuple[OnlineJob, ...] = ()) -> BestFitPlannerDriver:
     """Build a best-fit driver without external Store clients."""
-    scenario = Scenario("real_life_12h", 1, 1, (), ())
+    scenario = Scenario("real_life_12h", 1, 1, jobs, ())
     return BestFitPlannerDriver(
         user_id="user",
         scenario=scenario,
