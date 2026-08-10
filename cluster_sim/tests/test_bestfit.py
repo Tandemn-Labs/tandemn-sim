@@ -6,13 +6,17 @@ from __future__ import annotations
 
 import sys
 import unittest
+from collections import defaultdict
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from bestfit import BEST_FIT_CONFIGURATIONS, BestFitPlannerDriver, StoreSnapshot
 from models import OnlineJob, Scenario
+from policy import load_config_policy
 
 
 class BestFitPlannerDriverTest(unittest.TestCase):
@@ -37,6 +41,67 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 configuration = placement["configuration"]
                 self.assertEqual(set(configuration), {"tp", "pp", "dp"})
                 self.assertTrue(all(value > 0 for value in configuration.values()))
+
+    def test_simulation_3h_mapping_obeys_policy_and_resource_map(self) -> None:
+        """Fit every scheduled shape within policy, market, and region limits."""
+        benchmark_root = ROOT / "benchmarks" / "simulation_3h"
+        resource_document = yaml.safe_load(
+            (benchmark_root / "resources.yaml").read_text(encoding="utf-8")
+        )
+        resources = {
+            resource["accelerator"]: resource
+            for resource in resource_document["resources"]
+        }
+        jobs = {}
+        for path in sorted((benchmark_root / "jobs").glob("*.yaml")):
+            job = yaml.safe_load(path.read_text(encoding="utf-8"))
+            schedule = job["schedule"]
+            workload = job["workload"]
+            source = workload.get("benchmark") or workload.get("dataset")
+            jobs[job["job_id"]] = {
+                "model": source["model"],
+                "start": schedule["start_at_offset_minutes"],
+                "end": schedule.get("stop_at_offset_minutes")
+                or schedule["hard_stop_at_offset_minutes"],
+            }
+
+        mappings = BEST_FIT_CONFIGURATIONS["simulation_3h"]
+        self.assertEqual(set(mappings), set(jobs))
+        policy = load_config_policy()
+        footprints = {}
+        for job_id, mapping in mappings.items():
+            hardware = mapping["hardware"]
+            configuration = mapping["configuration"]
+            rule = policy.rule_for(hardware, jobs[job_id]["model"])
+            self.assertIsNotNone(rule, f"unsupported mapping for {job_id}")
+            assert rule is not None
+            self.assertIn(configuration["tp"], rule.allowed_tp)
+            footprints[job_id] = (
+                configuration["tp"] * configuration["pp"] * configuration["dp"]
+            )
+
+        boundaries = sorted(
+            {offset for job in jobs.values() for offset in (job["start"], job["end"])}
+        )
+        for offset in boundaries:
+            active_by_hardware: dict[str, list[int]] = defaultdict(list)
+            for job_id, job in jobs.items():
+                if job["start"] <= offset < job["end"]:
+                    hardware = mappings[job_id]["hardware"]
+                    active_by_hardware[hardware].append(footprints[job_id])
+
+            for hardware, shapes in active_by_hardware.items():
+                resource = resources[hardware]
+                region_limits = tuple(resource["regions"].values())
+                market_limits = tuple(resource["markets"].values())
+                self.assertTrue(
+                    _fits_capacity_bins(shapes, region_limits),
+                    f"{hardware} exceeds region capacity at minute {offset}",
+                )
+                self.assertTrue(
+                    _fits_capacity_bins(shapes, market_limits),
+                    f"{hardware} exceeds market capacity at minute {offset}",
+                )
 
     def test_waiting_jobs_reserve_capacity_greedily(self) -> None:
         """Defer a later mapped job after the first consumes its hardware."""
@@ -202,6 +267,28 @@ def _snapshot(job_id: str, l40s_free: int, h100_free: int) -> StoreSnapshot:
         paused_jobs=(),
         finished_jobs=(),
     )
+
+
+def _fits_capacity_bins(shapes: list[int], capacities: tuple[int, ...]) -> bool:
+    """Return whether indivisible placement shapes fit the supplied capacities."""
+    ordered_shapes = sorted(shapes, reverse=True)
+
+    def place(index: int, remaining: tuple[int, ...]) -> bool:
+        if index == len(ordered_shapes):
+            return True
+        shape = ordered_shapes[index]
+        attempted = set()
+        for bin_index, capacity in enumerate(remaining):
+            if capacity < shape or capacity in attempted:
+                continue
+            attempted.add(capacity)
+            updated = list(remaining)
+            updated[bin_index] -= shape
+            if place(index + 1, tuple(sorted(updated, reverse=True))):
+                return True
+        return False
+
+    return place(0, tuple(sorted(capacities, reverse=True)))
 
 
 if __name__ == "__main__":

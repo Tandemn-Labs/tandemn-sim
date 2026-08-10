@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from config_policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 from models import CreatedPlan, PlannerResult, Scenario
+from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 
 VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
     "real_life_12h": {
