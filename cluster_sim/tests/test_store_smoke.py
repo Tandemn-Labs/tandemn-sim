@@ -23,7 +23,7 @@ from planning import ScriptedPlannerDriver
 from runner import (
     ClusterSimulator,
     LogicalClock,
-    active_chains,
+    active_ranks,
     apply_pending_plans,
     submit_waiting_job,
     verify_store_user,
@@ -36,9 +36,9 @@ from scenario import load_scenario
     "set CLUSTER_SIM_STORE_SMOKE=1 with a migrated local Tandemn Store",
 )
 class StoreSmokeTest(unittest.TestCase):
-    """Verify waiting job -> Store plan -> Orca chain lifecycle."""
+    """Verify waiting job -> Store plan -> Orca rank lifecycle."""
 
-    def test_place_creates_running_job_and_chain(self) -> None:
+    def test_place_creates_running_job_and_rank(self) -> None:
         """Place one YAML-derived online job through Store and Noop Orca."""
         from tandemn_system_data.clients import JobStore, PlanStore, PostgresClient
         from tandemn_system_data.db.orm import UserRow
@@ -93,7 +93,7 @@ class StoreSmokeTest(unittest.TestCase):
             self.assertEqual(apply_pending_plans(user_id, postgres), 1)
             self.assertEqual(plans.get(result.plans[0].plan_id).status, "applied")
             self.assertEqual(jobs.get(job.store_job_id).status, JobStatus.RUNNING)
-            self.assertEqual(len(active_chains(job.store_job_id, jobs)), 1)
+            self.assertEqual(len(active_ranks(job.store_job_id, jobs)), 1)
         finally:
             with postgres.begin() as session:
                 user = session.get(UserRow, user_id)
