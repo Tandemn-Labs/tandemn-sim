@@ -578,7 +578,7 @@ def _resources_with_free_capacity(
     resource_map: ResourceMap,
     running_jobs: Sequence[object],
 ) -> dict[str, dict[str, Any]]:
-    """Normalize Store totals and subtract active chain allocations."""
+    """Normalize Store totals and subtract active canonical rank allocations."""
     raw = resource_map.scheduling_summary()
     default_market = _default_market(resource_map)
     resources = {
@@ -589,21 +589,20 @@ def _resources_with_free_capacity(
     used_by_pool: dict[tuple[str, str], int] = {}
     for running in running_jobs:
         payload = _model_payload(running)
-        for chain_value in payload.get("chains", []):
-            chain = _mapping(chain_value, "active chain")
-            shape = _mapping(chain.get("shape_json", {}), "chain shape")
-            raw_env = (
-                chain.get("target_node") or shape.get("env") or shape.get("pool_id")
-            )
+        for rank_value in payload.get("ranks", []):
+            rank = _mapping(rank_value, "active rank")
+            shape = _mapping(rank.get("shape_json", {}), "rank shape")
+            raw_env = shape.get("env") or shape.get("pool_id")
             if raw_env is None:
                 continue
             env_key = _normalize_env_key(_env_key(raw_env), default_market)
-            count = _positive_int(shape.get("count"), "active chain count")
+            count = _positive_int(shape.get("count"), "active rank count")
+            replicas = _positive_int(rank.get("n_replicas"), "active rank replicas")
             environment = resources.get(env_key)
             if environment is None:
                 continue
             pool = _select_pool(environment, _optional_text(shape.get("instance_type")))
-            footprint = count
+            footprint = count * replicas
             if pool is not None:
                 kind = str(
                     pool.get("allocation_kind")
@@ -611,7 +610,7 @@ def _resources_with_free_capacity(
                     or "instance"
                 ).lower()
                 if kind != "gpu":
-                    footprint = _positive_int(
+                    footprint = replicas * _positive_int(
                         pool.get("gpus_per_instance"),
                         "gpus_per_instance",
                     )
@@ -637,7 +636,7 @@ def _running_job_payload(running_job: object) -> dict[str, Any]:
     """Flatten a Store running-job aggregate for the GPT snapshot."""
     payload = _model_payload(running_job)
     job = dict(_mapping(payload.get("job"), "running job"))
-    job["active_chains"] = payload.get("chains", [])
+    job["active_ranks"] = payload.get("ranks", [])
     return job
 
 
@@ -649,11 +648,11 @@ def _model_payload(value: object) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     job = getattr(value, "job", None)
-    chains = getattr(value, "chains", None)
-    if job is not None and chains is not None:
+    ranks = getattr(value, "ranks", None)
+    if job is not None and ranks is not None:
         return {
             "job": _model_payload(job),
-            "chains": [_model_payload(chain) for chain in chains],
+            "ranks": [_model_payload(rank) for rank in ranks],
         }
     raise TypeError(f"Store value {type(value).__name__} is not serializable")
 

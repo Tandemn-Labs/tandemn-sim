@@ -71,27 +71,22 @@ class RankResult:
     stderr: str
 
 
-def build_rank_deployments(job: object, active_chains: Sequence[object]) -> tuple[RankDeployment, ...]:
-    """Group active Store chains into independent homogeneous rank deployments."""
-    groups: dict[str, list[object]] = {}
-    for chain in active_chains:
-        rank_name = chain.shape_json["rank_id"]
-        groups.setdefault(rank_name, []).append(chain)
-
+def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
+    """Build one simulation deployment per canonical Store rank."""
     deployments = []
-    for rank_name, chains in sorted(groups.items()):
-        shape = dict(chains[0].shape_json)
-        if any(chain.shape_json != shape for chain in chains):
-            raise ValueError(f"{rank_name} chains must have one shared shape")
+    for rank in sorted(active_ranks, key=lambda item: item.rank_id):
+        rank_id = str(rank.rank_id)
+        shape = dict(rank.shape_json)
+        shape["rank_id"] = rank_id
         count = int(shape["count"])
         bindings = tuple(
-            ChainBinding(rank_name, chain.chain_id, number, count)
-            for number, chain in enumerate(sorted(chains, key=lambda item: item.chain_id))
+            ChainBinding(rank_id, chain_index, count)
+            for chain_index in range(int(rank.n_replicas))
         )
         deployments.append(
             RankDeployment(
                 store_job_id=job.job_id,
-                rank_name=rank_name,
+                rank_name=rank_id,
                 model_name=job.spec_json["model_id"],
                 shape=shape,
                 chains=bindings,
@@ -461,9 +456,11 @@ def gpu_metrics_from_results(
                         GpuMetric(
                             ts=_logical_sample_time(tick_start, sample.sim_time_ns),
                             job_id=job.job_id,
-                            gpu_uuid=f"sim:{binding.chain_id}:{local_rank}",
-                            rank_id=deployment.rank_name,
-                            chain_id=binding.chain_id,
+                            gpu_uuid=(
+                                f"sim:{binding.rank_id}:{binding.chain_index}:{local_rank}"
+                            ),
+                            rank_id=binding.rank_id,
+                            chain_index=binding.chain_index,
                             local_rank=str(local_rank),
                             role="aggregate",
                             instance_type=instance_type,
@@ -478,9 +475,11 @@ def gpu_metrics_from_results(
                         GpuMetric(
                             ts=_logical_sample_time(tick_start, tick_duration_ns - 1_000),
                             job_id=job.job_id,
-                            gpu_uuid=f"sim:{binding.chain_id}:{local_rank}",
-                            rank_id=deployment.rank_name,
-                            chain_id=binding.chain_id,
+                            gpu_uuid=(
+                                f"sim:{binding.rank_id}:{binding.chain_index}:{local_rank}"
+                            ),
+                            rank_id=binding.rank_id,
+                            chain_index=binding.chain_index,
                             local_rank=str(local_rank),
                             role="aggregate",
                             instance_type=instance_type,
