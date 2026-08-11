@@ -41,10 +41,10 @@ class LLMServingSimSmokeTest(unittest.TestCase):
             job_id="job_servingsim_smoke",
             spec_json={"model_id": "meta-llama/Llama-3.1-8B"},
         )
-        chain = SimpleNamespace(
-            chain_id="chain_servingsim_smoke",
+        rank = SimpleNamespace(
+            rank_id="rank_servingsim_smoke",
+            n_replicas=1,
             shape_json={
-                "rank_id": "rank_0",
                 "count": 1,
                 "tp": 1,
                 "pp": 1,
@@ -55,7 +55,7 @@ class LLMServingSimSmokeTest(unittest.TestCase):
                 "prefix_cache_enabled": True,
             },
         )
-        deployment = build_rank_deployments(job, (chain,))[0]
+        deployment = build_rank_deployments(job, (rank,))[0]
         run_name = f"cluster-smoke-{uuid4().hex}"
         run_dir = LLMSERVINGSIM_ROOT / "outputs" / "cluster-sim-smoke" / run_name
         cluster_path = run_dir / "cluster.json"
