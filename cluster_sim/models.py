@@ -69,11 +69,10 @@ class BatchProgress:
 
 @dataclass(frozen=True)
 class ChainBinding:
-    """Bind one Store chain to one local replica in a rank simulation."""
+    """Bind one canonical Store rank replica to one local simulation instance."""
 
-    rank_name: str
-    chain_id: str
-    replica_number: int
+    rank_id: str
+    chain_index: int
     gpu_count: int
 
 
