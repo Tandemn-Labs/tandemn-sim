@@ -55,9 +55,8 @@ class ServingInputTest(unittest.TestCase):
             "max_num_batched_tokens": 4096,
             "prefix_cache_enabled": True,
         }
-        self.chains = (
-            SimpleNamespace(chain_id="chain_b", shape_json=dict(shape)),
-            SimpleNamespace(chain_id="chain_a", shape_json=dict(shape)),
+        self.ranks = (
+            SimpleNamespace(rank_id="rank_a", n_replicas=2, shape_json=dict(shape)),
         )
         self.hardware = {
             "profile": "H100",
@@ -68,10 +67,10 @@ class ServingInputTest(unittest.TestCase):
 
     def test_rank_chains_build_one_homogeneous_cluster(self) -> None:
         """Create two deterministic rank instances with TP=2 each."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         cluster = build_rank_cluster(deployment, self.hardware)
 
-        self.assertEqual([binding.chain_id for binding in deployment.chains], ["chain_a", "chain_b"])
+        self.assertEqual([binding.chain_index for binding in deployment.chains], [0, 1])
         self.assertEqual(cluster["num_nodes"], 1)
         self.assertEqual(cluster["nodes"][0]["num_instances"], 2)
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
@@ -79,7 +78,7 @@ class ServingInputTest(unittest.TestCase):
 
     def test_store_hardware_catalog_resolves_rank_profile(self) -> None:
         """Resolve one rank's Store catalog entry into H100 simulator facts."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         catalog = {
             "regions": [
                 {
@@ -134,7 +133,7 @@ class ServingInputTest(unittest.TestCase):
 
     def test_prepare_rank_run_writes_isolated_input_files(self) -> None:
         """Prepare one unique rank directory before its Docker process starts."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "outputs" / "run-rank-0"
@@ -158,7 +157,7 @@ class ServingInputTest(unittest.TestCase):
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "requests.csv"
             with output_path.open("w", newline="") as handle:
@@ -240,7 +239,7 @@ class ServingInputTest(unittest.TestCase):
 
     def test_parse_rank_result_rejects_missing_replica_metrics(self) -> None:
         """Require final runtime metrics from every chain replica."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         with tempfile.TemporaryDirectory() as directory:
             output_path = Path(directory) / "requests.csv"
             with output_path.open("w", newline="") as handle:
@@ -271,8 +270,8 @@ class ServingInputTest(unittest.TestCase):
                 parse_rank_result(rank_run, completed)
 
     def test_rank_results_expand_to_one_metric_per_simulated_gpu(self) -> None:
-        """Convert two TP=2 chains into four canonical Store GPU metrics."""
-        deployment = build_rank_deployments(self.job, self.chains)[0]
+        """Convert two TP=2 replicas into four canonical Store GPU metrics."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
         result = RankResult(
             deployment=deployment,
             request_rows=(
@@ -317,12 +316,12 @@ class ServingInputTest(unittest.TestCase):
 
         periodic = [metric for metric in metrics if metric.ts == datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)]
         self.assertEqual(len(periodic), 4)
-        chain_a = [metric for metric in periodic if metric.chain_id == "chain_a"]
-        self.assertEqual([metric.local_rank for metric in chain_a], ["0", "1"])
-        self.assertEqual(chain_a[0].rank_id, "rank_0")
-        self.assertEqual(chain_a[0].throughput_token_per_sec, 10.0)
-        self.assertEqual(chain_a[0].p99_ttft_ms, 100.0)
-        self.assertEqual(chain_a[0].kv_cache_util, 0.5)
+        replica_zero = [metric for metric in periodic if metric.chain_index == 0]
+        self.assertEqual([metric.local_rank for metric in replica_zero], ["0", "1"])
+        self.assertEqual(replica_zero[0].rank_id, "rank_a")
+        self.assertEqual(replica_zero[0].throughput_token_per_sec, 10.0)
+        self.assertEqual(replica_zero[0].p99_ttft_ms, 100.0)
+        self.assertEqual(replica_zero[0].kv_cache_util, 0.5)
 
         tick_summary = [metric for metric in metrics if metric.kvcache_hit_rate is not None]
         self.assertEqual(len(tick_summary), 4)
