@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 
 from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Scenario
 from planning import PlannerDriver
@@ -18,6 +19,16 @@ from serving import (
     prepare_rank_run,
     resolve_rank_hardware,
     run_ranks,
+)
+from trace import (
+    append_event,
+    job_admitted,
+    job_finished,
+    job_submitted,
+    gpu_sample,
+    planner_finished,
+    run_started,
+    trace_path,
 )
 
 
@@ -57,6 +68,8 @@ class ClusterSimulator:
         run_name: str = "cluster-sim",
         parallel_ranks_per_job: int = 1,
         rank_timeout_seconds: float = 300,
+        trace_root: Path | None = None,
+        trace_run_id: str | None = None,
     ) -> None:
         """Create the simulator after its external dependencies are configured."""
         from tandemn_system_data.clients import JobStore
@@ -73,7 +86,28 @@ class ClusterSimulator:
         self.run_name = run_name
         self.parallel_ranks_per_job = parallel_ranks_per_job
         self.rank_timeout_seconds = rank_timeout_seconds
+        self.trace_file: Path | None = None
+        if trace_root is not None and trace_run_id is not None:
+            self.trace_file = trace_path(
+                trace_root,
+                "simulation",
+                scenario.benchmark_name,
+                planner.method_name,
+                trace_run_id,
+            )
+            append_event(
+                self.trace_file,
+                run_started(
+                    trace_run_id,
+                    "simulation",
+                    scenario.benchmark_name,
+                    planner.method_name,
+                    clock.now().isoformat(),
+                    scenario.tick_duration_ns / 1_000_000_000,
+                ),
+            )
         self._submitted_jobs: set[str] = set()
+        self._admitted_jobs: set[str] = set()
         self._traffic_starts: dict[str, int] = {}
         self._requests = {
             job.store_job_id: materialize_online_requests(job) for job in scenario.online_jobs
@@ -105,7 +139,64 @@ class ClusterSimulator:
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
 
         self._submit_jobs_before_or_at(start_offset_ns)
+        decision_started = perf_counter()
         result = self.planner.create_plans(tick_number, start)
+        decision_time_ms = (perf_counter() - decision_started) * 1_000
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is not None:
+            from tandemn_system_data.clients import PlanStore
+
+            plans = []
+            for created in result.plans:
+                plan = PlanStore(self.postgres).get(created.plan_id)
+                if plan is None:
+                    continue
+                plans.append(
+                    {
+                        "plan_id": plan.plan_id,
+                        "created_at": plan.created_at.isoformat(),
+                        "logical_created_at": start.isoformat(),
+                        "status": plan.status,
+                        "actions": [
+                            action.model_dump(mode="json") for action in plan.actions
+                        ],
+                    }
+                )
+            planned_job_ids = tuple(
+                action["job_id"] for plan in plans for action in plan["actions"]
+            )
+            append_event(
+                trace_file,
+                planner_finished(
+                    tick_number,
+                    start.isoformat(),
+                    start.isoformat(),
+                    decision_time_ms,
+                    plans,
+                    planned_job_ids,
+                    None,
+                    result.error,
+                ),
+            )
+            for plan in plans:
+                for action in plan["actions"]:
+                    job_id = action["job_id"]
+                    if action["type"] != "place" or job_id in self._admitted_jobs:
+                        continue
+                    job = self.jobs.get(job_id)
+                    if job is None:
+                        continue
+                    append_event(
+                        trace_file,
+                        job_admitted(
+                            job_id,
+                            plan["plan_id"],
+                            job.created_at.isoformat(),
+                            start.isoformat(),
+                            "logical_place_plan_created",
+                        ),
+                    )
+                    self._admitted_jobs.add(job_id)
         apply_pending_plans(self.user_id, self.postgres)
         self._simulate_tick(tick_number, start_offset_ns, end_offset_ns)
         self._submit_jobs_before(end_offset_ns)
@@ -135,6 +226,27 @@ class ClusterSimulator:
         """Persist one waiting job with its exact logical benchmark release time."""
         submitted_at = self.clock.start + timedelta(microseconds=self._release_ns(job) // 1_000)
         submit_waiting_job(job, self.user_id, self.jobs, submitted_at)
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is not None:
+            features = job.workload["features"]
+            deadline_at = None
+            if isinstance(job, BatchJob):
+                deadline_at = (
+                    self.clock.start
+                    + timedelta(microseconds=job.deadline_at_ns // 1_000)
+                ).isoformat()
+            append_event(
+                trace_file,
+                job_submitted(
+                    job.store_job_id,
+                    "online" if isinstance(job, OnlineJob) else "batch",
+                    submitted_at.isoformat(),
+                    features.get("tenant_id") or self.user_id,
+                    features.get("target_p99_ttft_ms"),
+                    features.get("target_p99_tpot_ms"),
+                    deadline_at,
+                ),
+            )
         self._submitted_jobs.add(job.name)
 
     def _offset_ns(self, timestamp: datetime) -> int:
@@ -227,6 +339,25 @@ class ClusterSimulator:
                 self._finish(running)
 
         if metrics:
+            trace_file = getattr(self, "trace_file", None)
+            if trace_file is not None:
+                from tandemn_system_data.models.gpu_metric import gpu_metric_to_metrics
+
+                for metric in metrics:
+                    append_event(
+                        trace_file,
+                        gpu_sample(
+                            tick_number,
+                            metric.ts.isoformat(),
+                            metric.gpu_uuid,
+                            metric.job_id,
+                            metric.rank_id,
+                            metric.chain_id,
+                            metric.node_name,
+                            metric.instance_type,
+                            gpu_metric_to_metrics(metric),
+                        ),
+                    )
             commit_tick_metrics(GpuMetricStore(self.postgres), metrics)
 
     def _simulate_job(
@@ -315,6 +446,26 @@ class ClusterSimulator:
                 [ChainStatus.LAUNCHING, ChainStatus.RUNNING],
             )
         self.jobs.transition(running.job.job_id, JobStatus.FINISHED, [JobStatus.RUNNING])
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is not None:
+            finished_at = self.clock.now()
+            batch_job = self._batch_jobs.get(running.job.job_id)
+            deadline_slo_met = None
+            if batch_job is not None:
+                deadline_at = self.clock.start + timedelta(
+                    microseconds=batch_job.deadline_at_ns // 1_000
+                )
+                deadline_slo_met = finished_at <= deadline_at
+            append_event(
+                trace_file,
+                job_finished(
+                    running.job.job_id,
+                    finished_at.isoformat(),
+                    True,
+                    None,
+                    deadline_slo_met,
+                ),
+            )
 
     def _hard_stop(self) -> None:
         """Cancel every job still running at the benchmark's logical hard stop."""
@@ -333,6 +484,19 @@ class ClusterSimulator:
                 [JobStatus.RUNNING],
                 finish_reason="SIMULATION_HARD_STOP",
             )
+            trace_file = getattr(self, "trace_file", None)
+            if trace_file is not None:
+                is_batch = running.job.job_id in self._batch_jobs
+                append_event(
+                    trace_file,
+                    job_finished(
+                        running.job.job_id,
+                        self.clock.now().isoformat(),
+                        False,
+                        "SIMULATION_HARD_STOP",
+                        False if is_batch else None,
+                    ),
+                )
 
 
 def verify_store_user(user_id: str, postgres: object) -> None:
