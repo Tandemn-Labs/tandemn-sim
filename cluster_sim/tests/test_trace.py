@@ -1,0 +1,228 @@
+"""Test experiment trace paths."""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "cluster_sim"))
+
+from trace import (
+    append_event,
+    cluster_window,
+    gpu_sample,
+    job_admitted,
+    job_finished,
+    job_submitted,
+    job_window,
+    koi_llm_call,
+    planner_finished,
+    pool_window,
+    read_events,
+    rank_window,
+    run_started,
+    trace_path,
+)
+
+
+class TracePathTest(unittest.TestCase):
+    """Verify the stable trace layout."""
+
+    def test_uses_one_file_per_run(self) -> None:
+        """Separate scenario, benchmark, method, and run in the path."""
+        path = trace_path(Path("traces"), "simulation", "mixed", "koi", "run-1")
+
+        self.assertEqual(path, Path("traces/simulation/mixed/koi/run-1.jsonl"))
+
+    def test_appends_one_json_event(self) -> None:
+        """Create a nested trace file and preserve the supplied event."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = trace_path(Path(directory), "simulation", "mixed", "koi", "run-1")
+
+            append_event(path, {"run_id": "run-1", "kind": "run_started"})
+
+            self.assertEqual(
+                path.read_text(encoding="utf-8"),
+                '{"kind": "run_started", "run_id": "run-1"}\n',
+            )
+
+    def test_reads_events_in_append_order(self) -> None:
+        """Preserve trace event order when compiling a completed run."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            append_event(path, {"kind": "run_started"})
+            append_event(path, {"kind": "run_finished"})
+
+            events = read_events(path)
+
+        self.assertEqual([event["kind"] for event in events], ["run_started", "run_finished"])
+
+    def test_run_started_keeps_trace_identity(self) -> None:
+        """Record the immutable context needed to interpret every later event."""
+        event = run_started(
+            "run-1",
+            "simulation",
+            "mixed",
+            "koi",
+            "2026-01-01T00:00:00+00:00",
+            300,
+        )
+
+        self.assertEqual(event["trace_version"], 1)
+        self.assertEqual(event["admission_definition"], "first_place_plan_created")
+        self.assertEqual(event["method"], "koi")
+
+    def test_planner_finished_preserves_outcome_facts(self) -> None:
+        """Record planner timing and the plans created for one tick."""
+        event = planner_finished(
+            4,
+            "2026-01-01T00:20:00+00:00",
+            "2026-01-01T00:20:14+00:00",
+            14_000,
+            [{"plan_id": "plan-4", "actions": [{"job_id": "job-a", "type": "place"}]}],
+            ("job-a", "job-b"),
+            False,
+            None,
+        )
+
+        self.assertEqual(event["decision_time_ms"], 14_000)
+        self.assertEqual(event["plans"][0]["plan_id"], "plan-4")
+        self.assertFalse(event["timed_out"])
+
+    def test_job_admitted_uses_first_place_time(self) -> None:
+        """Preserve the scheduler admission timestamps for JQT derivation."""
+        event = job_admitted(
+            "job-a",
+            "plan-4",
+            "2026-01-01T00:06:00+00:00",
+            "2026-01-01T00:10:00+00:00",
+            "logical_place_plan_created",
+        )
+
+        self.assertEqual(event["action_type"], "place")
+        self.assertEqual(event["plan_id"], "plan-4")
+        self.assertEqual(event["admission_source"], "logical_place_plan_created")
+
+    def test_rank_window_keeps_actual_and_predicted_trajectories(self) -> None:
+        """Preserve rank facts without inventing predictions for baselines."""
+        event = rank_window(
+            4,
+            "job-a",
+            "rank-0",
+            ("chain-1",),
+            "2026-01-01T00:20:00+00:00",
+            "2026-01-01T00:25:00+00:00",
+            {"kv_cache_util": [0.72, 0.74]},
+            {"p99_ttft_ms": [840, 860]},
+        )
+
+        self.assertIsNone(event["v_hat"])
+        self.assertEqual(event["y_actual"], {"p99_ttft_ms": [840, 860]})
+        self.assertEqual(event["chain_ids"], ["chain-1"])
+
+    def test_job_window_keeps_raw_values_and_slo_flags(self) -> None:
+        """Store per-window facts without deriving an experiment-wide rate."""
+        event = job_window(
+            4,
+            "job-a",
+            "online",
+            "2026-01-01T00:20:00+00:00",
+            "2026-01-01T00:25:00+00:00",
+            840,
+            42,
+            1550,
+            0.000012,
+            1000,
+            50,
+            True,
+            True,
+        )
+
+        self.assertEqual(event["p99_ttft_ms"], 840)
+        self.assertTrue(event["ttft_slo_met"])
+        self.assertEqual(event["cost_per_token"], 0.000012)
+
+    def test_pool_window_exposes_zero_filled_capacity(self) -> None:
+        """Keep missing telemetry distinct from measured zero utilization."""
+        event = pool_window(4, "pool-a", 8, 6, 3, 42.5, 75)
+
+        self.assertEqual(event["missing_gpu_count"], 2)
+        self.assertEqual(event["zero_filled_gpu_count"], 2)
+        self.assertEqual(event["available_gpu_count"], 5)
+
+    def test_cluster_window_keeps_whole_and_allocated_costs(self) -> None:
+        """Separate whole-cluster cost from active GPU capacity cost."""
+        event = cluster_window(
+            4,
+            "2026-01-01T00:20:00+00:00",
+            "2026-01-01T00:25:00+00:00",
+            5.3333,
+            2.3333,
+            32.773,
+            28.677,
+        )
+
+        self.assertEqual(event["capacity_gpu_hours"], 5.3333)
+        self.assertEqual(event["allocated_cost"], 28.677)
+
+    def test_job_submitted_preserves_slo_and_deadline_inputs(self) -> None:
+        """Freeze the workload facts required for later JCT and SLO analysis."""
+        event = job_submitted(
+            "batch-a",
+            "batch",
+            "2026-01-01T00:06:00+00:00",
+            "tenant-a",
+            None,
+            None,
+            "2026-01-01T02:06:00+00:00",
+        )
+
+        self.assertEqual(event["job_kind"], "batch")
+        self.assertEqual(event["tenant_id"], "tenant-a")
+        self.assertEqual(event["deadline_at"], "2026-01-01T02:06:00+00:00")
+
+    def test_job_finished_marks_terminal_batch_outcome(self) -> None:
+        """Preserve completion and deadline facts without calculating JCT."""
+        event = job_finished(
+            "batch-a",
+            "2026-01-01T01:55:00+00:00",
+            True,
+            None,
+            True,
+        )
+
+        self.assertTrue(event["completed_successfully"])
+        self.assertTrue(event["deadline_slo_met"])
+        self.assertIsNone(event["finish_reason"])
+
+    def test_gpu_sample_keeps_idle_store_telemetry(self) -> None:
+        """Keep actual idle GPU rows distinct from pool-level zero filling."""
+        event = gpu_sample(
+            4,
+            "2026-01-01T00:20:10+00:00",
+            "GPU-1",
+            None,
+            None,
+            None,
+            "node-a",
+            "p5.48xlarge",
+            {"sm_utilization": 0.0, "gpu_mem_used_fraction": 0.0},
+        )
+
+        self.assertIsNone(event["job_id"])
+        self.assertEqual(event["metrics"]["sm_utilization"], 0.0)
+
+    def test_koi_llm_call_allows_missing_provider_usage(self) -> None:
+        """Keep unavailable token usage null instead of estimating it."""
+        event = koi_llm_call(4, 3, 5020, None, None, None, None)
+
+        self.assertEqual(event["call_index"], 3)
+        self.assertIsNone(event["total_tokens"])
+
+
+if __name__ == "__main__":
+    unittest.main()
