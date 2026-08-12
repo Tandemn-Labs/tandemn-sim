@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Mapping
 
 # TODO HUGE technical debt, will be one place for this telemetry function in the future.
 DEFAULT_SAMPLE_BUCKET_SEC = 10
@@ -37,6 +38,15 @@ METRIC_POLICIES = {
     "output_length_observed": "mean",
     "kvcache_hit_rate": "mean",
 }
+OUTCOME_METRICS = frozenset(
+    {
+        "p99_ttft_ms",
+        "p99_tpot_ms",
+        "throughput_token_per_sec",
+        "cost_per_token",
+        "slo_margin",
+    }
+)
 
 
 def _metric_value(row: Any, metric: str) -> float | None:
@@ -80,8 +90,8 @@ def _chain_value(metric: str, rows: list[Any]) -> float | None:
     return max(samples, key=lambda item: item[0])[1]
 
 
-def _chain_values(metric: str, chain_rows: dict[str, list[Any]]) -> dict[str, float]:
-    """Collapse each chain's GPU rows for one metric in one bucket."""
+def _chain_values(metric: str, chain_rows: dict[int, list[Any]]) -> dict[int, float]:
+    """Collapse each rank replica's GPU rows for one metric in one bucket."""
     values = {}
     for chain_id, rows in chain_rows.items():
         value = _chain_value(metric, rows)
@@ -92,8 +102,8 @@ def _chain_values(metric: str, chain_rows: dict[str, list[Any]]) -> dict[str, fl
 
 def _rank_value(
     metric: str,
-    chain_values: dict[str, float],
-    chain_throughput: dict[str, float],
+    chain_values: dict[int, float],
+    chain_throughput: dict[int, float],
 ) -> float | None:
     """Collapse one metric's chain values into one Koi-compatible rank value."""
     policy = _policy(metric)
@@ -116,9 +126,7 @@ def _rank_value(
     return _mean(values)
 
 
-def _rank_sample(
-    chain_rows: dict[str, list[Any]], metric_names: set[str]
-) -> dict[str, float]:
+def _rank_sample(chain_rows: dict[int, list[Any]], metric_names: set[str]) -> dict[str, float]:
     """Build one rank sample from all chains in one telemetry bucket."""
     throughput = _chain_values("throughput_token_per_sec", chain_rows)
     sample = {}
@@ -142,13 +150,15 @@ def aggregate_rank_trajectories(
     for row in rows:
         job_id = getattr(row, "job_id", None)
         rank_id = getattr(row, "rank_id", None)
-        chain_id = getattr(row, "chain_id", None)
-        if job_id is None or rank_id is None or chain_id is None:
+        chain_index = getattr(row, "chain_index", None)
+        if job_id is None or rank_id is None or chain_index is None:
+            continue
+        if not isinstance(chain_index, int) or isinstance(chain_index, bool):
             continue
         bucket = int(row.ts.timestamp() // sample_bucket_sec)
         rank_rows = rows_by_rank.setdefault((str(job_id), str(rank_id)), {})
         bucket_rows = rank_rows.setdefault(bucket, {})
-        bucket_rows.setdefault(str(chain_id), []).append(row)
+        bucket_rows.setdefault(chain_index, []).append(row)
 
     trajectories_by_rank = {}
     for rank, bucket_rows in rows_by_rank.items():
@@ -159,3 +169,108 @@ def aggregate_rank_trajectories(
                 trajectories[metric].append(value)
         trajectories_by_rank[rank] = dict(trajectories)
     return trajectories_by_rank
+
+
+def collect_rank_telemetry(
+    store: Any,
+    user_id: str,
+    job_ids: Iterable[str],
+    start: datetime,
+    end: datetime,
+) -> tuple[list[Any], dict[tuple[str, str], dict[str, list[float]]]]:
+    """Read Store telemetry and aggregate it into Koi-compatible rank trajectories."""
+    rows = [
+        row
+        for job_id in sorted(set(job_ids))
+        for row in store.rows_for_job_window(user_id, job_id, start, end)
+    ]
+    return rows, aggregate_rank_trajectories(rows, set(METRIC_POLICIES))
+
+
+def aggregate_job_metrics(
+    trajectories: dict[tuple[str, str], dict[str, list[float]]]
+) -> dict[str, dict[str, float]]:
+    """Aggregate each job's latest rank values with Koi metric policies."""
+    values_by_job: dict[str, dict[str, dict[str, float]]] = {}
+    for (job_id, rank_id), trajectory in trajectories.items():
+        values_by_job.setdefault(job_id, {})[rank_id] = {
+            metric: values[-1] for metric, values in trajectory.items() if values
+        }
+
+    metrics_by_job = {}
+    for job_id, rank_values in values_by_job.items():
+        throughput = {
+            rank_id: values["throughput_token_per_sec"]
+            for rank_id, values in rank_values.items()
+            if "throughput_token_per_sec" in values
+        }
+        metrics = {}
+        for metric in METRIC_POLICIES:
+            values = {
+                rank_id: values[metric]
+                for rank_id, values in rank_values.items()
+                if metric in values
+            }
+            if not values:
+                continue
+            value = _rank_value(metric, values, throughput)
+            if value is not None:
+                metrics[metric] = value
+        metrics_by_job[job_id] = metrics
+    return metrics_by_job
+
+
+def pool_telemetry(
+    expected_gpu_count: int,
+    allocated_gpu_count: int,
+    rows: Iterable[Any],
+) -> dict[str, int | float]:
+    """Summarize one existing ResourceMap pool with absent GPUs counted as zero."""
+    latest_by_gpu = {}
+    for row in rows:
+        gpu_uuid = getattr(row, "gpu_uuid", None)
+        if gpu_uuid is None:
+            continue
+        previous = latest_by_gpu.get(gpu_uuid)
+        if previous is None or row.ts > previous.ts:
+            latest_by_gpu[gpu_uuid] = row
+    reported_gpu_count = len(latest_by_gpu)
+    sm_utilization_sum = sum(
+        _metric_value(row, "sm_utilization") or 0.0 for row in latest_by_gpu.values()
+    )
+    return {
+        "expected_gpu_count": expected_gpu_count,
+        "reported_gpu_count": reported_gpu_count,
+        "allocated_gpu_count": allocated_gpu_count,
+        "available_gpu_count": expected_gpu_count - allocated_gpu_count,
+        "physical_sm_utilization_percent": sm_utilization_sum / expected_gpu_count,
+        "telemetry_coverage_percent": 100 * reported_gpu_count / expected_gpu_count,
+    }
+
+
+def cluster_accounting(
+    pools: Iterable[Mapping[str, int | float | None]],
+    duration_hours: float,
+) -> dict[str, float]:
+    """Calculate whole-cluster and allocated GPU-hour cost for one tick."""
+    capacity_gpu_hours = 0.0
+    allocated_gpu_hours = 0.0
+    capacity_cost = 0.0
+    allocated_cost = 0.0
+    for pool in pools:
+        gpu_count = int(pool["total"])
+        allocated_gpu_count = int(pool["allocated_gpu_count"])
+        gpus_per_instance = int(pool["gpus_per_instance"])
+        price_per_instance_hour = pool["price_per_instance_hour"]
+        capacity_gpu_hours += gpu_count * duration_hours
+        allocated_gpu_hours += allocated_gpu_count * duration_hours
+        if price_per_instance_hour is not None:
+            price = float(price_per_instance_hour)
+            capacity_cost += int(pool["total_instances"]) * price * duration_hours
+            allocated_cost += allocated_gpu_count / gpus_per_instance * price * duration_hours
+    return {
+        "capacity_gpu_hours": capacity_gpu_hours,
+        "allocated_gpu_hours": allocated_gpu_hours,
+        "capacity_cost": capacity_cost,
+        "allocated_cost": allocated_cost,
+    }

@@ -8,6 +8,7 @@ from pathlib import Path
 from time import perf_counter
 
 from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Scenario
+from koi_trace import compile_koi_events
 from planning import PlannerDriver
 from routing import StickyRoundRobinRouter
 from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
@@ -20,14 +21,29 @@ from serving import (
     resolve_rank_hardware,
     run_ranks,
 )
+from telemetry import (
+    OUTCOME_METRICS,
+    aggregate_job_metrics,
+    cluster_accounting,
+    collect_rank_telemetry,
+    pool_telemetry,
+)
 from trace import (
     append_event,
+    cluster_window,
     job_admitted,
     job_finished,
     job_submitted,
+    job_window,
     gpu_sample,
     planner_finished,
+    pool_window,
+    placement_observed,
+    rank_window,
+    resource_snapshot,
+    run_finished,
     run_started,
+    tick_started,
     trace_path,
 )
 
@@ -108,6 +124,8 @@ class ClusterSimulator:
             )
         self._submitted_jobs: set[str] = set()
         self._admitted_jobs: set[str] = set()
+        self._admission_latencies_ms: list[float] = []
+        self._admissions_in_tick = 0
         self._traffic_starts: dict[str, int] = {}
         self._requests = {
             job.store_job_id: materialize_online_requests(job) for job in scenario.online_jobs
@@ -120,14 +138,22 @@ class ClusterSimulator:
         }
         self._router = StickyRoundRobinRouter()
 
-    def run(self) -> tuple[PlannerResult, ...]:
-        """Run every logical tick through the configured drain boundary."""
+    def run(self, max_ticks: int | None = None) -> tuple[PlannerResult, ...]:
+        """Run logical ticks through the requested limit or drain boundary."""
+        if max_ticks is not None and max_ticks < 1:
+            raise ValueError("max ticks must be positive")
         results = []
         tick_number = 0
-        while self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns:
+        while (
+            self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns
+            and (max_ticks is None or tick_number < max_ticks)
+        ):
             results.append(self.run_tick(tick_number))
             tick_number += 1
         self._hard_stop()
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is not None:
+            append_event(trace_file, run_finished(self.clock.now().isoformat()))
         return tuple(results)
 
     def run_tick(self, tick_number: int) -> PlannerResult:
@@ -137,13 +163,41 @@ class ClusterSimulator:
         start = self.clock.now()
         start_offset_ns = self._offset_ns(start)
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is not None:
+            append_event(trace_file, tick_started(tick_number, start.isoformat()))
+            from tandemn_system_data.clients import ResourceMapStore
+
+            resource_map = ResourceMapStore(self.postgres, user_id=self.user_id).get()
+            pools = []
+            for env_key, summary in resource_map.scheduling_summary().items():
+                for pool in summary["pools"]:
+                    pools.append(
+                        {
+                            "pool_id": f"{env_key}|{pool['fabric_id']}|{pool['instance_type']}",
+                            "instance_type": pool["instance_type"],
+                            "instance_count": pool["total_instances"],
+                            "gpus_per_instance": pool["gpus_per_instance"],
+                            "gpu_count": pool["total"],
+                            "price_per_instance_hour": pool["price_per_instance_hour"],
+                        }
+                    )
+            append_event(trace_file, resource_snapshot(tick_number, pools))
 
         self._submit_jobs_before_or_at(start_offset_ns)
+        self._admissions_in_tick = 0
         decision_started = perf_counter()
         result = self.planner.create_plans(tick_number, start)
         decision_time_ms = (perf_counter() - decision_started) * 1_000
-        trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
+            debug_logger = getattr(self.planner, "debug_logger", None)
+            events_path = getattr(debug_logger, "events_path", None)
+            if events_path is not None:
+                compiled_koi_events = compile_koi_events(Path(events_path))
+                event_count = getattr(self, "_koi_event_count", 0)
+                for event in compiled_koi_events[event_count:]:
+                    append_event(trace_file, event)
+                self._koi_event_count = len(compiled_koi_events)
             from tandemn_system_data.clients import PlanStore
 
             plans = []
@@ -197,7 +251,25 @@ class ClusterSimulator:
                         ),
                     )
                     self._admitted_jobs.add(job_id)
+                    self._admission_latencies_ms.append(
+                        (start - job.created_at).total_seconds() * 1_000
+                    )
+                    self._admissions_in_tick += 1
         apply_pending_plans(self.user_id, self.postgres)
+        if trace_file is not None:
+            for running in self.jobs.running_jobs(self.user_id):
+                for rank in running.ranks:
+                    append_event(
+                        trace_file,
+                        placement_observed(
+                            tick_number,
+                            rank.plan_id,
+                            running.job.job_id,
+                            rank.rank_id,
+                            rank.n_replicas,
+                            rank.shape_json,
+                        ),
+                    )
         self._simulate_tick(tick_number, start_offset_ns, end_offset_ns)
         self._submit_jobs_before(end_offset_ns)
         self.clock.advance(timedelta(microseconds=self.scenario.tick_duration_ns // 1_000))
@@ -277,7 +349,8 @@ class ClusterSimulator:
         catalog = HardwareCatalogStore(self.postgres).get()
         if catalog is None:
             raise ValueError("hardware catalog is required for rank simulation")
-        prices = self._prices(ResourceMapStore(self.postgres, user_id=self.user_id).get())
+        resource_map = ResourceMapStore(self.postgres, user_id=self.user_id).get()
+        prices = self._prices(resource_map)
         tick_start = self.clock.now()
         metrics = []
 
@@ -334,16 +407,37 @@ class ClusterSimulator:
                 tick_start,
             )
             metrics.extend(job_metrics)
-            advance_batch_progress(progress, results, self.scenario.tick_duration_ns)
+            advance_batch_progress(
+                progress,
+                results,
+                self.scenario.tick_duration_ns,
+                start_offset_ns,
+            )
             if progress.completed_requests == progress.total_requests:
-                self._finish(running)
+                self._finish(
+                    running,
+                    self.clock.start
+                    + timedelta(microseconds=progress.completed_at_ns // 1_000),
+                )
 
         if metrics:
+            metric_store = GpuMetricStore(self.postgres)
+            commit_tick_metrics(metric_store, metrics)
             trace_file = getattr(self, "trace_file", None)
             if trace_file is not None:
                 from tandemn_system_data.models.gpu_metric import gpu_metric_to_metrics
 
-                for metric in metrics:
+                window_end = tick_start + timedelta(
+                    microseconds=self.scenario.tick_duration_ns // 1_000
+                )
+                rows, trajectories = collect_rank_telemetry(
+                    metric_store,
+                    self.user_id,
+                    (metric.job_id for metric in metrics if metric.job_id is not None),
+                    tick_start,
+                    window_end,
+                )
+                for metric in rows:
                     append_event(
                         trace_file,
                         gpu_sample(
@@ -352,13 +446,138 @@ class ClusterSimulator:
                             metric.gpu_uuid,
                             metric.job_id,
                             metric.rank_id,
-                            metric.chain_id,
+                            metric.chain_index,
                             metric.node_name,
                             metric.instance_type,
                             gpu_metric_to_metrics(metric),
                         ),
                     )
-            commit_tick_metrics(GpuMetricStore(self.postgres), metrics)
+                chain_indices_by_rank = {}
+                for metric in rows:
+                    if (
+                        metric.job_id is None
+                        or metric.rank_id is None
+                        or metric.chain_index is None
+                    ):
+                        continue
+                    rank = (metric.job_id, metric.rank_id)
+                    chain_indices_by_rank.setdefault(rank, set()).add(metric.chain_index)
+                for rank, actual in trajectories.items():
+                    v_actual = {
+                        name: values
+                        for name, values in actual.items()
+                        if name not in OUTCOME_METRICS
+                    }
+                    y_actual = {
+                        name: values
+                        for name, values in actual.items()
+                        if name in OUTCOME_METRICS
+                    }
+                    append_event(
+                        trace_file,
+                        rank_window(
+                            tick_number,
+                            rank[0],
+                            rank[1],
+                            tuple(sorted(chain_indices_by_rank[rank])),
+                            tick_start.isoformat(),
+                            window_end.isoformat(),
+                            v_actual,
+                            y_actual,
+                        ),
+                    )
+                jobs_by_id = {**self._online_jobs, **self._batch_jobs}
+                for job_id, actual in aggregate_job_metrics(trajectories).items():
+                    job = jobs_by_id.get(job_id)
+                    if job is None:
+                        continue
+                    features = job.workload["features"]
+                    target_ttft = features.get("target_p99_ttft_ms")
+                    target_tpot = features.get("target_p99_tpot_ms")
+                    p99_ttft = actual.get("p99_ttft_ms")
+                    p99_tpot = actual.get("p99_tpot_ms")
+                    append_event(
+                        trace_file,
+                        job_window(
+                            tick_number,
+                            job_id,
+                            "online" if isinstance(job, OnlineJob) else "batch",
+                            tick_start.isoformat(),
+                            window_end.isoformat(),
+                            p99_ttft,
+                            p99_tpot,
+                            actual.get("throughput_token_per_sec"),
+                            actual.get("cost_per_token"),
+                            target_ttft,
+                            target_tpot,
+                            p99_ttft <= target_ttft
+                            if p99_ttft is not None and target_ttft is not None
+                            else None,
+                            p99_tpot <= target_tpot
+                            if p99_tpot is not None and target_tpot is not None
+                            else None,
+                        ),
+                    )
+                allocated_by_pool = {}
+                pool_by_rank = {}
+                for running in running_jobs:
+                    for rank in running.ranks:
+                        shape = rank.shape_json
+                        env = shape.get("env")
+                        if not isinstance(env, list):
+                            continue
+                        key = ("|".join(env), shape.get("instance_type"))
+                        pool_by_rank[rank.rank_id] = key
+                        allocated_by_pool[key] = allocated_by_pool.get(key, 0) + (
+                            rank.n_replicas * int(shape["count"])
+                        )
+                pool_facts = []
+                for env_key, summary in resource_map.scheduling_summary().items():
+                    for pool in summary["pools"]:
+                        instance_type = pool["instance_type"]
+                        observation = pool_telemetry(
+                            int(pool["total"]),
+                            allocated_by_pool.get((env_key, instance_type), 0),
+                            (
+                                row
+                                for row in rows
+                                if pool_by_rank.get(row.rank_id) == (env_key, instance_type)
+                            ),
+                        )
+                        append_event(
+                            trace_file,
+                            pool_window(
+                                tick_number,
+                                f"{env_key}|{pool['fabric_id']}|{instance_type}",
+                                observation["expected_gpu_count"],
+                                observation["reported_gpu_count"],
+                                observation["allocated_gpu_count"],
+                                observation["physical_sm_utilization_percent"],
+                                observation["telemetry_coverage_percent"],
+                            ),
+                        )
+                        pool_facts.append(
+                            {**pool, "allocated_gpu_count": observation["allocated_gpu_count"]}
+                        )
+                accounting = cluster_accounting(
+                    pool_facts,
+                    self.scenario.tick_duration_ns / 3_600_000_000_000,
+                )
+                append_event(
+                    trace_file,
+                    cluster_window(
+                        tick_number,
+                        tick_start.isoformat(),
+                        window_end.isoformat(),
+                        accounting["capacity_gpu_hours"],
+                        accounting["allocated_gpu_hours"],
+                        accounting["capacity_cost"],
+                        accounting["allocated_cost"],
+                        getattr(self, "_admissions_in_tick", 0),
+                        len(getattr(self, "_admission_latencies_ms", [])),
+                        _mean_or_none(getattr(self, "_admission_latencies_ms", [])),
+                    ),
+                )
 
     def _simulate_job(
         self,
@@ -372,7 +591,17 @@ class ClusterSimulator:
         tick_start: datetime,
     ) -> tuple[list[object], tuple[RankResult, ...]]:
         """Run one job's ranks concurrently and return its staged telemetry."""
-        deployments = build_rank_deployments(running.job, running.chains)
+        from tandemn_system_data.clients import ModelCatalogStore
+
+        deployments = build_rank_deployments(running.job, running.ranks)
+        model_catalog = ModelCatalogStore(self.postgres).get(running.job.spec_json["model_id"])
+        if model_catalog is None:
+            raise ValueError(f"model catalog missing {running.job.spec_json['model_id']!r}")
+        for deployment in deployments:
+            deployment.shape["weight_dtype"] = model_catalog.weight_dtype
+            deployment.shape["weight_quantization_method"] = (
+                model_catalog.weight_quantization_method
+            )
         if len(deployments) == 1:
             rank_shares = {deployments[0].rank_name: 1.0}
         else:
@@ -435,20 +664,20 @@ class ClusterSimulator:
                     prices[pool["instance_type"]] = pool["price_per_instance_hour"]
         return prices
 
-    def _finish(self, running) -> None:
+    def _finish(self, running, finished_at: datetime | None = None) -> None:
         """Stop active chains and finish a job after simulated work is complete."""
-        from tandemn_system_data.models.enums import ChainStatus, JobStatus
+        from tandemn_system_data.models.enums import JobStatus, RankStatus
 
-        for chain in running.chains:
-            self.jobs.set_chain_status(
-                chain.chain_id,
-                ChainStatus.STOPPED,
-                [ChainStatus.LAUNCHING, ChainStatus.RUNNING],
+        for rank in running.ranks:
+            self.jobs.set_rank_status(
+                rank.rank_id,
+                RankStatus.STOPPED,
+                [RankStatus.LAUNCHING, RankStatus.RUNNING],
             )
         self.jobs.transition(running.job.job_id, JobStatus.FINISHED, [JobStatus.RUNNING])
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
-            finished_at = self.clock.now()
+            finished_at = finished_at or self.clock.now()
             batch_job = self._batch_jobs.get(running.job.job_id)
             deadline_slo_met = None
             if batch_job is not None:
@@ -469,14 +698,14 @@ class ClusterSimulator:
 
     def _hard_stop(self) -> None:
         """Cancel every job still running at the benchmark's logical hard stop."""
-        from tandemn_system_data.models.enums import ChainStatus, JobStatus
+        from tandemn_system_data.models.enums import JobStatus, RankStatus
 
         for running in self.jobs.running_jobs(self.user_id):
-            for chain in running.chains:
-                self.jobs.set_chain_status(
-                    chain.chain_id,
-                    ChainStatus.STOPPED,
-                    [ChainStatus.LAUNCHING, ChainStatus.RUNNING],
+            for rank in running.ranks:
+                self.jobs.set_rank_status(
+                    rank.rank_id,
+                    RankStatus.STOPPED,
+                    [RankStatus.LAUNCHING, RankStatus.RUNNING],
                 )
             self.jobs.transition(
                 running.job.job_id,
@@ -546,15 +775,16 @@ def apply_pending_plans(user_id: str, postgres: object) -> int:
     return Orca(postgres, launcher=NoopLauncher()).apply_pending(user_id)
 
 
-def active_chains(store_job_id: str, job_store: object) -> list[object]:
-    """Return the active canonical chains available for rank simulation."""
-    return job_store.active_chains(store_job_id)
+def active_ranks(store_job_id: str, job_store: object) -> list[object]:
+    """Return active canonical ranks available for rank simulation."""
+    return job_store.active_ranks(store_job_id)
 
 
 def advance_batch_progress(
     progress: BatchProgress,
     results: tuple[RankResult, ...],
     tick_duration_ns: int,
+    tick_start_ns: int = 0,
 ) -> int:
     """Advance a full batch backlog from one tick's representative probe."""
     horizon_ns = max(
@@ -565,16 +795,21 @@ def advance_batch_progress(
     if horizon_ns <= 0 or probe_requests == 0:
         return 0
 
-    completed = min(
-        progress.total_requests - progress.completed_requests,
-        probe_requests * tick_duration_ns // horizon_ns,
-    )
+    remaining = progress.total_requests - progress.completed_requests
+    completed = min(remaining, probe_requests * tick_duration_ns // horizon_ns)
     progress.completed_requests += completed
     progress.next_request_number = min(
         progress.total_requests,
         progress.next_request_number + probe_requests,
     )
+    if progress.completed_requests == progress.total_requests:
+        progress.completed_at_ns = tick_start_ns + (remaining * horizon_ns + probe_requests - 1) // probe_requests
     return completed
+
+
+def _mean_or_none(values: list[float]) -> float | None:
+    """Return a running arithmetic mean without inventing an empty value."""
+    return sum(values) / len(values) if values else None
 
 
 def parse_args() -> object:
