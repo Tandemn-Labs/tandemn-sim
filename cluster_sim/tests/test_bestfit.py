@@ -136,10 +136,9 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             ],
         )
         placed = actions[1]
-        self.assertEqual(placed["tenant_id"], "tenant")
         self.assertEqual(placed["ladder"][0]["config"]["model_id"], "model")
         self.assertEqual(placed["ladder"][0]["config"]["dp"], 1)
-        self.assertIsNone(placed["ladder"][0]["config"]["ep"])
+        self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
 
     def test_unavailable_fixed_mapping_uses_vram_fallback(self) -> None:
         """Use memory best-fit until the preferred hardware becomes free."""

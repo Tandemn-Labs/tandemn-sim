@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from planning import KoiPlannerDriver, SimulationPlanExecutor, normalize_plan_for_simulation
+from planning import PLANNER_BUILDERS, KoiPlannerDriver, SimulationPlanExecutor, normalize_plan_for_simulation
 
 
 class KoiPlannerDriverTest(unittest.TestCase):
@@ -37,6 +37,28 @@ class KoiPlannerDriverTest(unittest.TestCase):
         self.assertFalse(result.degraded)
         self.assertEqual(agent.trace.events, [])
         self.assertEqual(llm.calls, [])
+
+    def test_tick_persists_debug_data_before_clearing_buffers(self) -> None:
+        """Keep Koi's trace-all records available to the simulator run."""
+        context = SimpleNamespace(deploy_acks=[], error=None)
+        runner = SimpleNamespace(run_tick=lambda tick: context)
+        agent = SimpleNamespace(trace=SimpleNamespace(events=["debug"]))
+        llm = SimpleNamespace(calls=["debug"])
+        debug_logger = SimpleNamespace(persist_runner_tick=lambda *args: calls.append(args))
+        calls = []
+
+        KoiPlannerDriver("user_1", runner, agent, llm, debug_logger).create_plans(3, None)
+
+        self.assertEqual(calls[0], (context, agent, llm))
+        self.assertEqual(agent.trace.events, [])
+        self.assertEqual(llm.calls, [])
+
+    def test_registers_existing_baseline_drivers(self) -> None:
+        """Expose the implemented baseline drivers through the simulator CLI."""
+        self.assertEqual(
+            set(PLANNER_BUILDERS),
+            {"koi", "dynamo_aic", "bestfit", "vram", "gpt_only"},
+        )
 
     def test_tick_marks_koi_errors_as_degraded(self) -> None:
         """Return Koi fallback plan acknowledgements with an error diagnostic."""

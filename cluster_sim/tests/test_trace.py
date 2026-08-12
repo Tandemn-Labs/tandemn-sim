@@ -19,12 +19,15 @@ from trace import (
     job_finished,
     job_submitted,
     job_window,
-    koi_llm_call,
     planner_finished,
+    placement_observed,
     pool_window,
     read_events,
     rank_window,
+    resource_snapshot,
+    run_finished,
     run_started,
+    tick_started,
     trace_path,
 )
 
@@ -61,6 +64,13 @@ class TracePathTest(unittest.TestCase):
 
         self.assertEqual([event["kind"] for event in events], ["run_started", "run_finished"])
 
+    def test_run_finished_records_terminal_time(self) -> None:
+        """Preserve the experiment completion timestamp without aggregation."""
+        event = run_finished("2026-01-01T03:00:00+00:00")
+
+        self.assertEqual(event["kind"], "run_finished")
+        self.assertEqual(event["finished_at"], "2026-01-01T03:00:00+00:00")
+
     def test_run_started_keeps_trace_identity(self) -> None:
         """Record the immutable context needed to interpret every later event."""
         event = run_started(
@@ -75,6 +85,30 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["trace_version"], 1)
         self.assertEqual(event["admission_definition"], "first_place_plan_created")
         self.assertEqual(event["method"], "koi")
+
+    def test_tick_started_keeps_logical_start_time(self) -> None:
+        """Record the boundary before a planner receives one control tick."""
+        event = tick_started(4, "2026-01-01T00:20:00+00:00")
+
+        self.assertEqual(event["tick"], 4)
+        self.assertEqual(event["started_at"], "2026-01-01T00:20:00+00:00")
+
+    def test_resource_snapshot_preserves_pool_facts(self) -> None:
+        """Keep raw ResourceMap capacity and price data for later analysis."""
+        pools = [{"pool_id": "pool-a", "gpu_count": 8, "price_per_instance_hour": 10.0}]
+        event = resource_snapshot(4, pools)
+
+        self.assertEqual(event["tick"], 4)
+        self.assertEqual(event["pools"], pools)
+
+    def test_placement_observed_keeps_canonical_rank_facts(self) -> None:
+        """Distinguish the applied rank from the requested planner payload."""
+        shape = {"instance_type": "sim.h100.8gpu", "count": 1}
+        event = placement_observed(4, "plan-4", "job-a", "rank-a", 2, shape)
+
+        self.assertEqual(event["rank_id"], "rank-a")
+        self.assertEqual(event["n_replicas"], 2)
+        self.assertEqual(event["shape"], shape)
 
     def test_planner_finished_preserves_outcome_facts(self) -> None:
         """Record planner timing and the plans created for one tick."""
@@ -113,7 +147,7 @@ class TracePathTest(unittest.TestCase):
             4,
             "job-a",
             "rank-0",
-            ("chain-1",),
+            (0,),
             "2026-01-01T00:20:00+00:00",
             "2026-01-01T00:25:00+00:00",
             {"kv_cache_util": [0.72, 0.74]},
@@ -122,7 +156,7 @@ class TracePathTest(unittest.TestCase):
 
         self.assertIsNone(event["v_hat"])
         self.assertEqual(event["y_actual"], {"p99_ttft_ms": [840, 860]})
-        self.assertEqual(event["chain_ids"], ["chain-1"])
+        self.assertEqual(event["chain_indices"], [0])
 
     def test_job_window_keeps_raw_values_and_slo_flags(self) -> None:
         """Store per-window facts without deriving an experiment-wide rate."""
@@ -164,10 +198,16 @@ class TracePathTest(unittest.TestCase):
             2.3333,
             32.773,
             28.677,
+            2,
+            8,
+            11900,
         )
 
         self.assertEqual(event["capacity_gpu_hours"], 5.3333)
         self.assertEqual(event["allocated_cost"], 28.677)
+        self.assertEqual(event["jobs_admitted_in_tick"], 2)
+        self.assertEqual(event["admission_count_so_far"], 8)
+        self.assertEqual(event["rolling_admission_time_ms"], 11900)
 
     def test_job_submitted_preserves_slo_and_deadline_inputs(self) -> None:
         """Freeze the workload facts required for later JCT and SLO analysis."""
@@ -214,14 +254,9 @@ class TracePathTest(unittest.TestCase):
         )
 
         self.assertIsNone(event["job_id"])
+        self.assertIn("chain_index", event)
+        self.assertNotIn("chain_id", event)
         self.assertEqual(event["metrics"]["sm_utilization"], 0.0)
-
-    def test_koi_llm_call_allows_missing_provider_usage(self) -> None:
-        """Keep unavailable token usage null instead of estimating it."""
-        event = koi_llm_call(4, 3, 5020, None, None, None, None)
-
-        self.assertEqual(event["call_index"], 3)
-        self.assertIsNone(event["total_tokens"])
 
 
 if __name__ == "__main__":
