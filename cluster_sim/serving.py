@@ -37,13 +37,18 @@ CSV_HEADER = [
 SECOND = 1_000_000_000
 SAMPLE_BUCKET_NS = 10 * SECOND
 PROFILE_ALIASES = {
+    "H100": "H100",
     "H100-SXM-80GB": "H100",
+    "A100_80GB": "A100-80GB",
     "A100-SXM-80GB": "A100-80GB",
+    "A100_40GB": "A100-40GB",
     "A100-PCIe-40GB": "A100-40GB",
+    "A10G": "A10G",
     "A10G-24GB": "A10G",
     "L40S": "L40S",
     "L40S-48GB": "L40S",
-    # "MI300X-192GB": "MI300X",  # Enable after the MI300X profile is added.
+    "MI300": "MI300X",
+    "MI300X-192GB": "MI300X",
 }
 
 
@@ -78,7 +83,10 @@ def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple
         rank_id = str(rank.rank_id)
         shape = dict(rank.shape_json)
         shape["rank_id"] = rank_id
-        count = int(shape["count"])
+        # Orca stores the total DP footprint in count/gpu_count. Each
+        # LLMServingSim chain represents one DP replica, so it needs TP * PP.
+        count = int(shape.get("tp", 1)) * int(shape.get("pp", 1))
+        shape["count"] = count
         bindings = tuple(
             ChainBinding(rank_id, chain_index, count)
             for chain_index in range(int(rank.n_replicas))
@@ -110,6 +118,8 @@ def build_rank_cluster(
     instance = {
         "model_name": deployment.model_name,
         "hardware": hardware["profile"],
+        "fp": _serving_precision(shape),
+        "dtype": _serving_dtype(shape),
         "npu_mem": {
             "mem_size": hardware["memory_gb"],
             "mem_bw": hardware["memory_bandwidth_gb_s"],
@@ -140,6 +150,22 @@ def build_rank_cluster(
     }
 
 
+def _serving_precision(shape: Mapping[str, object]) -> str:
+    """Translate Store model precision into LLMServingSim's profile directory name."""
+    dtype = str(shape.get("weight_dtype") or "bfloat16").lower()
+    if shape.get("weight_quantization_method") == "fp8" and dtype in {"bf16", "bfloat16"}:
+        return "bf16-fp8"
+    if dtype in {"fp16", "float16"}:
+        return "fp16"
+    return "bf16"
+
+
+def _serving_dtype(shape: Mapping[str, object]) -> str:
+    """Translate Store weight dtype to the LLMServingSim runtime dtype option."""
+    dtype = str(shape.get("weight_dtype") or "bfloat16").lower()
+    return "float16" if dtype in {"fp16", "float16"} else "bfloat16"
+
+
 def resolve_rank_hardware(
     deployment: RankDeployment,
     catalog: Mapping[str, object],
@@ -148,8 +174,12 @@ def resolve_rank_hardware(
     shape = deployment.shape
     _, cloud, region, _, gpu_type = shape["env"]
     instance_type = shape["instance_type"]
-    for region_catalog in catalog["regions"]:
-        if region_catalog["cloud"] != cloud or region_catalog["region"] != region:
+    regions = list(catalog["regions"])
+    for region_catalog in sorted(
+        regions,
+        key=lambda item: item["cloud"] != cloud or item["region"] != region,
+    ):
+        if region_catalog["cloud"] != cloud:
             continue
         for instance in region_catalog["instance_types"]:
             if instance["instance_type"] != instance_type:
