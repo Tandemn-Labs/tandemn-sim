@@ -328,6 +328,32 @@ class ServingInputTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_rank_result(rank_run, completed)
 
+    def test_parse_rank_result_accepts_completed_rows_after_wall_time_limit(self) -> None:
+        """Accept the completed-only artifacts emitted by a timed-out ServingSim run."""
+        rank = SimpleNamespace(rank_id="rank_partial", n_replicas=1, shape_json=self.ranks[0].shape_json)
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "requests.csv"
+            with output_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=CSV_HEADER)
+                writer.writeheader()
+                writer.writerow(dict.fromkeys(CSV_HEADER, 0))
+            metrics_path = Path(directory) / "metrics.jsonl"
+            metrics_path.write_text(json.dumps({
+                "sim_time_ns": 1, "sample_interval_ns": 1,
+                "sample_kind": "periodic", "instance_id": 0,
+            }) + "\n")
+            rank_run = RankRun(deployment, (), output_path, metrics_path, 2, 30)
+            completed = subprocess.CompletedProcess(
+                (), 0,
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","completed_requests":1,"unfinished_requests":1}',
+                "",
+            )
+            result = parse_rank_result(rank_run, completed)
+
+        self.assertEqual(len(result.request_rows), 1)
+        self.assertEqual(len(result.metric_samples), 1)
+
     def test_rank_results_expand_to_one_metric_per_simulated_gpu(self) -> None:
         """Convert two TP=2 replicas into four canonical Store GPU metrics."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
