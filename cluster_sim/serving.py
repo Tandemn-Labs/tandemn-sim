@@ -357,7 +357,10 @@ def parse_rank_result(
     output = f"{completed.stdout}\n{completed.stderr}"
     if completed.returncode:
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
-    if "ERROR: Some Requests Remain" in output or "All Request Has Been Exited" not in output:
+    summary = _run_summary(output)
+    if summary is None and (
+        "ERROR: Some Requests Remain" in output or "All Request Has Been Exited" not in output
+    ):
         raise RuntimeError(f"{rank_run.deployment.rank_name} did not finish all requests")
     if not rank_run.output_path.is_file():
         raise RuntimeError(f"{rank_run.deployment.rank_name} wrote no request CSV")
@@ -367,8 +370,14 @@ def parse_rank_result(
         if reader.fieldnames != CSV_HEADER:
             raise ValueError(f"unexpected LLMServingSim CSV header: {reader.fieldnames!r}")
         rows = tuple(_row(row) for row in reader)
-    if len(rows) != rank_run.request_count:
+    if summary is not None and summary["completed_requests"] != len(rows):
+        raise ValueError("LLMServingSim summary does not match completed request rows")
+    if summary is not None and summary["status"] == "completed" and len(rows) != rank_run.request_count:
         raise ValueError(f"expected {rank_run.request_count} request rows, got {len(rows)}")
+    if summary is None and len(rows) != rank_run.request_count:
+        raise ValueError(f"expected {rank_run.request_count} request rows, got {len(rows)}")
+    if len(rows) > rank_run.request_count:
+        raise ValueError(f"expected at most {rank_run.request_count} request rows, got {len(rows)}")
     if len({row["request id"] for row in rows}) != len(rows):
         raise ValueError("LLMServingSim returned duplicate request IDs")
 
@@ -378,6 +387,24 @@ def parse_rank_result(
     metric_samples = _read_metric_samples(rank_run.metrics_path, expected_instances)
 
     return RankResult(rank_run.deployment, rows, metric_samples, completed.stdout, completed.stderr)
+
+
+def _run_summary(output: str) -> dict[str, object] | None:
+    """Return the terminal LLMServingSim status, if this is a wall-time-aware run."""
+    for line in reversed(output.splitlines()):
+        if not line.startswith("SIM_RUN_SUMMARY "):
+            continue
+        try:
+            summary = json.loads(line.removeprefix("SIM_RUN_SUMMARY "))
+            status = summary["status"]
+            completed = int(summary["completed_requests"])
+            unfinished = int(summary["unfinished_requests"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("invalid LLMServingSim run summary") from error
+        if status not in {"completed", "wall_time_limit"} or completed < 0 or unfinished < 0:
+            raise ValueError("invalid LLMServingSim run summary")
+        return summary
+    return None
 
 
 def _row(row: Mapping[str, str]) -> dict[str, float]:
