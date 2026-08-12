@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_real_3hr_homogenous-67-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_real_3hr_homogenous-67-1
+  operation: base_service
+  start_at_offset_minutes: 67
+  stop_at_offset_minutes: 157
+spec:
+  user_id: tenant_agents_premium
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 1400
+    isl_token_min: 350
+    isl_token_max: 4096
+    isl_distribution_type: LogNormal
+    osl_token_avg: 4096
+    osl_token_min: 1024
+    osl_token_max: 12000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 5
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: true
+    priority_class: HIGH
+    max_concurrent_streaming: 16
+    target_p99_ttft_ms: 2500
+    target_p99_tpot_ms: 45
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: moonshotai/Kimi-K2-Instruct
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 900
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:moonshotai/Kimi-K2-Instruct}
+    dataset:
+      type: synthetic
+      entries: 256
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 5400
+      rate: 0.059
+      smoothness: 0.209
+      concurrency: 16
+      gracePeriod: 900

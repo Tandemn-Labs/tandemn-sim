@@ -22,7 +22,7 @@ from policy import load_config_policy
 class BestFitPlannerDriverTest(unittest.TestCase):
     """Verify preferred lookup, VRAM fallback, and greedy capacity."""
 
-    def test_mapping_covers_all_six_benchmarks(self) -> None:
+    def test_mapping_covers_all_benchmarks(self) -> None:
         """Keep one positive hardware configuration for every mapped job."""
         self.assertEqual(
             {name: len(jobs) for name, jobs in BEST_FIT_CONFIGURATIONS.items()},
@@ -30,6 +30,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 "real_life_12h": 33,
                 "real_life_24h": 42,
                 "real_life_3h": 20,
+                "real_3h_homogenous": 26,
                 "simulation_12h": 38,
                 "simulation_24h": 49,
                 "simulation_3h": 26,

@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_real_3hr_homogenous-67-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_real_3hr_homogenous-67-2
+  operation: base_service
+  start_at_offset_minutes: 67
+  stop_at_offset_minutes: 142
+spec:
+  user_id: tenant_frontier_glm
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 1800
+    isl_token_min: 450
+    isl_token_max: 6000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 2500
+    osl_token_min: 625
+    osl_token_max: 9000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 5
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    priority_class: STANDARD
+    max_concurrent_streaming: 16
+    target_p99_ttft_ms: 2200
+    target_p99_tpot_ms: 50
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: zai-org/GLM-4.5-Air
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 600
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:zai-org/GLM-4.5-Air}
+    dataset:
+      type: synthetic
+      entries: 256
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 4500
+      rate: 0.08
+      smoothness: 0.527
+      concurrency: 16
+      gracePeriod: 600

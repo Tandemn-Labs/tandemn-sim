@@ -21,6 +21,112 @@ BEST_FIT_CONFIGURATIONS: dict[
     str,
     dict[str, dict[str, object]],
 ] = {
+    "real_3h_homogenous": {
+        "job-benchmark_timing_real_3hr_homogenous-0-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-0-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-0-3": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-0-4": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-0-5": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-7-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-7-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-7-3": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-15-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-15-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-15-3": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-32-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 16},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-32-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-49-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-49-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-67-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-67-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-67-3": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-85-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-100-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-100-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-125-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-125-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-145-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-145-2": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 1},
+        },
+        "job-benchmark_timing_real_3hr_homogenous-160-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 4},
+        },
+    },
     "real_life_12h": {
         "job-benchmark_timing_real_12hr_192gpu-0-1": {
             "hardware": "L40S-48GB",

@@ -37,7 +37,7 @@ class VramPlannerDriverTest(unittest.TestCase):
         self.assertEqual(rule.precision, "bf16")
         self.assertEqual(rule.allowed_tp, (2, 4, 8))
 
-    def test_mapping_covers_all_six_benchmarks(self) -> None:
+    def test_mapping_covers_all_benchmarks(self) -> None:
         """Keep one positive VRAM requirement for every benchmark job."""
         self.assertEqual(
             {name: len(jobs) for name, jobs in VRAM_REQUIREMENTS_GIB.items()},
@@ -45,6 +45,7 @@ class VramPlannerDriverTest(unittest.TestCase):
                 "real_life_12h": 33,
                 "real_life_24h": 42,
                 "real_life_3h": 20,
+                "real_3h_homogenous": 26,
                 "simulation_12h": 38,
                 "simulation_24h": 49,
                 "simulation_3h": 26,
