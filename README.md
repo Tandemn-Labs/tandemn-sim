@@ -1,43 +1,71 @@
-# AIPerf data-generation controller
+# Tandemn Simulator
 
-The controller starts one AIPerf process for one benchmark job. It does not
-schedule jobs, submit jobs, manage run state, or transform AIPerf output.
+This repository evaluates methods for scheduling AI inference workloads onto GPU clusters. It provides a common simulation and benchmark harness for comparing how different schedulers admit jobs, select hardware, choose parallelism configurations, and create placement plans under changing cluster demand.
 
-## Run a job
+The goal is to run the same workload against multiple scheduling approaches and measure placement quality, resource efficiency, latency, throughput, deadline completion, and behavior under contention.
 
-Install the project:
+## Scheduler methods
 
-    uv sync --group dev
+The scheduler implementations and adapters live in `cluster_sim/`. Current approaches include:
 
-Pass the exact job ID declared by a YAML file under the benchmark jobs
-directory:
+- Fixed and best-fit placement baselines.
+- Maximum-VRAM placement.
+- NVIDIA Dynamo AIConfigurator placement.
+- GPT-only and agentic placement methods.
+- A Koi planner adapter for Store-backed scheduling runs.
 
-    uv run controller job-benchmark_timing_3hr-0-1
+Additional scheduling methods are tracked in `configs/methods.yaml`. Each method receives the same benchmark workload and cluster state so results can be compared consistently.
 
-The controller:
+## Benchmarks
 
-1. Finds the unique job with that ID.
-2. Requires the job's driver to be AIPerf.
-3. Extracts its workload as the AIPerf configuration.
-4. Adds the prompt token distributions declared in the job specification.
-5. Runs AIPerf with the temporary configuration.
-6. Returns AIPerf's exit code.
+Benchmarks live in `benchmarks/` and cover both simulated and real-hardware environments. They define the cluster resources, model mix, online and batch jobs, arrival patterns, SLOs, deadlines, and run duration.
 
-The job starts immediately. Schedule offsets in the benchmark job are not
-interpreted. AIPerf owns its endpoint behavior and generated artifacts. When a
-job does not declare an endpoint URL, AIPerf uses its localhost default.
+The benchmark catalog currently includes:
 
-## Source layout
+- 3-hour, 12-hour, and 24-hour simulation workloads.
+- 3-hour, 12-hour, and 24-hour real-hardware workload definitions.
+- `real_3h_homogenous`, an executable 3-hour benchmark for a homogeneous, on-demand L40S cluster.
 
-    src/data_generation/
-      __init__.py
-      controller.py
+See `benchmarks/catalog.yaml` for the complete list and execution status of each benchmark. Experiment groups in `experiments/` combine benchmarks, scheduler methods, and metric suites for specific evaluations.
 
-controller.py is the only functional data-generation module.
+## Repository layout
 
-## Verify
+```text
+benchmarks/          Benchmark manifests, jobs, and resource definitions
+cluster_sim/         Simulator, scheduler adapters, planners, and telemetry
+configs/             Scheduler and metric catalogs
+experiments/         Reproducible experiment definitions
+src/data_generation/ AIPerf workload launcher
+tests/               Data-generation tests
+```
 
-    uv run ruff format --check src tests
-    uv run ruff check src tests
-    uv run mypy src
-    uv run python -m unittest tests.test_controller -v
+## Getting started
+
+Install the project and development dependencies:
+
+```bash
+uv sync --group dev
+```
+
+Inspect the cluster simulator options:
+
+```bash
+uv run python cluster_sim/cli.py --help
+```
+
+Run one AIPerf-backed benchmark job by its YAML job ID:
+
+```bash
+uv run controller job-benchmark_timing_3hr-0-1
+```
+
+The simulator integrates with Tandemn Store and external serving components, so complete benchmark runs require those services to be available.
+
+## Development checks
+
+```bash
+uv run ruff format --check src tests cluster_sim
+uv run ruff check src tests cluster_sim
+uv run mypy src
+uv run python -m unittest discover -s tests
+```
