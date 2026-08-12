@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import sys
+from os import getenv
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Protocol
 
-from models import CreatedPlan, PlannerResult
+from models import CreatedPlan, PlannerResult, Scenario
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class PlannerContext:
     user_id: str
     postgres: object
     logical_clock: object
+    scenario: Scenario
     koi_root: Path | None
     koi_args: list[str]
 
@@ -78,12 +80,20 @@ class KoiPlannerDriver:
 
     method_name = "koi"
 
-    def __init__(self, user_id: str, runner: object, agent: object, llm: object) -> None:
+    def __init__(
+        self,
+        user_id: str,
+        runner: object,
+        agent: object,
+        llm: object,
+        debug_logger: object | None = None,
+    ) -> None:
         """Keep one already-built Koi runner and its persistent learning state."""
         self.user_id = user_id
         self.runner = runner
         self.agent = agent
         self.llm = llm
+        self.debug_logger = debug_logger
 
     @classmethod
     def build(
@@ -96,18 +106,24 @@ class KoiPlannerDriver:
         """Build Koi once using its existing Store-backed runner bootstrap."""
         if str(koi_root) not in sys.path:
             sys.path.insert(0, str(koi_root))
-        from src.orchestrator.runner import build_runner, parse_args
+        from src.orchestrator.debug_logging import DebugLogger
+        from src.orchestrator.runner import build_runner, configure_logging, parse_args
 
         args = parse_args(["--user-id", user_id, "--tick-interval-sec", "0", *koi_args])
         runner, _, agent, llm = build_runner(args)
+        debug_logger = DebugLogger(args.log_dir, trace=args.trace, run_id=args.run_id)
+        configure_logging(args.log_level, debug_logger.runner_log_path)
+        runner.trace = debug_logger
         runner.tick_interval_sec = 0
         runner.telemetry.now_fn = logical_clock.now
         runner.executor = SimulationPlanExecutor(runner.executor)
-        return cls(user_id, runner, agent, llm)
+        return cls(user_id, runner, agent, llm, debug_logger)
 
     def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
         """Run one Koi tick and return the Store plans it created."""
         context = self.runner.run_tick(tick_number)
+        if self.debug_logger is not None:
+            self.debug_logger.persist_runner_tick(context, self.agent, self.llm)
         events = getattr(getattr(self.agent, "trace", None), "events", None)
         if isinstance(events, list):
             events.clear()
@@ -142,8 +158,63 @@ def _build_koi(context: PlannerContext) -> KoiPlannerDriver:
     )
 
 
+def _build_aic(context: PlannerContext) -> PlannerDriver:
+    """Build the existing Dynamo AIC baseline with its standard backend."""
+    from aic import AicPlannerDriver
+
+    return AicPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm"},
+        context.postgres,
+    )
+
+
+def _build_bestfit(context: PlannerContext) -> PlannerDriver:
+    """Build the existing memory best-fit baseline with its standard backend."""
+    from bestfit import BestFitPlannerDriver
+
+    return BestFitPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm"},
+        context.postgres,
+    )
+
+
+def _build_vram(context: PlannerContext) -> PlannerDriver:
+    """Build the existing static VRAM baseline with its standard backend."""
+    from vram import VramPlannerDriver
+
+    return VramPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm"},
+        context.postgres,
+    )
+
+
+def _build_gpt(context: PlannerContext) -> PlannerDriver:
+    """Build the existing GPT-only baseline from the configured model name."""
+    from gpt import GptPlannerDriver
+
+    model = getenv("OPENAI_MODEL")
+    if not model:
+        raise ValueError("planner 'gpt_only' requires OPENAI_MODEL")
+    return GptPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"model": model, "max_tokens": 20_000, "backend": "vllm"},
+        context.postgres,
+    )
+
+
 PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "koi": _build_koi,
+    "dynamo_aic": _build_aic,
+    "bestfit": _build_bestfit,
+    "vram": _build_vram,
+    "gpt_only": _build_gpt,
 }
 
 
