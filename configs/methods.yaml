@@ -45,6 +45,15 @@ methods:
       max_tokens: 4096
       backend: vllm
       default_optimization_goal: throughput
+  agentic:
+    display_name: Claude agentic placement + common safety checks
+    status: implemented
+    settings:
+      model: haiku
+      max_tokens: 16384
+      max_turns: 8
+      backend: vllm
+      default_optimization_goal: throughput
   koi:
     display_name: Koi
     status: planned
