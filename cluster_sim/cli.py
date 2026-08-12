@@ -33,6 +33,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--container", default="servingsim_docker")
     parser.add_argument("--parallel-ranks-per-job", type=int, default=1)
     parser.add_argument("--rank-timeout-seconds", type=float, default=300)
+    parser.add_argument("--ticks", type=int)
     parser.add_argument("--trace-root", type=Path)
     parser.add_argument("--trace-run-id")
     parser.add_argument("--koi-root", type=Path)
@@ -53,6 +54,8 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--logical-epoch must include a timezone")
     if args.parallel_ranks_per_job < 1:
         raise ValueError("--parallel-ranks-per-job must be positive")
+    if args.ticks is not None and args.ticks < 1:
+        raise ValueError("--ticks must be positive")
     if (args.trace_root is None) != (args.trace_run_id is None):
         raise ValueError("--trace-root and --trace-run-id must be used together")
 
@@ -67,6 +70,7 @@ def main(argv: list[str] | None = None) -> None:
             user_id=args.user_id,
             postgres=postgres,
             logical_clock=clock,
+            scenario=scenario,
             koi_root=args.koi_root,
             koi_args=list(args.koi_arg),
         ),
@@ -85,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
         args.trace_root,
         args.trace_run_id,
     )
-    simulator.run()
+    simulator.run(args.ticks)
 
 
 def _benchmark_path(value: str) -> Path:
