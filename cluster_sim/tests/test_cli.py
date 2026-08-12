@@ -30,6 +30,8 @@ class CliTest(unittest.TestCase):
                 "first-fit",
                 "--parallel-ranks-per-job",
                 "6",
+                "--ticks",
+                "5",
                 "--trace-root",
                 "traces",
                 "--trace-run-id",
@@ -42,6 +44,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.user_id, "usr_sim")
         self.assertEqual(args.planner, "first-fit")
         self.assertEqual(args.parallel_ranks_per_job, 6)
+        self.assertEqual(args.ticks, 5)
         self.assertEqual(args.trace_root, Path("traces"))
         self.assertEqual(args.trace_run_id, "run-1")
         self.assertEqual(args.koi_arg, ["--api-key", "test-key"])
@@ -94,7 +97,7 @@ class CliTest(unittest.TestCase):
             )
 
         self.assertEqual(simulator_class.call_args.args[-2:], (Path("traces"), "run-1"))
-        simulator.run.assert_called_once_with()
+        simulator.run.assert_called_once_with(None)
 
 
 if __name__ == "__main__":

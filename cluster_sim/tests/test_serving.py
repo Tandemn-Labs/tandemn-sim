@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,6 +76,28 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["num_instances"], 2)
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
         self.assertEqual(cluster["nodes"][0]["instances"][0]["tp_size"], 2)
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["fp"], "bf16")
+
+    def test_rank_cluster_uses_store_fp16_name(self) -> None:
+        """Use LLMServingSim's FP16 profile convention for Store float16 models."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment.shape["weight_dtype"] = "float16"
+
+        cluster = build_rank_cluster(deployment, self.hardware)
+
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["fp"], "fp16")
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["dtype"], "float16")
+
+    def test_rank_deployment_uses_per_replica_gpu_count(self) -> None:
+        """Keep total DP footprint separate from one simulated replica's GPU count."""
+        shape = {**self.ranks[0].shape_json, "count": 8, "tp": 2, "pp": 1, "dp": 4}
+        rank = SimpleNamespace(rank_id="rank_a", n_replicas=4, shape_json=shape)
+
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+
+        self.assertEqual(deployment.shape["count"], 2)
+        self.assertEqual(len(deployment.chains), 4)
+        self.assertTrue(all(chain.gpu_count == 2 for chain in deployment.chains))
 
     def test_store_hardware_catalog_resolves_rank_profile(self) -> None:
         """Resolve one rank's Store catalog entry into H100 simulator facts."""
@@ -115,6 +138,42 @@ class ServingInputTest(unittest.TestCase):
                 "link_latency_ns": 0,
             },
         )
+
+    def test_store_hardware_catalog_reuses_same_cloud_instance_across_regions(self) -> None:
+        """Use identical cloud instance facts when a catalog omits one region."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment = replace(
+            deployment,
+            shape={
+                **deployment.shape,
+                "env": ["reserved", "sim", "region-2", "zone-1", "H100-SXM-80GB"],
+            },
+        )
+        catalog = {
+            "regions": [
+                {
+                    "cloud": "sim",
+                    "region": "region-1",
+                    "instance_types": [
+                        {
+                            "instance_type": "sim.h100.8gpu",
+                            "accelerators": [
+                                {
+                                    "name": "H100-SXM-80GB",
+                                    "canonical_gpu_name": "H100-SXM-80GB",
+                                    "memory_mib_each": 81_920,
+                                    "gpu_bandwidth_gbps": 3_350,
+                                    "nvlink_bandwidth_gbps": 900,
+                                }
+                            ],
+                            "network": {"network_cards": [{"peak_bandwidth_gbps": 400}]},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        self.assertEqual(resolve_rank_hardware(deployment, catalog)["profile"], "H100")
 
     def test_rank_workload_rebases_arrivals_and_preserves_prefixes(self) -> None:
         """Write rank-local LLMServingSim rows from global logical arrivals."""

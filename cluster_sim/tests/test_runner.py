@@ -26,6 +26,35 @@ from serving import RankResult
 class RunnerDataPlaneTest(unittest.TestCase):
     """Verify the coordinator serializes jobs and stages one metric commit."""
 
+    def test_run_trace_ends_after_hard_stop(self) -> None:
+        """Write the terminal trace event after every running job is stopped."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario("trace-smoke", 1, 0, (), ())
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with patch.object(simulator, "_hard_stop") as hard_stop:
+                result = simulator.run()
+
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+
+        hard_stop.assert_called_once_with()
+        self.assertEqual(result, ())
+        self.assertEqual(event["kind"], "run_finished")
+
+    def test_run_honors_tick_limit_before_drain(self) -> None:
+        """Hard-stop after the requested benchmark tick count."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario("trace-smoke", 1, 10, (), ())
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.run_tick = lambda tick: SimpleNamespace(tick_number=tick)
+
+        with patch.object(simulator, "_hard_stop"):
+            result = simulator.run(2)
+
+        self.assertEqual([item.tick_number for item in result], [0, 1])
+
     def test_trace_configuration_writes_run_metadata(self) -> None:
         """Start one trace before the first simulation tick."""
         scenario = Scenario("trace-smoke", 300_000_000_000, 300_000_000_000, (), ())
@@ -80,8 +109,22 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator._submitted_jobs = set()
         simulator._admitted_jobs = set()
+        simulator._admission_latencies_ms = []
+        simulator._admissions_in_tick = 0
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a"),
+            ranks=(
+                SimpleNamespace(
+                    plan_id="plan-1",
+                    rank_id="rank-a",
+                    n_replicas=1,
+                    shape_json={"count": 1},
+                ),
+            ),
+        )
         simulator.jobs = SimpleNamespace(
-            get=lambda job_id: SimpleNamespace(created_at=datetime(2026, 1, 1, tzinfo=UTC))
+            get=lambda job_id: SimpleNamespace(created_at=datetime(2026, 1, 1, tzinfo=UTC)),
+            running_jobs=lambda user_id: (running,),
         )
 
         class PlanStore:
@@ -91,10 +134,45 @@ class RunnerDataPlaneTest(unittest.TestCase):
             def get(self, plan_id):
                 return plan
 
+        class ResourceMapStore:
+            def __init__(self, postgres, user_id) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(
+                    scheduling_summary=lambda: {
+                        "reserved|sim|region-1|zone-1|H100": {
+                            "pools": [
+                                {
+                                    "fabric_id": "default",
+                                    "instance_type": "sim.h100.8gpu",
+                                    "total_instances": 1,
+                                    "gpus_per_instance": 8,
+                                    "total": 8,
+                                    "price_per_instance_hour": 10.0,
+                                }
+                            ]
+                        },
+                        "reserved|sim|region-2|zone-1|H100": {
+                            "pools": [
+                                {
+                                    "fabric_id": "default",
+                                    "instance_type": "sim.h100.8gpu",
+                                    "total_instances": 1,
+                                    "gpus_per_instance": 8,
+                                    "total": 8,
+                                    "price_per_instance_hour": 10.0,
+                                }
+                            ]
+                        }
+                    }
+                )
+
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
             with (
                 patch("tandemn_system_data.clients.PlanStore", PlanStore),
+                patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
                 patch("runner.apply_pending_plans"),
                 patch.object(simulator, "_simulate_tick"),
             ):
@@ -106,12 +184,59 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(events[0]["kind"], "planner_finished")
-        self.assertEqual(events[0]["plans"][0]["actions"][0]["job_id"], "job-a")
-        self.assertEqual(events[0]["planned_job_ids"], ["job-a"])
-        self.assertEqual(events[1]["kind"], "job_admitted")
-        self.assertEqual(events[1]["admitted_at"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(events[0]["kind"], "tick_started")
+        self.assertEqual(events[1]["kind"], "resource_snapshot")
+        self.assertEqual(events[2]["kind"], "planner_finished")
+        self.assertEqual(events[2]["plans"][0]["actions"][0]["job_id"], "job-a")
+        self.assertEqual(events[2]["planned_job_ids"], ["job-a"])
+        self.assertEqual(events[3]["kind"], "job_admitted")
+        self.assertEqual(events[3]["admitted_at"], "2026-01-01T00:00:00+00:00")
         self.assertEqual(sum(event["kind"] == "job_admitted" for event in events), 1)
+        self.assertEqual(sum(event["kind"] == "placement_observed" for event in events), 2)
+        self.assertEqual(simulator._admission_latencies_ms, [0.0])
+
+    def test_tick_trace_appends_new_koi_debug_facts(self) -> None:
+        """Copy Koi JSONL facts once after each simulator planner tick."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario("trace-smoke", 300_000_000_000, 300_000_000_000, (), ())
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator._submitted_jobs = set()
+        simulator._admitted_jobs = set()
+        simulator.jobs = SimpleNamespace(running_jobs=lambda user_id: ())
+
+        with tempfile.TemporaryDirectory() as directory:
+            koi_events_path = Path(directory) / "koi-events.jsonl"
+            koi_events_path.write_text(
+                '{"kind":"state","tick":0,"ts":"2026-01-01T00:00:00+00:00",'
+                '"payload":{"state":"S1_OBSERVE","duration_ms":1}}\n',
+                encoding="utf-8",
+            )
+            simulator.planner = SimpleNamespace(
+                create_plans=lambda tick, start: PlannerResult(tick, ()),
+                debug_logger=SimpleNamespace(events_path=koi_events_path),
+            )
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with (
+                patch(
+                    "tandemn_system_data.clients.ResourceMapStore",
+                    return_value=SimpleNamespace(
+                        get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                    ),
+                ),
+                patch("runner.apply_pending_plans"),
+                patch.object(simulator, "_simulate_tick"),
+            ):
+                simulator.run_tick(0)
+                simulator.run_tick(1)
+
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(sum(event["kind"] == "koi_state" for event in events), 1)
 
     def test_submit_trace_keeps_batch_deadline_and_slo_inputs(self) -> None:
         """Write immutable workload facts at the exact logical release time."""
@@ -153,7 +278,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator = object.__new__(ClusterSimulator)
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator.jobs = SimpleNamespace(
-            set_chain_status=lambda *args: calls.append(args),
+            set_rank_status=lambda *args: calls.append(args),
             transition=lambda *args: calls.append(args),
         )
         simulator._batch_jobs = {
@@ -169,7 +294,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         }
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a"),
-            chains=(SimpleNamespace(chain_id="chain-1"),),
+            ranks=(SimpleNamespace(rank_id="rank-1"),),
         )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -188,11 +313,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a"),
-            chains=(SimpleNamespace(chain_id="chain-1"),),
+            ranks=(SimpleNamespace(rank_id="rank-1"),),
         )
         simulator.jobs = SimpleNamespace(
             running_jobs=lambda user_id: (running,),
-            set_chain_status=lambda *args: None,
+            set_rank_status=lambda *args: None,
             transition=lambda *args, **kwargs: None,
         )
         simulator.user_id = "user_1"
@@ -213,10 +338,10 @@ class RunnerDataPlaneTest(unittest.TestCase):
         source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
         job = replace(source.online_jobs[0], store_job_id="job_1", stops_at_ns=900_000_000_000)
         scenario = Scenario("runner-smoke", 300_000_000_000, 300_000_000_000, (job,), ())
-        chain = SimpleNamespace(
-            chain_id="chain_1",
+        rank = SimpleNamespace(
+            rank_id="rank_1",
+            n_replicas=1,
             shape_json={
-                "rank_id": "rank_0",
                 "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
                 "count": 1,
                 "tp": 1,
@@ -228,7 +353,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         )
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job_1", spec_json={"model_id": job.model_name}),
-            chains=(chain,),
+            ranks=(rank,),
         )
         simulator = object.__new__(ClusterSimulator)
         simulator.scenario = scenario
@@ -246,6 +371,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator._online_jobs = {job.store_job_id: job}
         simulator._batch_jobs = {}
         simulator._batch_progress = {}
+        simulator._admission_latencies_ms = [12_000.0]
+        simulator._admissions_in_tick = 2
         simulator._router = StickyRoundRobinRouter()
 
         catalog = {
@@ -290,7 +417,23 @@ class RunnerDataPlaneTest(unittest.TestCase):
                         "reserved|sim|region-1|zone-1|H100-SXM-80GB": {
                             "pools": [
                                 {
+                                    "fabric_id": "default",
                                     "instance_type": "sim.h100.8gpu",
+                                    "total": 8,
+                                    "total_instances": 1,
+                                    "gpus_per_instance": 8,
+                                    "price_per_instance_hour": 10.0,
+                                }
+                            ]
+                        },
+                        "reserved|sim|region-2|zone-1|H100-SXM-80GB": {
+                            "pools": [
+                                {
+                                    "fabric_id": "default",
+                                    "instance_type": "sim.h100.8gpu",
+                                    "total": 8,
+                                    "total_instances": 1,
+                                    "gpus_per_instance": 8,
                                     "price_per_instance_hour": 10.0,
                                 }
                             ]
@@ -298,9 +441,24 @@ class RunnerDataPlaneTest(unittest.TestCase):
                     }
                 )
 
+        staged = []
+
         class GpuMetricStore:
             def __init__(self, postgres) -> None:
                 pass
+
+            def rows_for_job_window(self, user_id, job_id, start, end):
+                return [metric for metric in staged if metric.job_id == job_id]
+
+        class ModelCatalogStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self, model_id):
+                return SimpleNamespace(
+                    weight_dtype="bfloat16",
+                    weight_quantization_method="none",
+                )
 
         def prepare(*args):
             deployment = args[0]
@@ -341,22 +499,46 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch("tandemn_system_data.clients.HardwareCatalogStore", HardwareCatalogStore),
                 patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
                 patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
+                patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
                 patch("runner.prepare_rank_run", prepare),
                 patch("runner.run_ranks", run),
                 patch(
                     "runner.commit_tick_metrics",
-                    lambda store, metrics: calls.append(("commit", metrics)),
+                    lambda store, metrics: calls.append(("commit", metrics))
+                    or staged.extend(metrics),
                 ),
             ):
                 simulator._simulate_tick(0, 0, 300_000_000_000)
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+            ]
 
         self.assertEqual(calls[0], ("run", 1))
         self.assertEqual(calls[1][0], "commit")
         self.assertEqual(len(calls[1][1]), 1)
-        self.assertEqual(event["kind"], "gpu_sample")
-        self.assertEqual(event["metrics"]["kv_cache_util"], 0.5)
+        gpu_event = next(event for event in events if event["kind"] == "gpu_sample")
+        rank_event = next(event for event in events if event["kind"] == "rank_window")
+        job_event = next(event for event in events if event["kind"] == "job_window")
+        pool_event = next(event for event in events if event["kind"] == "pool_window")
+        cluster_event = next(event for event in events if event["kind"] == "cluster_window")
+        self.assertEqual(gpu_event["metrics"]["kv_cache_util"], 0.5)
+        self.assertEqual(rank_event["v_actual"]["kv_cache_util"], [0.5])
+        self.assertEqual(job_event["job_id"], "job_1")
+        self.assertTrue(job_event["ttft_slo_met"])
+        self.assertEqual(pool_event["expected_gpu_count"], 8)
+        self.assertEqual(pool_event["allocated_gpu_count"], 1)
+        self.assertEqual(cluster_event["capacity_gpu_hours"], 16 * 300 / 3600)
+        self.assertEqual(cluster_event["jobs_admitted_in_tick"], 2)
+        self.assertEqual(cluster_event["rolling_admission_time_ms"], 12_000.0)
+        second_pool = next(
+            event
+            for event in events
+            if event["kind"] == "pool_window"
+            and event["pool_id"].startswith("reserved|sim|region-2")
+        )
+        self.assertEqual(second_pool["reported_gpu_count"], 0)
 
     def test_batch_probe_advances_full_backlog_by_observed_rate(self) -> None:
         """Scale a two-second, twenty-request probe across one five-minute tick."""
@@ -391,24 +573,49 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(completed, 500)
         self.assertEqual(progress.completed_requests, 10_000)
 
-    def test_finish_stops_chains_before_finishing_job(self) -> None:
+    def test_batch_completion_uses_observed_in_tick_time(self) -> None:
+        """Record batch completion at its replay-derived time inside the tick."""
+        result = RankResult(
+            deployment=SimpleNamespace(),
+            request_rows=tuple(
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 2_000_000_000,
+                    "TTFT": 1_000_000,
+                    "TPOT": 100_000,
+                }
+                for _ in range(20)
+            ),
+            metric_samples=(),
+            stdout="",
+            stderr="",
+        )
+        progress = BatchProgress(total_requests=10_000, completed_requests=9_500)
+
+        advance_batch_progress(progress, (result,), 300_000_000_000, 600_000_000_000)
+
+        self.assertEqual(progress.completed_at_ns, 650_000_000_000)
+
+    def test_finish_stops_ranks_before_finishing_job(self) -> None:
         """Apply terminal Store transitions after simulated work completes."""
         calls = []
         simulator = object.__new__(ClusterSimulator)
         simulator.jobs = SimpleNamespace(
-            set_chain_status=lambda *args: calls.append(("chain", *args)),
+            set_rank_status=lambda *args: calls.append(("rank", *args)),
             transition=lambda *args: calls.append(("job", *args)),
         )
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job_1"),
-            chains=(SimpleNamespace(chain_id="chain_0"), SimpleNamespace(chain_id="chain_1")),
+            ranks=(SimpleNamespace(rank_id="rank_0"), SimpleNamespace(rank_id="rank_1")),
         )
 
         simulator._finish(running)
 
-        self.assertEqual([call[0] for call in calls], ["chain", "chain", "job"])
-        self.assertEqual(calls[0][1], "chain_0")
-        self.assertEqual(calls[1][1], "chain_1")
+        self.assertEqual([call[0] for call in calls], ["rank", "rank", "job"])
+        self.assertEqual(calls[0][1], "rank_0")
+        self.assertEqual(calls[1][1], "rank_1")
         self.assertEqual(calls[2][1], "job_1")
 
 
