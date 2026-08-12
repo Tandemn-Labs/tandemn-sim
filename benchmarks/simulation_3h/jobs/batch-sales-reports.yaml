@@ -45,3 +45,4 @@ workload:
     partitioning:
       shard_count: 80
       requests_per_shard: 100
+      max_in_flight_requests: 64
