@@ -52,11 +52,49 @@ def run_started(
     }
 
 
-def planner_finished(
+def tick_started(tick: int, started_at: str) -> dict[str, object]:
+    """Build the logical control-window start event."""
+    return {
+        "kind": "tick_started",
+        "tick": tick,
+        "started_at": started_at,
+    }
+
+
+def resource_snapshot(tick: int, pools: list[dict[str, object]]) -> dict[str, object]:
+    """Build one immutable ResourceMap pool snapshot for a control tick."""
+    return {
+        "kind": "resource_snapshot",
+        "tick": tick,
+        "pools": pools,
+    }
+
+
+def placement_observed(
     tick: int,
+    plan_id: str | None,
+    job_id: str,
+    rank_id: str,
+    n_replicas: int,
+    shape: dict[str, object],
+) -> dict[str, object]:
+    """Build one post-apply canonical rank placement observation."""
+    return {
+        "kind": "placement_observed",
+        "tick": tick,
+        "plan_id": plan_id,
+        "job_id": job_id,
+        "rank_id": rank_id,
+        "n_replicas": n_replicas,
+        "shape": shape,
+    }
+
+
+def planner_finished(
+    tick: int | None,
     started_at: str,
     finished_at: str,
-    decision_time_ms: float,
+    decision_time_ms: float | None,
     plans: list[dict[str, object]],
     planned_job_ids: tuple[str, ...],
     timed_out: bool | None,
@@ -99,7 +137,7 @@ def rank_window(
     tick: int,
     job_id: str,
     rank_id: str,
-    chain_ids: tuple[str, ...],
+    chain_indices: tuple[int, ...],
     window_start: str,
     window_end: str,
     v_actual: dict[str, list[float | None]],
@@ -113,7 +151,7 @@ def rank_window(
         "tick": tick,
         "job_id": job_id,
         "rank_id": rank_id,
-        "chain_ids": list(chain_ids),
+        "chain_indices": list(chain_indices),
         "window_start": window_start,
         "window_end": window_end,
         "v_hat": v_hat,
@@ -192,6 +230,9 @@ def cluster_window(
     allocated_gpu_hours: float,
     capacity_cost: float,
     allocated_cost: float,
+    jobs_admitted_in_tick: int = 0,
+    admission_count_so_far: int = 0,
+    rolling_admission_time_ms: float | None = None,
 ) -> dict[str, object]:
     """Build aggregate GPU-hour and cost facts across every physical pool."""
     return {
@@ -203,6 +244,9 @@ def cluster_window(
         "allocated_gpu_hours": allocated_gpu_hours,
         "capacity_cost": capacity_cost,
         "allocated_cost": allocated_cost,
+        "jobs_admitted_in_tick": jobs_admitted_in_tick,
+        "admission_count_so_far": admission_count_so_far,
+        "rolling_admission_time_ms": rolling_admission_time_ms,
     }
 
 
@@ -246,13 +290,21 @@ def job_finished(
     }
 
 
+def run_finished(finished_at: str) -> dict[str, object]:
+    """Build the terminal event for one completed experiment trace."""
+    return {
+        "kind": "run_finished",
+        "finished_at": finished_at,
+    }
+
+
 def gpu_sample(
     tick: int,
     timestamp: str,
     gpu_uuid: str,
     job_id: str | None,
     rank_id: str | None,
-    chain_id: str | None,
+    chain_index: int | None,
     node_name: str | None,
     instance_type: str | None,
     metrics: dict[str, float | None],
@@ -265,30 +317,9 @@ def gpu_sample(
         "gpu_uuid": gpu_uuid,
         "job_id": job_id,
         "rank_id": rank_id,
-        "chain_id": chain_id,
+        "chain_index": chain_index,
         "node_name": node_name,
         "instance_type": instance_type,
         "metrics": metrics,
     }
 
-
-def koi_llm_call(
-    tick: int,
-    call_index: int,
-    elapsed_ms: float,
-    prompt_tokens: int | None,
-    completion_tokens: int | None,
-    total_tokens: int | None,
-    error: str | None,
-) -> dict[str, object]:
-    """Build one Koi LLM-call fact using only provider-reported token usage."""
-    return {
-        "kind": "koi_llm_call",
-        "tick": tick,
-        "call_index": call_index,
-        "elapsed_ms": elapsed_ms,
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "error": error,
-    }
