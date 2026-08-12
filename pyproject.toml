@@ -17,6 +17,9 @@ dependencies = [
 controller = "data_generation.controller:main"
 
 [dependency-groups]
+agentic = [
+    "claude-agent-sdk>=0.2.136",
+]
 dev = [
   "mypy>=1.16",
   "pre-commit>=4.2",
