@@ -9,7 +9,7 @@ import math
 import shutil
 import subprocess
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
@@ -335,16 +335,23 @@ def run_ranks(
     rank_runs: Sequence[RankRun],
     max_parallel: int,
     deadline_epoch_seconds: float | None = None,
+    progress=None,
 ) -> tuple[RankResult, ...]:
     """Run independent rank simulations concurrently and fail as one batch."""
     if max_parallel < 1:
         raise ValueError("max_parallel must be positive")
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-        futures = [
-            executor.submit(_run_rank, rank_run, deadline_epoch_seconds)
-            for rank_run in rank_runs
-        ]
-        return tuple(future.result() for future in futures)
+        futures = {
+            executor.submit(_run_rank, rank_run, deadline_epoch_seconds): index
+            for index, rank_run in enumerate(rank_runs)
+        }
+        results = [None] * len(rank_runs)
+        for completed, future in enumerate(as_completed(futures), start=1):
+            index = futures[future]
+            results[index] = future.result()
+            if progress is not None:
+                progress(completed, len(rank_runs), rank_runs[index])
+        return tuple(results)
 
 
 def _run_rank(

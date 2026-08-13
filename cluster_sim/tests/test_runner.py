@@ -434,7 +434,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         def prepare(running, *args):
             return rank_runs[running.job.job_id]
 
-        def run(runs, max_parallel, deadline_epoch_seconds):
+        def run(runs, max_parallel, deadline_epoch_seconds, progress=None):
             launched.append((runs, max_parallel, deadline_epoch_seconds))
             return result_a, result_b
 
@@ -521,7 +521,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 ),
             )
 
-        def run(rank_runs, max_parallel, deadline_epoch_seconds):
+        def run(rank_runs, max_parallel, deadline_epoch_seconds, progress=None):
             name = next(completed_names)
             completed = next(
                 request
@@ -820,7 +820,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             deployment = args[0]
             return SimpleNamespace(deployment=deployment, request_count=1)
 
-        def run(rank_runs, max_parallel, deadline_epoch_seconds):
+        def run(rank_runs, max_parallel, deadline_epoch_seconds, progress=None):
             deployment = rank_runs[0].deployment
             calls.append(("run", max_parallel, deadline_epoch_seconds))
             return (
