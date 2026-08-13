@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -370,6 +370,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             for job in jobs
         }
         simulator._online_jobs = {job.store_job_id: job for job in jobs}
+        simulator._online_backlog = {job.store_job_id: () for job in jobs}
         simulator._batch_jobs = {}
         simulator._batch_progress = {}
         simulator.trace_file = None
@@ -378,8 +379,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
             "job-a": (SimpleNamespace(deployment="deployment-a"),),
             "job-b": (SimpleNamespace(deployment="deployment-b"),),
         }
-        result_a = object()
-        result_b = object()
+        result_a = SimpleNamespace(completed_requests=())
+        result_b = SimpleNamespace(completed_requests=())
         launched = []
         finalized = []
 
@@ -433,6 +434,101 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ],
         )
 
+    def test_online_backlog_retries_before_fresh_requests_and_drains(self) -> None:
+        """Retry unfinished traffic each tick until the stopped source drains."""
+        job = OnlineJob("online", "job", "model", 0, 600_000_000_000, {})
+        running = SimpleNamespace(job=SimpleNamespace(job_id="job"), ranks=())
+        requests = (
+            Request("r0", "s0", 0, 0, 1, 1, None),
+            Request("r1", "s1", 0, 1, 1, 1, None),
+            Request("r2", "s2", 0, 300_000_000_000, 1, 1, None),
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "backlog", 300_000_000_000, 900_000_000_000, (job,), ()
+        )
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(running_jobs=lambda user_id: (running,))
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 1
+        simulator._traffic_starts = {}
+        simulator._requests = {job.store_job_id: requests}
+        simulator._online_jobs = {job.store_job_id: job}
+        simulator._online_backlog = {job.store_job_id: ()}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+        simulator.trace_file = None
+
+        attempts = []
+        completed_names = iter(("r1", "r2", "r0"))
+
+        class HardwareCatalogStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(catalog={})
+
+        class ResourceMapStore:
+            def __init__(self, postgres, user_id) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(scheduling_summary=lambda: {})
+
+        def prepare(running, job_name, tick_requests, *args):
+            attempts.append(tick_requests)
+            return (SimpleNamespace(deployment="deployment", requests=tick_requests),)
+
+        def run(rank_runs, max_parallel, deadline_epoch_seconds):
+            name = next(completed_names)
+            completed = next(
+                request
+                for request in rank_runs[0].requests
+                if request.request_name == name
+            )
+            return (SimpleNamespace(completed_requests=(completed,)),)
+
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                HardwareCatalogStore,
+            ),
+            patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
+            patch.object(simulator, "_prepare_job_runs", side_effect=prepare),
+            patch("runner.run_ranks", side_effect=run),
+            patch("runner.gpu_metrics_from_results", return_value=[]),
+            patch.object(simulator, "_finish") as finish,
+        ):
+            simulator._simulate_tick(0, 0, 300_000_000_000)
+            self.assertEqual(
+                [request.request_name for request in simulator._online_backlog["job"]],
+                ["r0"],
+            )
+            simulator.clock.advance(timedelta(minutes=5))
+            simulator._simulate_tick(1, 300_000_000_000, 600_000_000_000)
+            self.assertEqual(
+                [request.request_name for request in simulator._online_backlog["job"]],
+                ["r0"],
+            )
+            finish.assert_not_called()
+            simulator.clock.advance(timedelta(minutes=5))
+            simulator._simulate_tick(2, 600_000_000_000, 900_000_000_000)
+
+        self.assertEqual(
+            [[request.request_name for request in tick] for tick in attempts],
+            [["r0", "r1"], ["r0", "r2"], ["r0"]],
+        )
+        self.assertEqual(attempts[1][0].arrives_at_ns, 300_000_000_000)
+        self.assertEqual(attempts[2][0].arrives_at_ns, 600_000_000_000)
+        self.assertEqual(simulator._online_backlog["job"], ())
+        finish.assert_called_once_with(
+            running,
+            datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+        )
+
     def test_active_online_job_runs_rank_and_commits_tick_metrics(self) -> None:
         """Route one admitted job through the ServingSim adapter boundary."""
         source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
@@ -469,6 +565,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator._traffic_starts = {}
         simulator._requests = {job.store_job_id: __import__("scenario").materialize_online_requests(job)}
         simulator._online_jobs = {job.store_job_id: job}
+        simulator._online_backlog = {job.store_job_id: ()}
         simulator._batch_jobs = {}
         simulator._batch_progress = {}
         simulator._admission_latencies_ms = [12_000.0]
@@ -673,6 +770,51 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertEqual(completed, 500)
         self.assertEqual(progress.completed_requests, 10_000)
+
+    def test_batch_cutoff_scales_each_rank_by_simulated_observation_time(self) -> None:
+        """Project partial rank probes using their reported simulated horizons."""
+        row = {
+            "instance id": 0,
+            "input": 100,
+            "output": 10,
+            "end_time": 1_000_000_000,
+            "TTFT": 1_000_000,
+            "TPOT": 100_000,
+        }
+        results = (
+            RankResult(
+                SimpleNamespace(),
+                tuple(dict(row) for _ in range(20)),
+                (),
+                "",
+                "",
+                "wall_time_limit",
+                (),
+                10_000_000_000,
+            ),
+            RankResult(
+                SimpleNamespace(),
+                tuple(dict(row) for _ in range(10)),
+                (),
+                "",
+                "",
+                "wall_time_limit",
+                (),
+                5_000_000_000,
+            ),
+        )
+        progress = BatchProgress(total_requests=100_000)
+
+        completed = advance_batch_progress(
+            progress,
+            results,
+            300_000_000_000,
+            attempted_requests=200,
+        )
+
+        self.assertEqual(completed, 1_200)
+        self.assertEqual(progress.completed_requests, 1_200)
+        self.assertEqual(progress.next_request_number, 200)
 
     def test_batch_completion_uses_observed_in_tick_time(self) -> None:
         """Record batch completion at its replay-derived time inside the tick."""

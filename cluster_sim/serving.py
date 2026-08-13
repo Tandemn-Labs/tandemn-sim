@@ -79,6 +79,7 @@ class RankResult:
     stderr: str
     status: str = "completed"
     completed_requests: tuple[Request, ...] = ()
+    sim_time_ns: int = 0
 
 
 def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
@@ -439,6 +440,7 @@ def parse_rank_result(
         completed.stderr,
         summary["status"],
         tuple(completed_requests),
+        summary["sim_time_ns"],
     )
 
 
@@ -453,11 +455,15 @@ def _run_summary(output: str) -> dict[str, int | str]:
             loaded = summary["loaded_requests"]
             completed = summary["completed_requests"]
             unfinished = summary["unfinished_requests"]
+            sim_time_ns = summary["sim_time_ns"]
         except (json.JSONDecodeError, KeyError, TypeError) as error:
             raise ValueError("invalid LLMServingSim run summary") from error
         if (
             status not in {"completed", "wall_time_limit"}
-            or any(type(value) is not int or value < 0 for value in (loaded, completed, unfinished))
+            or any(
+                type(value) is not int or value < 0
+                for value in (loaded, completed, unfinished, sim_time_ns)
+            )
             or loaded != completed + unfinished
         ):
             raise ValueError("invalid LLMServingSim run summary")
@@ -466,6 +472,7 @@ def _run_summary(output: str) -> dict[str, int | str]:
             "loaded_requests": loaded,
             "completed_requests": completed,
             "unfinished_requests": unfinished,
+            "sim_time_ns": sim_time_ns,
         }
     raise ValueError("LLMServingSim wrote no run summary")
 

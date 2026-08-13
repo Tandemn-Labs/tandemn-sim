@@ -346,7 +346,7 @@ class ServingInputTest(unittest.TestCase):
                         "SIM_METRICS instance=0 kv_cache_util=0.5",
                         "SIM_METRICS instance=1 kv_cache_util=0.6",
                         "All Request Has Been Exited",
-                        'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0}',
+                        'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":11000}',
                     )
                 ),
                 "",
@@ -359,13 +359,14 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(result.metric_samples[1].metrics["kv_cache_util"], 0.6)
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.completed_requests, (requests[1], requests[0]))
+        self.assertEqual(result.sim_time_ns, 11_000)
 
     def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:
         """Only LLMServingSim's two explicit terminal states are accepted."""
         for output in (
             "",
             "SIM_RUN_SUMMARY {",
-            'SIM_RUN_SUMMARY {"status":"crashed","loaded_requests":1,"completed_requests":0,"unfinished_requests":1}',
+            'SIM_RUN_SUMMARY {"status":"crashed","loaded_requests":1,"completed_requests":0,"unfinished_requests":1,"sim_time_ns":0}',
         ):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 _run_summary(output)
@@ -395,7 +396,7 @@ class ServingInputTest(unittest.TestCase):
                 rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
                 completed = subprocess.CompletedProcess(
                     (), 0,
-                    'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0}',
+                    'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":1000}',
                     "",
                 )
                 with self.subTest(ids=ids), self.assertRaises(ValueError):
@@ -433,7 +434,7 @@ class ServingInputTest(unittest.TestCase):
             root = Path(directory)
             completed = subprocess.CompletedProcess(
                 (), 0,
-                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":1,"completed_requests":1,"unfinished_requests":0}',
+                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":1,"completed_requests":1,"unfinished_requests":0,"sim_time_ns":1000}',
                 "",
             )
             results = []
@@ -483,7 +484,7 @@ class ServingInputTest(unittest.TestCase):
             completed = subprocess.CompletedProcess(
                 (),
                 0,
-                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0}',
+                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":1000}',
                 "",
             )
             with self.assertRaises(ValueError):
@@ -511,7 +512,7 @@ class ServingInputTest(unittest.TestCase):
             rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (), 0,
-                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":2,"completed_requests":1,"unfinished_requests":1}',
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":2,"completed_requests":1,"unfinished_requests":1,"sim_time_ns":1000}',
                 "",
             )
             result = parse_rank_result(rank_run, completed)
@@ -520,6 +521,7 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(len(result.metric_samples), 1)
         self.assertEqual(result.status, "wall_time_limit")
         self.assertEqual(result.completed_requests, (requests[0],))
+        self.assertEqual(result.sim_time_ns, 1_000)
 
     def test_parse_rank_result_accepts_zero_completed_requests_after_wall_time_limit(self) -> None:
         """A cutoff before the first completion is still a valid simulator result."""
@@ -537,7 +539,7 @@ class ServingInputTest(unittest.TestCase):
             rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 1, 30)
             completed = subprocess.CompletedProcess(
                 (), 0,
-                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":1,"completed_requests":0,"unfinished_requests":1}',
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":1,"completed_requests":0,"unfinished_requests":1,"sim_time_ns":0}',
                 "",
             )
             result = parse_rank_result(rank_run, completed)
