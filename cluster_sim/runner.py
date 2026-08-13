@@ -18,6 +18,7 @@ from serving import (
     SERVING_WINDOW_SECONDS,
     build_rank_deployments,
     commit_tick_metrics,
+    completed_request_summary,
     gpu_metrics_from_results,
     prepare_rank_run,
     resolve_rank_hardware,
@@ -365,6 +366,7 @@ class ClusterSimulator:
         prices = self._prices(resource_map)
         tick_start = self.clock.now()
         prepared_jobs: list[_PreparedJob] = []
+        finished_online = []
 
         running_jobs = self.jobs.running_jobs(self.user_id)
         for running in running_jobs:
@@ -380,7 +382,7 @@ class ClusterSimulator:
             )
             if relative_start >= duration:
                 if not backlog:
-                    self._finish(running)
+                    finished_online.append((running, tick_start))
                     continue
                 fresh_requests = ()
                 source_exhausted = True
@@ -455,12 +457,34 @@ class ClusterSimulator:
         metrics = []
         result_offset = 0
         backlog_updates = {}
-        finished_online = []
+        batch_progress_updates = {}
+        finished_batch = []
+        request_summaries = {}
         for prepared in prepared_jobs:
             job_results = results[
                 result_offset : result_offset + len(prepared.rank_runs)
             ]
             result_offset += len(prepared.rank_runs)
+            job_id = prepared.running.job.job_id
+            attempted_request_count = sum(
+                rank_run.request_count for rank_run in prepared.rank_runs
+            )
+            request_summary = completed_request_summary(job_results)
+            completed_request_count = int(
+                request_summary["completed_request_count"]
+            )
+            request_summaries[job_id] = {
+                **request_summary,
+                "attempted_request_count": attempted_request_count,
+                "unfinished_request_count": max(
+                    0, attempted_request_count - completed_request_count
+                ),
+                "completion_ratio": (
+                    completed_request_count / attempted_request_count
+                    if attempted_request_count
+                    else None
+                ),
+            }
             metrics.extend(
                 gpu_metrics_from_results(
                     prepared.running.job,
@@ -484,40 +508,56 @@ class ClusterSimulator:
                     for request in prepared.online_requests
                     if request.request_name not in completed_names
                 )
-                job_id = prepared.running.job.job_id
                 backlog_updates[job_id] = unfinished
                 if prepared.source_exhausted and not unfinished:
-                    finished_online.append(prepared.running)
+                    finished_online.append(
+                        (
+                            prepared.running,
+                            tick_start
+                            + timedelta(
+                                microseconds=(
+                                    self.scenario.tick_duration_ns // 1_000
+                                )
+                            ),
+                        )
+                    )
                 continue
             progress = prepared.batch_progress
             if progress is None:
                 continue
+            staged_progress = replace(progress)
             advance_batch_progress(
-                progress,
+                staged_progress,
                 job_results,
                 self.scenario.tick_duration_ns,
                 start_offset_ns,
-                attempted_requests=sum(
-                    rank_run.request_count for rank_run in prepared.rank_runs
-                ),
+                attempted_requests=attempted_request_count,
             )
-            if progress.completed_requests == progress.total_requests:
-                self._finish(
-                    prepared.running,
-                    self.clock.start
-                    + timedelta(microseconds=progress.completed_at_ns // 1_000),
+            batch_progress_updates[job_id] = staged_progress
+            if staged_progress.completed_requests == staged_progress.total_requests:
+                finished_batch.append(
+                    (
+                        prepared.running,
+                        self.clock.start
+                        + timedelta(
+                            microseconds=staged_progress.completed_at_ns // 1_000
+                        ),
+                    )
                 )
 
-        self._online_backlog.update(backlog_updates)
-        online_finish_time = tick_start + timedelta(
-            microseconds=self.scenario.tick_duration_ns // 1_000
-        )
-        for running in finished_online:
-            self._finish(running, online_finish_time)
-
+        metric_store = None
         if metrics:
             metric_store = GpuMetricStore(self.postgres)
             commit_tick_metrics(metric_store, metrics)
+
+        self._online_backlog.update(backlog_updates)
+        self._batch_progress.update(batch_progress_updates)
+        for running, finished_at in finished_online:
+            self._finish(running, finished_at)
+        for running, finished_at in finished_batch:
+            self._finish(running, finished_at)
+
+        if metrics:
             trace_file = getattr(self, "trace_file", None)
             if trace_file is not None:
                 from tandemn_system_data.models.gpu_metric import gpu_metric_to_metrics
@@ -582,15 +622,17 @@ class ClusterSimulator:
                         ),
                     )
                 jobs_by_id = {**self._online_jobs, **self._batch_jobs}
-                for job_id, actual in aggregate_job_metrics(trajectories).items():
+                actual_by_job = aggregate_job_metrics(trajectories)
+                for job_id, request_summary in request_summaries.items():
                     job = jobs_by_id.get(job_id)
                     if job is None:
                         continue
+                    actual = actual_by_job.get(job_id, {})
                     features = job.workload["features"]
                     target_ttft = features.get("target_p99_ttft_ms")
                     target_tpot = features.get("target_p99_tpot_ms")
-                    p99_ttft = actual.get("p99_ttft_ms")
-                    p99_tpot = actual.get("p99_tpot_ms")
+                    p99_ttft = request_summary["p99_ttft_ms"]
+                    p99_tpot = request_summary["p99_tpot_ms"]
                     append_event(
                         trace_file,
                         job_window(
@@ -611,6 +653,11 @@ class ClusterSimulator:
                             p99_tpot <= target_tpot
                             if p99_tpot is not None and target_tpot is not None
                             else None,
+                            int(request_summary["attempted_request_count"]),
+                            int(request_summary["completed_request_count"]),
+                            int(request_summary["unfinished_request_count"]),
+                            request_summary["completion_ratio"],
+                            "completed_requests",
                         ),
                     )
                 allocated_by_pool = {}
@@ -783,6 +830,16 @@ class ClusterSimulator:
         from tandemn_system_data.models.enums import JobStatus, RankStatus
 
         for running in self.jobs.running_jobs(self.user_id):
+            job_id = running.job.job_id
+            if job_id in self._online_jobs:
+                unserved_request_count = len(self._online_backlog.get(job_id, ()))
+            elif job_id in self._batch_jobs:
+                progress = self._batch_progress[job_id]
+                unserved_request_count = (
+                    progress.total_requests - progress.completed_requests
+                )
+            else:
+                unserved_request_count = 0
             for rank in running.ranks:
                 self.jobs.set_rank_status(
                     rank.rank_id,
@@ -797,7 +854,7 @@ class ClusterSimulator:
             )
             trace_file = getattr(self, "trace_file", None)
             if trace_file is not None:
-                is_batch = running.job.job_id in self._batch_jobs
+                is_batch = job_id in self._batch_jobs
                 append_event(
                     trace_file,
                     job_finished(
@@ -806,6 +863,7 @@ class ClusterSimulator:
                         False,
                         "SIMULATION_HARD_STOP",
                         False if is_batch else None,
+                        unserved_request_count,
                     ),
                 )
 

@@ -176,6 +176,11 @@ def job_window(
     target_p99_tpot_ms: float | None,
     ttft_slo_met: bool | None,
     tpot_slo_met: bool | None,
+    attempted_request_count: int = 0,
+    completed_request_count: int = 0,
+    unfinished_request_count: int = 0,
+    completion_ratio: float | None = None,
+    latency_scope: str = "completed_requests",
 ) -> dict[str, object]:
     """Build one job-performance observation, derived from its rank telemetry."""
     return {
@@ -193,6 +198,11 @@ def job_window(
         "target_p99_tpot_ms": target_p99_tpot_ms,
         "ttft_slo_met": ttft_slo_met,
         "tpot_slo_met": tpot_slo_met,
+        "attempted_request_count": attempted_request_count,
+        "completed_request_count": completed_request_count,
+        "unfinished_request_count": unfinished_request_count,
+        "completion_ratio": completion_ratio,
+        "latency_scope": latency_scope,
     }
 
 
@@ -278,6 +288,7 @@ def job_finished(
     completed_successfully: bool,
     finish_reason: str | None,
     deadline_slo_met: bool | None,
+    unserved_request_count: int = 0,
 ) -> dict[str, object]:
     """Build one terminal job fact for JCT and batch deadline derivation."""
     return {
@@ -287,6 +298,7 @@ def job_finished(
         "completed_successfully": completed_successfully,
         "finish_reason": finish_reason,
         "deadline_slo_met": deadline_slo_met,
+        "unserved_request_count": unserved_request_count,
     }
 
 
@@ -322,4 +334,3 @@ def gpu_sample(
         "instance_type": instance_type,
         "metrics": metrics,
     }
-
