@@ -31,7 +31,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TANDEMN_ROOT / "tandemn-LLMServingSim",
     )
     parser.add_argument("--container", default="servingsim_docker")
-    parser.add_argument("--parallel-ranks-per-job", type=int, default=1)
+    parser.add_argument("--parallel-simulators", type=int, default=5)
     parser.add_argument("--rank-timeout-seconds", type=float, default=330)
     parser.add_argument("--ticks", type=int)
     parser.add_argument("--trace-root", type=Path)
@@ -52,8 +52,8 @@ def main(argv: list[str] | None = None) -> None:
     epoch = datetime.fromisoformat(args.logical_epoch)
     if epoch.tzinfo is None:
         raise ValueError("--logical-epoch must include a timezone")
-    if args.parallel_ranks_per_job < 1:
-        raise ValueError("--parallel-ranks-per-job must be positive")
+    if args.parallel_simulators < 1:
+        raise ValueError("--parallel-simulators must be positive")
     if args.ticks is not None and args.ticks < 1:
         raise ValueError("--ticks must be positive")
     if (args.trace_root is None) != (args.trace_run_id is None):
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
         args.llmservingsim_root,
         args.container,
         args.run_name,
-        args.parallel_ranks_per_job,
+        args.parallel_simulators,
         args.rank_timeout_seconds,
         args.trace_root,
         args.trace_run_id,
