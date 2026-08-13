@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +31,7 @@ from serving import (
     prepare_rank_run,
     resolve_rank_hardware,
     _read_metric_samples,
+    _run_rank,
     _run_summary,
     _tick_kvcache_hit_rate,
     write_rank_workload,
@@ -215,6 +217,51 @@ class ServingInputTest(unittest.TestCase):
             self.assertTrue((run_dir / "workload.jsonl").is_file())
             self.assertEqual(rank_run.output_path, run_dir / "requests.csv")
             self.assertEqual(rank_run.metrics_path, run_dir / "metrics.jsonl")
+            self.assertEqual(
+                rank_run.command[
+                    rank_run.command.index("--max-wall-time-seconds") + 1
+                ],
+                "300",
+            )
+
+    def test_rank_run_receives_shared_deadline(self) -> None:
+        """Append one tick deadline to an active simulator command."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330)
+        parsed = SimpleNamespace()
+        completed = subprocess.CompletedProcess((), 0, "", "")
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=completed) as run,
+            patch("serving.parse_rank_result", return_value=parsed),
+        ):
+            result = _run_rank(rank_run, 1_300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(
+            run.call_args.args[0][-2:],
+            ("--wall-deadline-epoch-seconds", "1300"),
+        )
+
+    def test_rank_queued_past_shared_deadline_is_not_started(self) -> None:
+        """Return an unfinished result without launching a late simulator."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            cleanup_dir = Path(directory) / "rank"
+            cleanup_dir.mkdir()
+            rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 330, cleanup_dir)
+            with (
+                patch("serving.time", return_value=1_301),
+                patch("serving.subprocess.run") as run,
+            ):
+                result = _run_rank(rank_run, 1_300)
+
+            self.assertFalse(cleanup_dir.exists())
+
+        run.assert_not_called()
+        self.assertEqual(result.status, "wall_time_limit")
+        self.assertEqual(result.completed_requests, ())
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""

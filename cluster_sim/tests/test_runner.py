@@ -16,7 +16,16 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from models import BatchJob, BatchProgress, CreatedPlan, PlannerResult, RankMetricSample, Scenario
+from models import (
+    BatchJob,
+    BatchProgress,
+    CreatedPlan,
+    OnlineJob,
+    PlannerResult,
+    RankMetricSample,
+    Request,
+    Scenario,
+)
 from routing import StickyRoundRobinRouter
 from runner import ClusterSimulator, LogicalClock, advance_batch_progress
 from scenario import load_scenario
@@ -24,7 +33,7 @@ from serving import RankResult
 
 
 class RunnerDataPlaneTest(unittest.TestCase):
-    """Verify the coordinator serializes jobs and stages one metric commit."""
+    """Verify the coordinator runs jobs and stages one metric commit."""
 
     def test_run_trace_ends_after_hard_stop(self) -> None:
         """Write the terminal trace event after every running job is stopped."""
@@ -333,6 +342,97 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertFalse(event["deadline_slo_met"])
         self.assertEqual(event["finish_reason"], "SIMULATION_HARD_STOP")
 
+    def test_active_jobs_share_one_global_rank_pool(self) -> None:
+        """Launch ranks from different jobs in one bounded worker pool."""
+        jobs = tuple(
+            OnlineJob(name, job_id, "model", 0, 600_000_000_000, {})
+            for name, job_id in (("online-a", "job-a"), ("online-b", "job-b"))
+        )
+        running_jobs = tuple(
+            SimpleNamespace(job=SimpleNamespace(job_id=job.store_job_id), ranks=())
+            for job in jobs
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "global-pool", 300_000_000_000, 300_000_000_000, jobs, ()
+        )
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(running_jobs=lambda user_id: running_jobs)
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 5
+        simulator._traffic_starts = {}
+        simulator._requests = {
+            job.store_job_id: (
+                Request(f"{job.name}/request", "session", 0, 0, 1, 1, None),
+            )
+            for job in jobs
+        }
+        simulator._online_jobs = {job.store_job_id: job for job in jobs}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+        simulator.trace_file = None
+
+        rank_runs = {
+            "job-a": (SimpleNamespace(deployment="deployment-a"),),
+            "job-b": (SimpleNamespace(deployment="deployment-b"),),
+        }
+        result_a = object()
+        result_b = object()
+        launched = []
+        finalized = []
+
+        class HardwareCatalogStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(catalog={})
+
+        class ResourceMapStore:
+            def __init__(self, postgres, user_id) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(scheduling_summary=lambda: {})
+
+        def prepare(running, *args):
+            return rank_runs[running.job.job_id]
+
+        def run(runs, max_parallel, deadline_epoch_seconds):
+            launched.append((runs, max_parallel, deadline_epoch_seconds))
+            return result_a, result_b
+
+        def metrics(job, deployments, results, *args):
+            finalized.append((job.job_id, deployments, results))
+            return []
+
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                HardwareCatalogStore,
+            ),
+            patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
+            patch.object(simulator, "_prepare_job_runs", side_effect=prepare),
+            patch("runner.run_ranks", side_effect=run),
+            patch("runner.gpu_metrics_from_results", side_effect=metrics),
+            patch("runner.time", return_value=1_000),
+        ):
+            simulator._simulate_tick(0, 0, 300_000_000_000)
+
+        self.assertEqual(
+            launched,
+            [((*rank_runs["job-a"], *rank_runs["job-b"]), 5, 1_300)],
+        )
+        self.assertEqual(
+            finalized,
+            [
+                ("job-a", ("deployment-a",), (result_a,)),
+                ("job-b", ("deployment-b",), (result_b,)),
+            ],
+        )
+
     def test_active_online_job_runs_rank_and_commits_tick_metrics(self) -> None:
         """Route one admitted job through the ServingSim adapter boundary."""
         source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
@@ -364,7 +464,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.llmservingsim_root = Path(tempfile.gettempdir())
         simulator.container = "servingsim_docker"
         simulator.run_name = "runner-smoke"
-        simulator.parallel_ranks_per_job = 1
+        simulator.parallel_simulators = 1
         simulator.rank_timeout_seconds = 30
         simulator._traffic_starts = {}
         simulator._requests = {job.store_job_id: __import__("scenario").materialize_online_requests(job)}
@@ -464,9 +564,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
             deployment = args[0]
             return SimpleNamespace(deployment=deployment)
 
-        def run(rank_runs, max_parallel):
+        def run(rank_runs, max_parallel, deadline_epoch_seconds):
             deployment = rank_runs[0].deployment
-            calls.append(("run", max_parallel))
+            calls.append(("run", max_parallel, deadline_epoch_seconds))
             return (
                 RankResult(
                     deployment,
@@ -502,6 +602,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
                 patch("runner.prepare_rank_run", prepare),
                 patch("runner.run_ranks", run),
+                patch("runner.time", return_value=1_000),
                 patch(
                     "runner.commit_tick_metrics",
                     lambda store, metrics: calls.append(("commit", metrics))
@@ -515,7 +616,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(calls[0], ("run", 1))
+        self.assertEqual(calls[0], ("run", 1, 1_300))
         self.assertEqual(calls[1][0], "commit")
         self.assertEqual(len(calls[1][1]), 1)
         gpu_event = next(event for event in events if event["kind"] == "gpu_sample")
