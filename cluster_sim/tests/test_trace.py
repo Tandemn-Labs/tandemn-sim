@@ -174,11 +174,21 @@ class TracePathTest(unittest.TestCase):
             50,
             True,
             True,
+            100,
+            80,
+            20,
+            0.8,
+            "completed_requests",
         )
 
         self.assertEqual(event["p99_ttft_ms"], 840)
         self.assertTrue(event["ttft_slo_met"])
         self.assertEqual(event["cost_per_token"], 0.000012)
+        self.assertEqual(event["attempted_request_count"], 100)
+        self.assertEqual(event["completed_request_count"], 80)
+        self.assertEqual(event["unfinished_request_count"], 20)
+        self.assertEqual(event["completion_ratio"], 0.8)
+        self.assertEqual(event["latency_scope"], "completed_requests")
 
     def test_pool_window_exposes_zero_filled_capacity(self) -> None:
         """Keep missing telemetry distinct from measured zero utilization."""
@@ -233,11 +243,13 @@ class TracePathTest(unittest.TestCase):
             True,
             None,
             True,
+            0,
         )
 
         self.assertTrue(event["completed_successfully"])
         self.assertTrue(event["deadline_slo_met"])
         self.assertIsNone(event["finish_reason"])
+        self.assertEqual(event["unserved_request_count"], 0)
 
     def test_gpu_sample_keeps_idle_store_telemetry(self) -> None:
         """Keep actual idle GPU rows distinct from pool-level zero filling."""

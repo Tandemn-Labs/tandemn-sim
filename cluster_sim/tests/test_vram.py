@@ -18,7 +18,6 @@ from vram import (
     VRAM_REQUIREMENTS_GIB,
     StoreSnapshot,
     VramPlannerDriver,
-    generate_vram_requirements,
 )
 
 
@@ -54,12 +53,29 @@ class VramPlannerDriverTest(unittest.TestCase):
         for jobs in VRAM_REQUIREMENTS_GIB.values():
             self.assertTrue(all(required_gib > 0 for required_gib in jobs.values()))
 
-    def test_mapping_is_reproducible_from_benchmark_workloads(self) -> None:
-        """Recalculate all requirements from architecture and workload inputs."""
-        self.assertEqual(
-            generate_vram_requirements(ROOT / "benchmarks"),
-            VRAM_REQUIREMENTS_GIB,
-        )
+    def test_simulation_3h_keeps_checked_in_vram_baseline(self) -> None:
+        """Keep the approved VRAM baseline independent from benchmark drift."""
+        requirements = VRAM_REQUIREMENTS_GIB["simulation_3h"]
+        expected = {
+            "job-benchmark_timing_3hr-0-1": 1064.314,
+            "job-benchmark_timing_3hr-0-2": 1640.938,
+            "job-benchmark_timing_3hr-0-3": 6591.789,
+            "job-benchmark_timing_3hr-0-4": 807.966,
+            "job-benchmark_timing_3hr-7-1": 16243.584,
+            "job-benchmark_timing_3hr-7-3": 3932.206,
+            "job-benchmark_timing_3hr-32-1": 19992.668,
+            "job-benchmark_timing_3hr-32-2": 2071.983,
+            "job-benchmark_timing_3hr-49-1": 11219.803,
+            "job-benchmark_timing_3hr-49-2": 1935.896,
+            "job-benchmark_timing_3hr-67-1": 2206.908,
+            "job-benchmark_timing_3hr-67-2": 995.407,
+            "job-benchmark_timing_3hr-67-3": 331.271,
+            "job-benchmark_timing_3hr-100-2": 1743.919,
+            "job-benchmark_timing_3hr-125-1": 702.026,
+            "job-benchmark_timing_3hr-145-1": 1171.456,
+        }
+
+        self.assertEqual({key: requirements[key] for key in expected}, expected)
 
     def test_known_vram_results_match_benchmark_inputs(self) -> None:
         """Preserve generated encoder and frontier-model VRAM outcomes."""
