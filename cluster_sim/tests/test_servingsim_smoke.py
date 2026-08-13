@@ -77,14 +77,11 @@ class LLMServingSimSmokeTest(unittest.TestCase):
                 },
             )
             cluster_path.write_text(json.dumps(cluster))
-            write_rank_workload(
-                (
-                    Request("request_0", "session_0", 0, 0, 16, 8, "smoke/prefix-8"),
-                    Request("request_1", "session_1", 0, 15_000_000_000, 24, 12, "smoke/prefix-8"),
-                ),
-                workload_path,
-                0,
+            requests = (
+                Request("request_0", "session_0", 0, 0, 16, 8, "smoke/prefix-8"),
+                Request("request_1", "session_1", 0, 15_000_000_000, 24, 12, "smoke/prefix-8"),
             )
+            write_rank_workload(requests, workload_path, 0)
             command = build_rank_command(
                 "servingsim_docker",
                 LLMSERVINGSIM_ROOT,
@@ -96,7 +93,7 @@ class LLMServingSimSmokeTest(unittest.TestCase):
                 2,
             )
             result = run_ranks(
-                (RankRun(deployment, command, output_path, metrics_path, 2, 300),), 1
+                (RankRun(deployment, requests, command, output_path, metrics_path, 2, 300),), 1
             )[0]
 
             self.assertEqual(len(result.request_rows), 2)

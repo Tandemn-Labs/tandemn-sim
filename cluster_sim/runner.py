@@ -83,7 +83,7 @@ class ClusterSimulator:
         container: str = "servingsim_docker",
         run_name: str = "cluster-sim",
         parallel_ranks_per_job: int = 1,
-        rank_timeout_seconds: float = 300,
+        rank_timeout_seconds: float = 330,
         trace_root: Path | None = None,
         trace_run_id: str | None = None,
     ) -> None:

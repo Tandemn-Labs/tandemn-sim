@@ -32,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--container", default="servingsim_docker")
     parser.add_argument("--parallel-ranks-per-job", type=int, default=1)
-    parser.add_argument("--rank-timeout-seconds", type=float, default=300)
+    parser.add_argument("--rank-timeout-seconds", type=float, default=330)
     parser.add_argument("--ticks", type=int)
     parser.add_argument("--trace-root", type=Path)
     parser.add_argument("--trace-run-id")
