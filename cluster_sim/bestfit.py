@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 from models import CreatedPlan, PlannerResult, Scenario
+from rank_ids import rank_id
 from vram import (
     VRAM_REQUIREMENTS_GIB,
     ResourceTarget,
@@ -1277,7 +1278,7 @@ def _place_action(
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": known.get("rank_id") or "rank_0",
+                "rank_id": rank_id(known),
                 "env": target.environment_key.split("|"),
                 "config": {
                     "model_id": known.get("model_id"),
