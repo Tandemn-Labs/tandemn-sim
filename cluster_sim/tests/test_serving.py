@@ -26,6 +26,7 @@ from serving import (
     build_rank_cluster,
     build_rank_deployments,
     commit_tick_metrics,
+    completed_request_summary,
     gpu_metrics_from_results,
     parse_rank_result,
     prepare_rank_run,
@@ -604,6 +605,26 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(len(tick_summary), 4)
         self.assertTrue(all(metric.kvcache_hit_rate == 125 / 300 for metric in tick_summary))
         self.assertTrue(all(metric.kv_cache_util is None for metric in tick_summary))
+
+    def test_completed_request_summary_merges_rows_across_ranks(self) -> None:
+        """Calculate one percentile from all completed job requests."""
+        def result(ttft_values):
+            return RankResult(
+                SimpleNamespace(),
+                tuple(
+                    {"TTFT": value * 1_000_000, "TPOT": value * 100_000}
+                    for value in ttft_values
+                ),
+                (),
+                "",
+                "",
+            )
+
+        summary = completed_request_summary((result((1, 100)), result((2, 3))))
+
+        self.assertEqual(summary["completed_request_count"], 4)
+        self.assertAlmostEqual(summary["p99_ttft_ms"], 97.09)
+        self.assertAlmostEqual(summary["p99_tpot_ms"], 9.709)
 
     def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
         rows = (

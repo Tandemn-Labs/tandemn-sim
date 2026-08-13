@@ -330,7 +330,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
             transition=lambda *args, **kwargs: None,
         )
         simulator.user_id = "user_1"
+        simulator._online_jobs = {}
+        simulator._online_backlog = {}
         simulator._batch_jobs = {"job-a": object()}
+        simulator._batch_progress = {
+            "job-a": BatchProgress(total_requests=10_000, completed_requests=3_000)
+        }
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
@@ -341,6 +346,34 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertFalse(event["completed_successfully"])
         self.assertFalse(event["deadline_slo_met"])
         self.assertEqual(event["finish_reason"], "SIMULATION_HARD_STOP")
+        self.assertEqual(event["unserved_request_count"], 7_000)
+
+    def test_hard_stop_trace_counts_online_backlog(self) -> None:
+        """Report every online request still waiting at the hard stop."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a"),
+            ranks=(SimpleNamespace(rank_id="rank-1"),),
+        )
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args: None,
+            transition=lambda *args, **kwargs: None,
+        )
+        simulator.user_id = "user_1"
+        simulator._online_jobs = {"job-a": object()}
+        simulator._online_backlog = {"job-a": (object(), object(), object())}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            simulator._hard_stop()
+
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(event["unserved_request_count"], 3)
 
     def test_active_jobs_share_one_global_rank_pool(self) -> None:
         """Launch ranks from different jobs in one bounded worker pool."""
@@ -376,11 +409,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.trace_file = None
 
         rank_runs = {
-            "job-a": (SimpleNamespace(deployment="deployment-a"),),
-            "job-b": (SimpleNamespace(deployment="deployment-b"),),
+            "job-a": (SimpleNamespace(deployment="deployment-a", request_count=1),),
+            "job-b": (SimpleNamespace(deployment="deployment-b", request_count=1),),
         }
-        result_a = SimpleNamespace(completed_requests=())
-        result_b = SimpleNamespace(completed_requests=())
+        result_a = SimpleNamespace(completed_requests=(), request_rows=())
+        result_b = SimpleNamespace(completed_requests=(), request_rows=())
         launched = []
         finalized = []
 
@@ -480,7 +513,13 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         def prepare(running, job_name, tick_requests, *args):
             attempts.append(tick_requests)
-            return (SimpleNamespace(deployment="deployment", requests=tick_requests),)
+            return (
+                SimpleNamespace(
+                    deployment="deployment",
+                    requests=tick_requests,
+                    request_count=len(tick_requests),
+                ),
+            )
 
         def run(rank_runs, max_parallel, deadline_epoch_seconds):
             name = next(completed_names)
@@ -489,7 +528,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 for request in rank_runs[0].requests
                 if request.request_name == name
             )
-            return (SimpleNamespace(completed_requests=(completed,)),)
+            return (
+                SimpleNamespace(
+                    completed_requests=(completed,),
+                    request_rows=({"TTFT": 1, "TPOT": 1},),
+                ),
+            )
 
         with (
             patch(
@@ -528,6 +572,121 @@ class RunnerDataPlaneTest(unittest.TestCase):
             running,
             datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
         )
+
+    def test_failed_metric_commit_keeps_request_state_unchanged(self) -> None:
+        """Do not apply staged online or batch progress after commit failure."""
+        online = OnlineJob("online", "online-job", "model", 0, 300_000_000_000, {})
+        batch = BatchJob(
+            "batch",
+            "batch-job",
+            "model",
+            0,
+            300_000_000_000,
+            600_000_000_000,
+            {"features": {}},
+        )
+        online_request = Request("online-r0", "session", 0, 0, 1, 1, None)
+        fresh_request = Request("online-r1", "fresh-session", 0, 1, 1, 1, None)
+        batch_request = Request("batch-r0", "batch-session", 0, 0, 1, 1, None)
+        running_jobs = (
+            SimpleNamespace(job=SimpleNamespace(job_id="online-job"), ranks=()),
+            SimpleNamespace(job=SimpleNamespace(job_id="batch-job"), ranks=()),
+        )
+        original_progress = BatchProgress(total_requests=100)
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "atomic", 300_000_000_000, 600_000_000_000, (online,), (batch,)
+        )
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(running_jobs=lambda user_id: running_jobs)
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 2
+        simulator._traffic_starts = {}
+        simulator._requests = {"online-job": (fresh_request,)}
+        simulator._online_jobs = {"online-job": online}
+        simulator._online_backlog = {"online-job": (online_request,)}
+        simulator._batch_jobs = {"batch-job": batch}
+        simulator._batch_progress = {"batch-job": original_progress}
+        simulator.trace_file = None
+
+        rank_runs = iter(
+            (
+                (
+                    SimpleNamespace(
+                        deployment="online-deployment", request_count=2
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        deployment="batch-deployment", request_count=1
+                    ),
+                ),
+            )
+        )
+        result_row = {
+            "TTFT": 1_000_000,
+            "TPOT": 100_000,
+            "end_time": 1_000_000_000,
+        }
+        results = (
+            SimpleNamespace(
+                completed_requests=(online_request,),
+                request_rows=(result_row,),
+                status="completed",
+                sim_time_ns=1_000_000_000,
+            ),
+            SimpleNamespace(
+                completed_requests=(batch_request,),
+                request_rows=(result_row,),
+                status="completed",
+                sim_time_ns=1_000_000_000,
+            ),
+        )
+
+        class HardwareCatalogStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(catalog={})
+
+        class ResourceMapStore:
+            def __init__(self, postgres, user_id) -> None:
+                pass
+
+            def get(self):
+                return SimpleNamespace(scheduling_summary=lambda: {})
+
+        class GpuMetricStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                HardwareCatalogStore,
+            ),
+            patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
+            patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
+            patch.object(simulator, "_prepare_job_runs", side_effect=lambda *args: next(rank_runs)),
+            patch("runner.build_batch_probe", return_value=(batch_request,)),
+            patch("runner.run_ranks", return_value=results),
+            patch("runner.gpu_metrics_from_results", return_value=[object()]),
+            patch("runner.commit_tick_metrics", side_effect=RuntimeError("commit failed")),
+            patch.object(simulator, "_finish") as finish,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                simulator._simulate_tick(0, 0, 300_000_000_000)
+
+        self.assertEqual(
+            simulator._online_backlog["online-job"], (online_request,)
+        )
+        self.assertIs(simulator._batch_progress["batch-job"], original_progress)
+        self.assertEqual(original_progress.completed_requests, 0)
+        self.assertEqual(original_progress.next_request_number, 0)
+        finish.assert_not_called()
 
     def test_active_online_job_runs_rank_and_commits_tick_metrics(self) -> None:
         """Route one admitted job through the ServingSim adapter boundary."""
@@ -659,7 +818,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         def prepare(*args):
             deployment = args[0]
-            return SimpleNamespace(deployment=deployment)
+            return SimpleNamespace(deployment=deployment, request_count=1)
 
         def run(rank_runs, max_parallel, deadline_epoch_seconds):
             deployment = rank_runs[0].deployment
@@ -725,6 +884,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(rank_event["v_actual"]["kv_cache_util"], [0.5])
         self.assertEqual(job_event["job_id"], "job_1")
         self.assertTrue(job_event["ttft_slo_met"])
+        self.assertEqual(job_event["attempted_request_count"], 1)
+        self.assertEqual(job_event["completed_request_count"], 1)
+        self.assertEqual(job_event["unfinished_request_count"], 0)
+        self.assertEqual(job_event["completion_ratio"], 1.0)
+        self.assertEqual(job_event["latency_scope"], "completed_requests")
         self.assertEqual(pool_event["expected_gpu_count"], 8)
         self.assertEqual(pool_event["allocated_gpu_count"], 1)
         self.assertEqual(cluster_event["capacity_gpu_hours"], 16 * 300 / 3600)
