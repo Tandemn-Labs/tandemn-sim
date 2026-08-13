@@ -173,6 +173,7 @@ class ClusterSimulator:
         """Submit due jobs, apply one plan, and advance one logical tick."""
         if tick_number < 0:
             raise ValueError("tick number must be nonnegative")
+        print(f"[tick {tick_number}] Planning placements", flush=True)
         start = self.clock.now()
         start_offset_ns = self._offset_ns(start)
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
@@ -283,6 +284,7 @@ class ClusterSimulator:
                             rank.shape_json,
                         ),
                     )
+        print(f"[tick {tick_number}] Preparing ServingSim inputs", flush=True)
         self._simulate_tick(tick_number, start_offset_ns, end_offset_ns)
         self._submit_jobs_before(end_offset_ns)
         self.clock.advance(timedelta(microseconds=self.scenario.tick_duration_ns // 1_000))
@@ -449,8 +451,19 @@ class ClusterSimulator:
             for rank_run in prepared.rank_runs
         )
         deadline_epoch_seconds = time() + SERVING_WINDOW_SECONDS
+        if rank_runs:
+            print(f"[tick {tick_number}] ServingSim ranks: 0/{len(rank_runs)} complete", flush=True)
         results = (
-            run_ranks(rank_runs, self.parallel_simulators, deadline_epoch_seconds)
+            run_ranks(
+                rank_runs,
+                self.parallel_simulators,
+                deadline_epoch_seconds,
+                progress=lambda completed, total, rank_run: print(
+                    f"[tick {tick_number}] ServingSim ranks: {completed}/{total} complete "
+                    f"({rank_run.deployment.rank_name})",
+                    flush=True,
+                ),
+            )
             if rank_runs
             else ()
         )

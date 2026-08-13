@@ -75,6 +75,7 @@ def main(argv: list[str] | None = None) -> None:
             koi_args=list(args.koi_arg),
         ),
     )
+    print("[cluster-sim] Preparing workloads", flush=True)
     simulator = ClusterSimulator(
         scenario,
         args.user_id,
