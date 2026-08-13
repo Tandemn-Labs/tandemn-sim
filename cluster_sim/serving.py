@@ -57,6 +57,7 @@ class RankRun:
     """One rank-local LLMServingSim command and its expected output."""
 
     deployment: RankDeployment
+    requests: tuple[Request, ...]
     command: tuple[str, ...]
     output_path: Path
     metrics_path: Path
@@ -74,6 +75,8 @@ class RankResult:
     metric_samples: tuple[RankMetricSample, ...]
     stdout: str
     stderr: str
+    status: str = "completed"
+    completed_requests: tuple[Request, ...] = ()
 
 
 def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
@@ -273,6 +276,8 @@ def build_rank_command(
         relative(metrics_path),
         "--num-reqs",
         str(request_count),
+        "--max-wall-time-seconds",
+        "300",
         "--request-routing-policy",
         "RR",
         "--run-id",
@@ -304,6 +309,7 @@ def prepare_rank_run(
     write_rank_workload(requests, workload_path, tick_start_ns)
     return RankRun(
         deployment,
+        tuple(requests),
         build_rank_command(
             container,
             llmservingsim_root,
@@ -358,10 +364,6 @@ def parse_rank_result(
     if completed.returncode:
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
     summary = _run_summary(output)
-    if summary is None and (
-        "ERROR: Some Requests Remain" in output or "All Request Has Been Exited" not in output
-    ):
-        raise RuntimeError(f"{rank_run.deployment.rank_name} did not finish all requests")
     if not rank_run.output_path.is_file():
         raise RuntimeError(f"{rank_run.deployment.rank_name} wrote no request CSV")
 
@@ -370,41 +372,72 @@ def parse_rank_result(
         if reader.fieldnames != CSV_HEADER:
             raise ValueError(f"unexpected LLMServingSim CSV header: {reader.fieldnames!r}")
         rows = tuple(_row(row) for row in reader)
-    if summary is not None and summary["completed_requests"] != len(rows):
+    if summary["completed_requests"] != len(rows):
         raise ValueError("LLMServingSim summary does not match completed request rows")
-    if summary is not None and summary["status"] == "completed" and len(rows) != rank_run.request_count:
-        raise ValueError(f"expected {rank_run.request_count} request rows, got {len(rows)}")
-    if summary is None and len(rows) != rank_run.request_count:
+    if summary["loaded_requests"] != rank_run.request_count:
+        raise ValueError("LLMServingSim summary does not match submitted requests")
+    if summary["status"] == "completed" and len(rows) != rank_run.request_count:
         raise ValueError(f"expected {rank_run.request_count} request rows, got {len(rows)}")
     if len(rows) > rank_run.request_count:
         raise ValueError(f"expected at most {rank_run.request_count} request rows, got {len(rows)}")
-    if len({row["request id"] for row in rows}) != len(rows):
+    completed_ids = []
+    completed_requests = []
+    for row in rows:
+        request_id = row["request id"]
+        if not math.isfinite(request_id) or request_id != int(request_id):
+            raise ValueError("LLMServingSim returned an invalid request ID")
+        request_id = int(request_id)
+        if request_id < 0 or request_id >= len(rank_run.requests):
+            raise ValueError("LLMServingSim returned an unknown request ID")
+        completed_ids.append(request_id)
+        completed_requests.append(rank_run.requests[request_id])
+    if len(set(completed_ids)) != len(completed_ids):
         raise ValueError("LLMServingSim returned duplicate request IDs")
 
     expected_instances = set(range(len(rank_run.deployment.chains)))
-    if any(int(row["instance id"]) not in expected_instances for row in rows):
-        raise ValueError("LLMServingSim returned an unknown instance ID")
+    for row in rows:
+        instance_id = _whole_number(row["instance id"], "instance ID")
+        if instance_id not in expected_instances:
+            raise ValueError("LLMServingSim returned an unknown instance ID")
     metric_samples = _read_metric_samples(rank_run.metrics_path, expected_instances)
 
-    return RankResult(rank_run.deployment, rows, metric_samples, completed.stdout, completed.stderr)
+    return RankResult(
+        rank_run.deployment,
+        rows,
+        metric_samples,
+        completed.stdout,
+        completed.stderr,
+        summary["status"],
+        tuple(completed_requests),
+    )
 
 
-def _run_summary(output: str) -> dict[str, object] | None:
-    """Return the terminal LLMServingSim status, if this is a wall-time-aware run."""
+def _run_summary(output: str) -> dict[str, int | str]:
+    """Return and validate the terminal LLMServingSim status."""
     for line in reversed(output.splitlines()):
         if not line.startswith("SIM_RUN_SUMMARY "):
             continue
         try:
             summary = json.loads(line.removeprefix("SIM_RUN_SUMMARY "))
             status = summary["status"]
-            completed = int(summary["completed_requests"])
-            unfinished = int(summary["unfinished_requests"])
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            loaded = summary["loaded_requests"]
+            completed = summary["completed_requests"]
+            unfinished = summary["unfinished_requests"]
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
             raise ValueError("invalid LLMServingSim run summary") from error
-        if status not in {"completed", "wall_time_limit"} or completed < 0 or unfinished < 0:
+        if (
+            status not in {"completed", "wall_time_limit"}
+            or any(type(value) is not int or value < 0 for value in (loaded, completed, unfinished))
+            or loaded != completed + unfinished
+        ):
             raise ValueError("invalid LLMServingSim run summary")
-        return summary
-    return None
+        return {
+            "status": status,
+            "loaded_requests": loaded,
+            "completed_requests": completed,
+            "unfinished_requests": unfinished,
+        }
+    raise ValueError("LLMServingSim wrote no run summary")
 
 
 def _row(row: Mapping[str, str]) -> dict[str, float]:
@@ -417,6 +450,16 @@ def _row(row: Mapping[str, str]) -> dict[str, float]:
         }
     except ValueError as error:
         raise ValueError("LLMServingSim CSV contains a nonnumeric value") from error
+
+
+def _whole_number(value: object, name: str) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid {name}") from error
+    if not math.isfinite(numeric) or numeric != int(numeric):
+        raise ValueError(f"invalid {name}")
+    return int(numeric)
 
 
 def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[RankMetricSample, ...]:
@@ -435,13 +478,15 @@ def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[Rank
             raise ValueError(f"metrics JSONL line {line_number} must be an object")
         if row.get("sample_kind") not in {"periodic", "final"}:
             raise ValueError(f"metrics JSONL line {line_number} has invalid sample_kind")
-        if row["sample_kind"] == "final":
-            continue
         try:
-            sim_time_ns = int(row["sim_time_ns"])
-            sample_interval_ns = int(row["sample_interval_ns"])
-            instance_id = int(row["instance_id"])
-        except (KeyError, TypeError, ValueError) as error:
+            sim_time_ns = _whole_number(row["sim_time_ns"], "metric sim_time_ns")
+            instance_id = _whole_number(row["instance_id"], "metric instance_id")
+            sample_interval_ns = (
+                _whole_number(row["sample_interval_ns"], "metric sample_interval_ns")
+                if row["sample_kind"] == "periodic"
+                else sim_time_ns
+            )
+        except (KeyError, ValueError) as error:
             raise ValueError(f"metrics JSONL line {line_number} has invalid identity") from error
         if sim_time_ns < 0 or sample_interval_ns <= 0:
             raise ValueError(f"metrics JSONL line {line_number} has invalid interval")
