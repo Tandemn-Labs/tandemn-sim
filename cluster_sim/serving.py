@@ -708,6 +708,26 @@ def _observed_y(
     }
 
 
+def completed_request_summary(
+    results: Sequence[RankResult],
+) -> dict[str, int | float | None]:
+    """Summarize completed request latency across every rank of one job."""
+    rows = [row for result in results for row in result.request_rows]
+    if not rows:
+        return {
+            "completed_request_count": 0,
+            "p99_ttft_ms": None,
+            "p99_tpot_ms": None,
+        }
+    return {
+        "completed_request_count": len(rows),
+        "p99_ttft_ms": _percentile([row["TTFT"] for row in rows], 0.99)
+        / 1_000_000,
+        "p99_tpot_ms": _percentile([row["TPOT"] for row in rows], 0.99)
+        / 1_000_000,
+    }
+
+
 def _percentile(values: Sequence[float], percentile: float) -> float:
     """Return one linearly interpolated percentile without another dependency."""
     ordered = sorted(values)
