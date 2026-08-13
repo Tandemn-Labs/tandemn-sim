@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
 
-from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Scenario
 from koi_trace import compile_koi_events
+from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Scenario
 from planning import PlannerDriver
 from routing import StickyRoundRobinRouter
 from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
 from serving import (
+    RankRun,
     RankResult,
+    SERVING_WINDOW_SECONDS,
     build_rank_deployments,
     commit_tick_metrics,
     gpu_metrics_from_results,
@@ -82,7 +84,7 @@ class ClusterSimulator:
         llmservingsim_root: Path | None = None,
         container: str = "servingsim_docker",
         run_name: str = "cluster-sim",
-        parallel_ranks_per_job: int = 1,
+        parallel_simulators: int = 5,
         rank_timeout_seconds: float = 330,
         trace_root: Path | None = None,
         trace_run_id: str | None = None,
@@ -100,7 +102,7 @@ class ClusterSimulator:
         self.llmservingsim_root = llmservingsim_root
         self.container = container
         self.run_name = run_name
-        self.parallel_ranks_per_job = parallel_ranks_per_job
+        self.parallel_simulators = parallel_simulators
         self.rank_timeout_seconds = rank_timeout_seconds
         self.trace_file: Path | None = None
         if trace_root is not None and trace_run_id is not None:
@@ -336,7 +338,7 @@ class ClusterSimulator:
         start_offset_ns: int,
         end_offset_ns: int,
     ) -> None:
-        """Run active jobs serially and commit every successful tick metric together."""
+        """Run every active rank in one pool and commit the successful tick together."""
         if self.llmservingsim_root is None:
             return
 
@@ -352,7 +354,9 @@ class ClusterSimulator:
         resource_map = ResourceMapStore(self.postgres, user_id=self.user_id).get()
         prices = self._prices(resource_map)
         tick_start = self.clock.now()
-        metrics = []
+        prepared_jobs: list[
+            tuple[object, tuple[RankRun, ...], BatchProgress | None]
+        ] = []
 
         running_jobs = self.jobs.running_jobs(self.user_id)
         for running in running_jobs:
@@ -375,17 +379,20 @@ class ClusterSimulator:
                 )
                 for request in requests_in_tick(self._requests[job.store_job_id], source_start, source_end)
             )
-            job_metrics, _ = self._simulate_job(
-                running,
-                job.name,
-                requests,
-                tick_number,
-                start_offset_ns,
-                catalog.catalog,
-                prices,
-                tick_start,
+            prepared_jobs.append(
+                (
+                    running,
+                    self._prepare_job_runs(
+                        running,
+                        job.name,
+                        requests,
+                        tick_number,
+                        start_offset_ns,
+                        catalog.catalog,
+                    ),
+                    None,
+                )
             )
-            metrics.extend(job_metrics)
 
         for running in running_jobs:
             job = self._batch_jobs.get(running.job.job_id)
@@ -396,20 +403,52 @@ class ClusterSimulator:
                 replace(request, arrives_at_ns=start_offset_ns)
                 for request in build_batch_probe(job, progress)
             )
-            job_metrics, results = self._simulate_job(
-                running,
-                job.name,
-                probe,
-                tick_number,
-                start_offset_ns,
-                catalog.catalog,
-                prices,
-                tick_start,
+            prepared_jobs.append(
+                (
+                    running,
+                    self._prepare_job_runs(
+                        running,
+                        job.name,
+                        probe,
+                        tick_number,
+                        start_offset_ns,
+                        catalog.catalog,
+                    ),
+                    progress,
+                )
             )
-            metrics.extend(job_metrics)
+
+        rank_runs = tuple(
+            rank_run
+            for _, job_rank_runs, _ in prepared_jobs
+            for rank_run in job_rank_runs
+        )
+        deadline_epoch_seconds = time() + SERVING_WINDOW_SECONDS
+        results = (
+            run_ranks(rank_runs, self.parallel_simulators, deadline_epoch_seconds)
+            if rank_runs
+            else ()
+        )
+        metrics = []
+        result_offset = 0
+        for running, job_rank_runs, progress in prepared_jobs:
+            job_results = results[result_offset : result_offset + len(job_rank_runs)]
+            result_offset += len(job_rank_runs)
+            metrics.extend(
+                gpu_metrics_from_results(
+                    running.job,
+                    tuple(rank_run.deployment for rank_run in job_rank_runs),
+                    job_results,
+                    tick_start,
+                    self.scenario.tick_duration_ns,
+                    prices,
+                )
+            )
+            if progress is None:
+                continue
             advance_batch_progress(
                 progress,
-                results,
+                job_results,
                 self.scenario.tick_duration_ns,
                 start_offset_ns,
             )
@@ -579,7 +618,7 @@ class ClusterSimulator:
                     ),
                 )
 
-    def _simulate_job(
+    def _prepare_job_runs(
         self,
         running,
         job_name: str,
@@ -587,10 +626,8 @@ class ClusterSimulator:
         tick_number: int,
         tick_start_ns: int,
         catalog,
-        prices: dict[str, float],
-        tick_start: datetime,
-    ) -> tuple[list[object], tuple[RankResult, ...]]:
-        """Run one job's ranks concurrently and return its staged telemetry."""
+    ) -> tuple[RankRun, ...]:
+        """Prepare one job's rank simulations for the tick-wide worker pool."""
         from tandemn_system_data.clients import ModelCatalogStore
 
         deployments = build_rank_deployments(running.job, running.ranks)
@@ -640,19 +677,8 @@ class ClusterSimulator:
                 )
             )
         if not rank_runs:
-            return [], ()
-        results = run_ranks(rank_runs, self.parallel_ranks_per_job)
-        return (
-            gpu_metrics_from_results(
-                running.job,
-                tuple(rank_run.deployment for rank_run in rank_runs),
-                results,
-                tick_start,
-                self.scenario.tick_duration_ns,
-                prices,
-            ),
-            results,
-        )
+            return ()
+        return tuple(rank_runs)
 
     @staticmethod
     def _prices(resource_map) -> dict[str, float]:

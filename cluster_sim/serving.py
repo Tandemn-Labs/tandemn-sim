@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from time import time
 from typing import Mapping, Sequence
 
 from models import ChainBinding, RankDeployment, RankMetricSample, Request
@@ -36,6 +37,7 @@ CSV_HEADER = [
 ]
 SECOND = 1_000_000_000
 SAMPLE_BUCKET_NS = 10 * SECOND
+SERVING_WINDOW_SECONDS = 300
 PROFILE_ALIASES = {
     "H100": "H100",
     "H100-SXM-80GB": "H100",
@@ -277,7 +279,7 @@ def build_rank_command(
         "--num-reqs",
         str(request_count),
         "--max-wall-time-seconds",
-        "300",
+        str(SERVING_WINDOW_SECONDS),
         "--request-routing-policy",
         "RR",
         "--run-id",
@@ -328,20 +330,48 @@ def prepare_rank_run(
     )
 
 
-def run_ranks(rank_runs: Sequence[RankRun], max_parallel: int) -> tuple[RankResult, ...]:
+def run_ranks(
+    rank_runs: Sequence[RankRun],
+    max_parallel: int,
+    deadline_epoch_seconds: float | None = None,
+) -> tuple[RankResult, ...]:
     """Run independent rank simulations concurrently and fail as one batch."""
     if max_parallel < 1:
         raise ValueError("max_parallel must be positive")
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-        futures = [executor.submit(_run_rank, rank_run) for rank_run in rank_runs]
+        futures = [
+            executor.submit(_run_rank, rank_run, deadline_epoch_seconds)
+            for rank_run in rank_runs
+        ]
         return tuple(future.result() for future in futures)
 
 
-def _run_rank(rank_run: RankRun) -> RankResult:
+def _run_rank(
+    rank_run: RankRun, deadline_epoch_seconds: float | None = None
+) -> RankResult:
     """Run and parse one rank simulation command."""
+    if deadline_epoch_seconds is not None and time() >= deadline_epoch_seconds:
+        if rank_run.cleanup_dir is not None:
+            shutil.rmtree(rank_run.cleanup_dir)
+        return RankResult(
+            rank_run.deployment,
+            (),
+            (),
+            "",
+            "",
+            "wall_time_limit",
+            (),
+        )
+    command = rank_run.command
+    if deadline_epoch_seconds is not None:
+        command = (
+            *command,
+            "--wall-deadline-epoch-seconds",
+            str(deadline_epoch_seconds),
+        )
     try:
         completed = subprocess.run(
-            rank_run.command,
+            command,
             capture_output=True,
             text=True,
             timeout=rank_run.timeout_seconds,
