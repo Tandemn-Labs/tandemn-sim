@@ -20,6 +20,9 @@ controller = "data_generation.controller:main"
 agentic = [
     "claude-agent-sdk>=0.2.136",
 ]
+openevolve = [
+    "openevolve>=0.2.27",
+]
 dev = [
   "mypy>=1.16",
   "pre-commit>=4.2",

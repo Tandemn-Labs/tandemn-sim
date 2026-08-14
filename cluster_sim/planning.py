@@ -209,12 +209,30 @@ def _build_gpt(context: PlannerContext) -> PlannerDriver:
     )
 
 
+def _build_openevolve(context: PlannerContext) -> PlannerDriver:
+    """Build the OpenEvolve online placement-policy baseline."""
+    from openevolve import OpenEvolvePlannerDriver
+
+    return OpenEvolvePlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {
+            "model": "gpt-5.6-luna",
+            "max_tokens": 4096,
+            "iterations": 8,
+            "backend": "vllm",
+        },
+        context.postgres,
+    )
+
+
 PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "koi": _build_koi,
     "dynamo_aic": _build_aic,
     "bestfit": _build_bestfit,
     "vram": _build_vram,
     "gpt_only": _build_gpt,
+    "openevolve": _build_openevolve,
 }
 
 

@@ -1,0 +1,1335 @@
+"""Own the complete OpenEvolve planner path for each cluster control tick."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import ModuleType, SimpleNamespace
+from typing import Any, Protocol, cast
+
+from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
+from policy import ConfigPolicy, load_config_policy
+
+OPENEOLVE_SYSTEM_PROMPT = """You improve a deterministic placement policy for one
+frozen Tandemn scheduler tick. Modify only compute_placement(payload). The payload
+contains jobs, available GPU resources, and allowed configurations. Return one
+ordered place or defer decision for every job in payload['jobs_for_tick'].
+
+Never use network, filesystem, subprocesses, hidden state, or third-party packages.
+Do not construct Tandemn Store actions. Choose only from the supplied environments
+and configurations. Preserve the function signature and return only
+{'placements': [...]}.
+
+Prioritize valid plans, then admission of urgent work, then predicted SLO fitness,
+then lower cost and GPU use. Defer a job when no policy-compliant placement fits.
+"""
+
+OPENEOLVE_INITIAL_PROGRAM = '''\
+# EVOLVE-BLOCK-START
+def compute_placement(payload):
+    """Place jobs in prompt order on the first policy-compliant free resource."""
+    remaining_by_environment = {
+        environment: int(resource.get("free", 0))
+        for environment, resource in payload["tandemn_state"]["resources"].items()
+    }
+    remaining_by_pool = {
+        (environment, pool["instance_type"]): int(pool.get("free", 0))
+        for environment, resource in payload["tandemn_state"]["resources"].items()
+        for pool in resource.get("pools", [])
+    }
+    policy = {
+        (item["model_id"], item["gpu_type"]): item
+        for item in payload["config_policy"]
+    }
+    placements = []
+    for job in payload["jobs_for_tick"]:
+        decision = {
+            "decision": "defer",
+            "environment": None,
+            "instance_type": None,
+            "configuration": None,
+        }
+        for environment, resource in payload["tandemn_state"]["resources"].items():
+            gpu_type = str(resource.get("gpu_type") or environment.split("|")[-1])
+            rule = policy.get((job["model_name"], gpu_type))
+            if rule is None:
+                continue
+            tp = min(rule["allowed_tp"])
+            pools = resource.get("pools", [])
+            targets = pools if pools else [None]
+            for pool in targets:
+                instance_type = None
+                footprint = tp
+                available = remaining_by_environment.get(environment, 0)
+                if pool is not None:
+                    instance_type = pool["instance_type"]
+                    allocation_kind = str(
+                        pool.get("allocation_kind")
+                        or pool.get("allocation_unit")
+                        or "instance"
+                    ).lower()
+                    if allocation_kind != "gpu":
+                        gpus_per_instance = int(pool["gpus_per_instance"])
+                        if tp > gpus_per_instance:
+                            continue
+                        footprint = gpus_per_instance
+                    available = min(
+                        available,
+                        remaining_by_pool.get((environment, instance_type), 0),
+                    )
+                if available < footprint:
+                    continue
+                decision = {
+                    "decision": "place",
+                    "environment": environment,
+                    "instance_type": instance_type,
+                    "configuration": {
+                        "replicas_needed": 1,
+                        "tp": tp,
+                        "pp": 1,
+                        "dp": 1,
+                    },
+                }
+                remaining_by_environment[environment] -= footprint
+                if instance_type is not None:
+                    remaining_by_pool[(environment, instance_type)] -= footprint
+                break
+            if decision["decision"] == "place":
+                break
+        placements.append(decision)
+    return {"placements": placements}
+# EVOLVE-BLOCK-END
+'''
+
+
+@dataclass(frozen=True)
+class StoreSnapshot:
+    """One frozen Store view used throughout an OpenEvolve control tick."""
+
+    resources: dict[str, dict[str, Any]]
+    running_jobs: tuple[dict[str, Any], ...]
+    waiting_jobs: tuple[dict[str, Any], ...]
+    paused_jobs: tuple[dict[str, Any], ...]
+    finished_jobs: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class OpenEvolvePlacement:
+    """One narrow placement decision returned by an evolved policy."""
+
+    decision: str
+    environment: str | None
+    instance_type: str | None
+    configuration: Mapping[str, object] | None
+
+
+class OpenEvolvePolicy(Protocol):
+    """Return constrained ordered placement decisions for one tick payload."""
+
+    def __call__(self, payload: Mapping[str, object]) -> Mapping[str, object]: ...
+
+
+class OpenEvolveRunner(Protocol):
+    """Expose OpenEvolve's high-level synchronous library entry point."""
+
+    def __call__(
+        self,
+        initial_program: str,
+        evaluator: str,
+        config: Mapping[str, object],
+        iterations: int,
+        output_dir: str,
+        cleanup: bool,
+    ) -> object: ...
+
+
+class OpenEvolveClient(Protocol):
+    """Evolve and execute one placement policy for a frozen tick."""
+
+    def place(
+        self,
+        model: str,
+        max_tokens: int,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> tuple[OpenEvolvePlacement, ...]: ...
+
+
+class JobStoreClient(Protocol):
+    """Read canonical lifecycle groups from Tandemn Store."""
+
+    def running_jobs(self, user_id: str) -> Sequence[object]: ...
+
+    def waiting_jobs(self, user_id: str) -> Sequence[object]: ...
+
+    def paused_jobs(self, user_id: str) -> Sequence[object]: ...
+
+
+class ResourceMap(Protocol):
+    """Expose the Store resource-map fields used by this planner."""
+
+    market: object
+
+    def scheduling_summary(self) -> Mapping[str, Mapping[str, Any]]: ...
+
+
+class ResourceMapStoreClient(Protocol):
+    """Read one current Store resource map."""
+
+    def get(self) -> ResourceMap: ...
+
+
+class PlanStoreClient(Protocol):
+    """Persist one canonical Store plan."""
+
+    def create(self, plan: object) -> object: ...
+
+
+class OnlineOpenEvolveClient:
+    """Warm-start one bounded OpenEvolve search for each frozen tick."""
+
+    def __init__(
+        self,
+        iterations: int,
+        output_dir: Path,
+        api_base: str | None = None,
+        runner: OpenEvolveRunner | None = None,
+    ) -> None:
+        """Keep tick-local search settings and the prior winner as a seed."""
+        if iterations < 1:
+            raise ValueError("iterations must be positive")
+        self.iterations = iterations
+        self.output_dir = output_dir
+        self.api_base = api_base
+        self.runner = runner
+        self.initial_program = OPENEOLVE_INITIAL_PROGRAM
+        self.tick_number = 0
+
+    def place(
+        self,
+        model: str,
+        max_tokens: int,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> tuple[OpenEvolvePlacement, ...]:
+        """Evolve and execute one policy against the current tick only."""
+        try:
+            payload = _mapping(json.loads(user_prompt), "scheduler payload")
+        except json.JSONDecodeError as error:
+            raise ValueError("scheduler payload is not valid JSON") from error
+        result = (self.runner or run_openevolve)(
+            self.initial_program,
+            _evaluator_source(payload),
+            _openevolve_config(
+                model,
+                max_tokens,
+                OPENEOLVE_SYSTEM_PROMPT,
+                self.api_base,
+            ),
+            self.iterations,
+            str(self.output_dir / f"tick-{self.tick_number:06d}"),
+            False,
+        )
+        source = getattr(result, "best_code", None)
+        if not isinstance(source, str) or not source:
+            raise RuntimeError("OpenEvolve returned no placement policy")
+        policy = load_policy_source(source)
+        response = policy(payload)
+        document = _mapping(response, "OpenEvolve policy response")
+        placements = _parse_placements(document)
+        _validate_policy_response(payload, document)
+        self.initial_program = source
+        self.tick_number += 1
+        return placements
+
+
+class OpenEvolvePlannerDriver:
+    """Evolve placements and create canonical Store plans for each tick."""
+
+    method_name = "openevolve"
+
+    def __init__(
+        self,
+        user_id: str,
+        scenario: Scenario,
+        job_store: JobStoreClient,
+        resource_map_store: ResourceMapStoreClient,
+        plan_store: PlanStoreClient,
+        model: str,
+        max_tokens: int,
+        backend: str,
+        client: OpenEvolveClient,
+    ) -> None:
+        """Keep Store clients, evolution settings, and simulator jobs."""
+        self.user_id = user_id
+        self.jobs: dict[str, OnlineJob | BatchJob] = {}
+        for online_job in scenario.online_jobs:
+            self.jobs[online_job.store_job_id] = online_job
+        for batch_job in scenario.batch_jobs:
+            self.jobs[batch_job.store_job_id] = batch_job
+        self.job_store = job_store
+        self.resource_map_store = resource_map_store
+        self.plan_store = plan_store
+        self.model = model
+        self.max_tokens = max_tokens
+        self.backend = backend
+        self.client = client
+
+    @classmethod
+    def build(
+        cls,
+        user_id: str,
+        scenario: Scenario,
+        settings: Mapping[str, object],
+        postgres_client: object | None = None,
+        client: OpenEvolveClient | None = None,
+    ) -> OpenEvolvePlannerDriver:
+        """Build the standalone Store planner and online OpenEvolve client."""
+        from tandemn_system_data.clients import (
+            JobStore,
+            PlanStore,
+            PostgresClient,
+            ResourceMapStore,
+        )
+
+        postgres = postgres_client or PostgresClient()
+        return cls(
+            user_id=user_id,
+            scenario=scenario,
+            job_store=JobStore(postgres),
+            resource_map_store=ResourceMapStore(postgres, user_id=user_id),
+            plan_store=PlanStore(postgres),
+            model=_required_text(settings.get("model"), "model"),
+            max_tokens=_positive_int(settings.get("max_tokens"), "max_tokens"),
+            backend=_required_text(settings.get("backend"), "backend"),
+            client=client
+            or OnlineOpenEvolveClient(
+                _positive_int(settings.get("iterations", 8), "iterations"),
+                Path(
+                    _optional_text(settings.get("output_dir")) or "outputs/openevolve"
+                ),
+                _optional_text(settings.get("api_base")),
+            ),
+        )
+
+    def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
+        """Read one snapshot, evolve placements, and persist one Store plan."""
+        try:
+            snapshot = self._read_store_snapshot()
+            waiting_ids = tuple(
+                job["job_id"]
+                for job in snapshot.waiting_jobs
+                if job.get("job_id") in self.jobs
+            )
+            placements: tuple[OpenEvolvePlacement, ...] = ()
+            if waiting_ids:
+                prompt = _build_user_prompt(
+                    tick_number,
+                    logical_time,
+                    snapshot,
+                    tuple(self.jobs[job_id] for job_id in waiting_ids),
+                    load_config_policy(),
+                )
+                placements = self.client.place(
+                    self.model,
+                    self.max_tokens,
+                    OPENEOLVE_SYSTEM_PROMPT,
+                    prompt,
+                )
+
+            actions = self._build_actions(snapshot, placements)
+            if not actions:
+                return PlannerResult(tick_number=tick_number, plans=())
+
+            from tandemn_system_data.models import Plan
+
+            plan = Plan(
+                user_id=self.user_id,
+                koi_version=self.method_name,
+                tick_rationale=_tick_rationale(tick_number, actions),
+                actions=actions,
+            )
+            self.plan_store.create(plan)
+            return PlannerResult(
+                tick_number=tick_number,
+                plans=(CreatedPlan(plan_id=plan.plan_id),),
+            )
+        except Exception as error:
+            return PlannerResult(
+                tick_number=tick_number,
+                plans=(),
+                degraded=True,
+                error=repr(error),
+            )
+
+    def _read_store_snapshot(self) -> StoreSnapshot:
+        """Freeze resources and canonical lifecycle groups for one tick."""
+        resource_map = self.resource_map_store.get()
+        running = tuple(self.job_store.running_jobs(self.user_id))
+        waiting = tuple(self.job_store.waiting_jobs(self.user_id))
+        paused = tuple(self.job_store.paused_jobs(self.user_id))
+        finished = tuple(self._finished_jobs())
+        return StoreSnapshot(
+            resources=_resources_with_free_capacity(resource_map, running),
+            running_jobs=tuple(_running_job_payload(job) for job in running),
+            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            paused_jobs=tuple(_model_payload(job) for job in paused),
+            finished_jobs=tuple(_model_payload(job) for job in finished),
+        )
+
+    def _finished_jobs(self) -> Sequence[object]:
+        """Read terminal jobs through the Store's available lifecycle API."""
+        reader = getattr(self.job_store, "finished_jobs", None)
+        if callable(reader):
+            return cast(Sequence[object], reader(self.user_id))
+        status_reader = getattr(self.job_store, "_jobs_with_status", None)
+        if not callable(status_reader):
+            raise RuntimeError("JobStore does not expose finished jobs")
+
+        from tandemn_system_data.models import JobStatus
+
+        return cast(
+            Sequence[object],
+            status_reader(self.user_id, JobStatus.FINISHED),
+        )
+
+    def _build_actions(
+        self,
+        snapshot: StoreSnapshot,
+        placements: Sequence[OpenEvolvePlacement],
+    ) -> list[dict[str, object]]:
+        """Convert evolved decisions into complete canonical Store actions."""
+        waiting_ids = tuple(
+            job["job_id"]
+            for job in snapshot.waiting_jobs
+            if job.get("job_id") in self.jobs
+        )
+        _validate_response_count(waiting_ids, placements)
+        placement_by_job = dict(zip(waiting_ids, placements, strict=True))
+        resources = deepcopy(snapshot.resources)
+        actions: list[dict[str, object]] = []
+        for running in snapshot.running_jobs:
+            actions.append({"job_id": running["job_id"], "type": "keep"})
+        for waiting in snapshot.waiting_jobs:
+            job_id = waiting.get("job_id")
+            if not isinstance(job_id, str):
+                raise ValueError("waiting Store job is missing job_id")
+            if job_id not in self.jobs:
+                actions.append({"job_id": job_id, "type": "defer"})
+                continue
+            placement = placement_by_job[job_id]
+            if placement.decision == "defer":
+                actions.append({"job_id": job_id, "type": "defer"})
+                continue
+            actions.append(
+                _place_action(
+                    job_id,
+                    waiting,
+                    self.jobs[job_id],
+                    placement,
+                    resources,
+                    self.backend,
+                )
+            )
+        for paused in snapshot.paused_jobs:
+            actions.append({"job_id": paused["job_id"], "type": "defer"})
+        for finished in snapshot.finished_jobs:
+            actions.append({"job_id": finished["job_id"], "type": "preempt"})
+        _validate_complete_job_actions(snapshot, actions)
+        return actions
+
+
+def _build_user_prompt(
+    tick_number: int,
+    logical_time: datetime,
+    snapshot: StoreSnapshot,
+    jobs: tuple[OnlineJob | BatchJob, ...],
+    config_policy: ConfigPolicy,
+) -> str:
+    """Serialize the frozen Store snapshot and waiting simulator jobs."""
+    return json.dumps(
+        {
+            "tick": tick_number,
+            "logical_time": logical_time.isoformat(),
+            "tandemn_state": {
+                "resources": snapshot.resources,
+                "active_jobs": snapshot.running_jobs,
+                "pending_jobs": snapshot.waiting_jobs,
+            },
+            "config_policy": _config_policy_payload(
+                config_policy,
+                snapshot.resources,
+                jobs,
+            ),
+            "jobs_for_tick": [_job_prompt_payload(job) for job in jobs],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _config_policy_payload(
+    config_policy: ConfigPolicy,
+    resources: Mapping[str, Mapping[str, Any]],
+    jobs: Sequence[OnlineJob | BatchJob],
+) -> list[dict[str, object]]:
+    """Return policy entries relevant to this tick's models and hardware."""
+    hardware = {
+        str(resource.get("gpu_type") or environment_key.split("|")[-1])
+        for environment_key, resource in resources.items()
+    }
+    entries: list[dict[str, object]] = []
+    for model_id in sorted({job.model_name for job in jobs}):
+        for gpu_type in sorted(hardware):
+            rule = config_policy.rule_for(gpu_type, model_id)
+            if rule is not None:
+                entries.append(
+                    {
+                        "model_id": model_id,
+                        "gpu_type": gpu_type,
+                        "precision": rule.precision,
+                        "allowed_tp": list(rule.allowed_tp),
+                    }
+                )
+    return entries
+
+
+def _place_action(
+    job_id: str,
+    store_job: Mapping[str, object],
+    scenario_job: OnlineJob | BatchJob,
+    placement: OpenEvolvePlacement,
+    resources: dict[str, dict[str, Any]],
+    backend: str,
+) -> dict[str, object]:
+    """Combine deterministic job fields with one evolved placement."""
+    known = _known_job_fields(store_job, scenario_job)
+    target_tps = _number(known.get("target_tps"))
+    return {
+        "job_id": job_id,
+        "type": "place",
+        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
+        "target_tps": (
+            target_tps if target_tps is not None else _target_tps(scenario_job)
+        ),
+        "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
+        "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
+        "mechanism_id": known.get("mechanism_id"),
+        "budget_ref": known.get("budget_ref"),
+        "rationale": known.get("rationale"),
+        "ladder": [
+            _placement_ladder(
+                scenario_job,
+                known,
+                placement,
+                resources,
+                backend,
+            )
+        ],
+    }
+
+
+def _placement_ladder(
+    job: OnlineJob | BatchJob,
+    known: Mapping[str, object],
+    placement: OpenEvolvePlacement,
+    resources: dict[str, dict[str, Any]],
+    backend: str,
+) -> dict[str, object]:
+    """Validate one placement and reserve its Store resource footprint."""
+    if placement.environment is None or placement.configuration is None:
+        raise ValueError(f"place decision for {job.store_job_id} is incomplete")
+    environment = resources.get(placement.environment)
+    if environment is None:
+        raise ValueError(f"unknown environment {placement.environment!r}")
+    config = placement.configuration
+    expected_config = {"replicas_needed", "tp", "pp", "dp"}
+    if set(config) != expected_config:
+        raise ValueError(
+            "OpenEvolve configuration must contain only replicas_needed, tp, pp, and dp"
+        )
+    replicas = _positive_int(config.get("replicas_needed"), "replicas_needed")
+    tp = _positive_int(config.get("tp"), "tp")
+    pp = _positive_int(config.get("pp"), "pp")
+    dp = _positive_int(config.get("dp"), "dp")
+    model_id = str(known.get("model_id") or job.model_name)
+    gpu_type = str(environment.get("gpu_type") or placement.environment.split("|")[-1])
+    policy_rule = load_config_policy().rule_for(gpu_type, model_id)
+    if policy_rule is None:
+        raise ValueError(f"{model_id} is unsupported on {gpu_type}")
+    if tp not in policy_rule.allowed_tp:
+        raise ValueError(
+            f"tp={tp} is not allowed for {model_id} on {gpu_type}; "
+            f"expected one of {policy_rule.allowed_tp}"
+        )
+    gpu_count = tp * pp * dp
+    pool = _select_pool(environment, placement.instance_type)
+    capacity_per_replica = gpu_count
+    instance_type = None
+    if pool is not None:
+        instance_type = _required_text(pool.get("instance_type"), "instance_type")
+        allocation_kind = str(
+            pool.get("allocation_kind") or pool.get("allocation_unit") or "instance"
+        ).lower()
+        if allocation_kind != "gpu":
+            capacity_per_replica = _positive_int(
+                pool.get("gpus_per_instance"),
+                "gpus_per_instance",
+            )
+            if gpu_count > capacity_per_replica:
+                raise ValueError(
+                    f"{job.store_job_id} needs {gpu_count} GPUs per replica; "
+                    f"{instance_type} has {capacity_per_replica}"
+                )
+    footprint = replicas * capacity_per_replica
+    available = int(environment["free"])
+    if pool is not None:
+        available = min(available, int(pool["free"]))
+    if footprint > available:
+        raise ValueError(
+            f"{placement.environment} has {available} free GPUs, not {footprint}"
+        )
+    environment["free"] = int(environment["free"]) - footprint
+    if pool is not None:
+        pool["free"] = int(pool["free"]) - footprint
+
+    rank_config: dict[str, object] = {
+        "model_id": model_id,
+        "precision": policy_rule.precision,
+        "engine_name": known.get("engine_name") or backend,
+        "instance_type": instance_type,
+        "gpu_type": gpu_type,
+        "gpu_count": gpu_count,
+        "count": known.get("count"),
+        "tp": tp,
+        "pp": pp,
+        "dp": dp,
+        "ep": known.get("ep"),
+        "max_num_seq": known.get("max_num_seq"),
+        "max_num_batched_tokens": known.get("max_num_batched_tokens"),
+        "gpu_mem_util": known.get("gpu_mem_util"),
+        "prefix_cache_enabled": known.get("prefix_cache_enabled"),
+        "rank_traffic_share": 1.0,
+    }
+    return {
+        "role": known.get("role") or "aggregate",
+        "rank_id": known.get("rank_id") or "rank_0",
+        "env": placement.environment.split("|"),
+        "config": rank_config,
+        "n_replicas": replicas,
+        "mechanism_id": known.get("mechanism_id"),
+    }
+
+
+def _resources_with_free_capacity(
+    resource_map: ResourceMap,
+    running_jobs: Sequence[object],
+) -> dict[str, dict[str, Any]]:
+    """Normalize Store totals and subtract active canonical rank allocations."""
+    raw = resource_map.scheduling_summary()
+    default_market = _default_market(resource_map)
+    resources = {
+        _normalize_env_key(str(key), default_market): dict(value)
+        for key, value in raw.items()
+    }
+    used_by_env: dict[str, int] = {}
+    used_by_pool: dict[tuple[str, str], int] = {}
+    for running in running_jobs:
+        payload = _model_payload(running)
+        for rank_value in payload.get("ranks", []):
+            rank = _mapping(rank_value, "active rank")
+            shape = _mapping(rank.get("shape_json", {}), "rank shape")
+            raw_env = shape.get("env") or shape.get("pool_id")
+            if raw_env is None:
+                continue
+            env_key = _normalize_env_key(_env_key(raw_env), default_market)
+            count = _positive_int(shape.get("count"), "active rank count")
+            replicas = _positive_int(rank.get("n_replicas"), "active rank replicas")
+            environment = resources.get(env_key)
+            if environment is None:
+                continue
+            pool = _select_pool(environment, _optional_text(shape.get("instance_type")))
+            footprint = count * replicas
+            if pool is not None:
+                kind = str(
+                    pool.get("allocation_kind")
+                    or pool.get("allocation_unit")
+                    or "instance"
+                ).lower()
+                if kind != "gpu":
+                    footprint = replicas * _positive_int(
+                        pool.get("gpus_per_instance"),
+                        "gpus_per_instance",
+                    )
+                pool_key = (env_key, str(pool.get("instance_type")))
+                used_by_pool[pool_key] = used_by_pool.get(pool_key, 0) + footprint
+            used_by_env[env_key] = used_by_env.get(env_key, 0) + footprint
+
+    for env_key, environment in resources.items():
+        total = int(environment.get("total", 0))
+        environment["free"] = max(0, total - used_by_env.get(env_key, 0))
+        pools = [dict(pool) for pool in environment.get("pools", [])]
+        for pool in pools:
+            pool_key = (env_key, str(pool.get("instance_type")))
+            pool["free"] = max(
+                0,
+                int(pool.get("total", 0)) - used_by_pool.get(pool_key, 0),
+            )
+        environment["pools"] = pools
+    return resources
+
+
+def _running_job_payload(running_job: object) -> dict[str, Any]:
+    """Flatten a Store running-job aggregate for the frozen snapshot."""
+    payload = _model_payload(running_job)
+    job = dict(_mapping(payload.get("job"), "running job"))
+    job["active_ranks"] = payload.get("ranks", [])
+    return job
+
+
+def _model_payload(value: object) -> dict[str, Any]:
+    """Serialize one Store model or aggregate."""
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dict(dump(mode="json"))
+    if isinstance(value, Mapping):
+        return dict(value)
+    job = getattr(value, "job", None)
+    ranks = getattr(value, "ranks", None)
+    if job is not None and ranks is not None:
+        return {
+            "job": _model_payload(job),
+            "ranks": [_model_payload(rank) for rank in ranks],
+        }
+    raise TypeError(f"Store value {type(value).__name__} is not serializable")
+
+
+def _parse_placements(
+    document: Mapping[str, object],
+) -> tuple[OpenEvolvePlacement, ...]:
+    """Parse and validate one evolved placement response."""
+    values = document.get("placements")
+    if not isinstance(values, list):
+        raise ValueError("OpenEvolve response is missing placements")
+    placements = []
+    for index, value in enumerate(values):
+        item = _mapping(value, f"placements[{index}]")
+        decision = _required_text(item.get("decision"), "decision")
+        if decision == "defer":
+            if any(
+                item.get(key) is not None
+                for key in ("environment", "instance_type", "configuration")
+            ):
+                raise ValueError("defer decisions must use null placement fields")
+            placements.append(OpenEvolvePlacement(decision, None, None, None))
+            continue
+        if decision != "place":
+            raise ValueError("decision must be place or defer")
+        placements.append(
+            OpenEvolvePlacement(
+                decision=decision,
+                environment=_required_text(item.get("environment"), "environment"),
+                instance_type=_optional_text(item.get("instance_type")),
+                configuration=_mapping(item.get("configuration"), "configuration"),
+            )
+        )
+    return tuple(placements)
+
+
+def _validate_response_count(
+    expected_ids: Sequence[str],
+    placements: Sequence[OpenEvolvePlacement],
+) -> None:
+    """Require one ordered decision per known waiting job."""
+    if len(placements) != len(expected_ids):
+        raise ValueError("OpenEvolve must decide every waiting job exactly once")
+
+
+def _validate_complete_job_actions(
+    snapshot: StoreSnapshot,
+    actions: Sequence[Mapping[str, object]],
+) -> None:
+    """Require exactly one canonical action for every Store job."""
+    store_ids = []
+    for jobs in (
+        snapshot.running_jobs,
+        snapshot.waiting_jobs,
+        snapshot.paused_jobs,
+        snapshot.finished_jobs,
+    ):
+        for job in jobs:
+            store_ids.append(_required_text(job.get("job_id"), "Store job_id"))
+    action_ids = [
+        _required_text(action.get("job_id"), "plan job_id") for action in actions
+    ]
+    if len(store_ids) != len(set(store_ids)):
+        raise ValueError("Store snapshot contains duplicate job_id values")
+    if len(action_ids) != len(set(action_ids)) or set(action_ids) != set(store_ids):
+        raise ValueError("plan must contain exactly one action for every Store job")
+
+
+def _tick_rationale(
+    tick_number: int,
+    actions: Sequence[Mapping[str, object]],
+) -> str:
+    """Summarize the deterministic action set persisted for one tick."""
+    counts = {"place": 0, "defer": 0, "keep": 0, "preempt": 0}
+    for action in actions:
+        action_type = action.get("type")
+        if action_type in counts:
+            counts[action_type] += 1
+    return (
+        f"OpenEvolve cluster simulator tick {tick_number}: "
+        f"place={counts['place']}, defer={counts['defer']}, "
+        f"keep={counts['keep']}, preempt={counts['preempt']}."
+    )
+
+
+def _target_tps(job: OnlineJob | BatchJob) -> float | None:
+    """Derive required output-token throughput from the scenario workload."""
+    features = job.workload.get("features", {})
+    explicit = _number(features.get("target_tps"))
+    if explicit is not None:
+        return explicit
+    if isinstance(job, OnlineJob):
+        phases = job.workload.get("phases", [])
+        rates = [
+            float(phase["rate"])
+            for phase in phases
+            if isinstance(phase, Mapping) and "rate" in phase
+        ]
+        output_tokens = _number(features.get("osl_token_avg"))
+        if not rates or output_tokens is None:
+            return None
+        return round(max(rates) * output_tokens, 3)
+
+    output = job.workload.get("output")
+    average = _number(getattr(output, "average", None))
+    duration_seconds = (job.deadline_at_ns - job.releases_at_ns) / 1_000_000_000
+    if average is None or duration_seconds <= 0:
+        return None
+    record_count = _positive_int(job.workload.get("record_count"), "record_count")
+    return round(record_count * average / duration_seconds, 3)
+
+
+def _job_prompt_payload(job: OnlineJob | BatchJob) -> dict[str, object]:
+    """Expose workload requirements without transferring Store job identity."""
+    payload = asdict(job)
+    payload.pop("name", None)
+    payload.pop("store_job_id", None)
+    payload["kind"] = "online" if isinstance(job, OnlineJob) else "batch"
+    return payload
+
+
+def _known_job_fields(
+    store_job: Mapping[str, object],
+    job: OnlineJob | BatchJob,
+) -> dict[str, object]:
+    """Merge Store and scenario fields once using deterministic precedence."""
+    spec = store_job.get("spec_json")
+    store_spec = spec if isinstance(spec, Mapping) else {}
+    store_features_value = store_spec.get("job_features")
+    store_features = (
+        store_features_value if isinstance(store_features_value, Mapping) else {}
+    )
+    scenario_features_value = job.workload.get("features", {})
+    scenario_features = (
+        scenario_features_value if isinstance(scenario_features_value, Mapping) else {}
+    )
+    known: dict[str, object] = {}
+    for source in (
+        store_job,
+        store_spec,
+        store_features,
+        job.workload,
+        scenario_features,
+    ):
+        for key, value in source.items():
+            if value is not None:
+                known.setdefault(str(key), value)
+    return known
+
+
+def _select_pool(
+    environment: Mapping[str, Any],
+    instance_type: str | None,
+) -> dict[str, Any] | None:
+    """Resolve one concrete resource pool."""
+    pools = environment.get("pools", [])
+    if not isinstance(pools, list):
+        raise ValueError("resource pools must be a list")
+    if not pools:
+        if instance_type is not None:
+            raise ValueError("environment has no instance pools")
+        return None
+    typed_pools = []
+    for pool in pools:
+        if not isinstance(pool, dict):
+            raise ValueError("resource pool must be an object")
+        typed_pools.append(pool)
+    if instance_type is not None:
+        for pool in typed_pools:
+            if pool.get("instance_type") == instance_type:
+                return pool
+        raise ValueError(f"unknown instance_type {instance_type!r}")
+    if len(typed_pools) == 1:
+        return typed_pools[0]
+    raise ValueError("instance_type is required when an environment has multiple pools")
+
+
+def _default_market(resource_map: object) -> str:
+    """Read the resource map's default market."""
+    markets = getattr(resource_map, "market", None)
+    if isinstance(markets, (list, tuple)) and markets:
+        return str(markets[0])
+    return str(markets or "reserved")
+
+
+def _normalize_env_key(env_key: str, default_market: str) -> str:
+    """Normalize legacy four-part environment keys."""
+    parts = env_key.split("|")
+    return "|".join((default_market, *parts)) if len(parts) == 4 else env_key
+
+
+def _env_key(value: object) -> str:
+    """Return one canonical pipe-delimited environment key."""
+    if isinstance(value, (list, tuple)):
+        return "|".join(str(part) for part in value)
+    return str(value)
+
+
+def run_openevolve(
+    initial_program: str,
+    evaluator: str,
+    config: Mapping[str, object],
+    iterations: int,
+    output_dir: str,
+    cleanup: bool,
+) -> object:
+    """Run OpenEvolve in a child process to avoid this adapter's name collision."""
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="tandemn-openevolve-") as directory:
+        root = Path(directory)
+        program_path = root / "initial_program.py"
+        evaluator_path = root / "evaluator.py"
+        result_path = root / "result.json"
+        program_path.write_text(initial_program, encoding="utf-8")
+        evaluator_path.write_text(evaluator, encoding="utf-8")
+        script = """\
+import json
+import sys
+from pathlib import Path
+from openevolve import run_evolution
+from openevolve.config import Config
+
+(
+    program_path,
+    evaluator_path,
+    output_dir,
+    result_path,
+    config_json,
+    iterations,
+) = sys.argv[1:]
+result = run_evolution(
+    initial_program=program_path,
+    evaluator=evaluator_path,
+    config=Config.from_dict(json.loads(config_json)),
+    iterations=int(iterations),
+    output_dir=output_dir,
+    cleanup=False,
+)
+Path(result_path).write_text(
+    json.dumps({"best_code": result.best_code}),
+    encoding="utf-8",
+)
+"""
+        environment = dict(os.environ)
+        local_module_root = str(Path(__file__).resolve().parent)
+        inherited_path = environment.get("PYTHONPATH", "")
+        environment["PYTHONPATH"] = os.pathsep.join(
+            entry
+            for entry in inherited_path.split(os.pathsep)
+            if entry and Path(entry).resolve() != Path(local_module_root)
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(program_path),
+                str(evaluator_path),
+                str(target),
+                str(result_path),
+                json.dumps(config),
+                str(iterations),
+            ],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            message = completed.stderr.strip() or completed.stdout.strip()
+            raise RuntimeError(f"OpenEvolve failed: {message}")
+        try:
+            document = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError("OpenEvolve returned no readable result") from error
+    return SimpleNamespace(best_code=document.get("best_code"))
+
+
+def load_policy_source(source: str) -> OpenEvolvePolicy:
+    """Load one OpenEvolve winner without granting it Store access."""
+    module = ModuleType("tandemn_openevolve_policy")
+    exec(compile(source, "<openevolve-policy>", "exec"), module.__dict__)
+    policy = getattr(module, "compute_placement", None)
+    if not callable(policy):
+        raise ValueError("OpenEvolve policy must define compute_placement(payload)")
+    return cast(OpenEvolvePolicy, policy)
+
+
+def _openevolve_config(
+    model: str,
+    max_tokens: int,
+    system_prompt: str,
+    api_base: str | None,
+) -> dict[str, object]:
+    """Build a serializable OpenEvolve configuration for a single tick."""
+    llm: dict[str, object] = {
+        "models": [{"name": model, "max_tokens": max_tokens, "weight": 1.0}],
+        "max_tokens": max_tokens,
+    }
+    if api_base is not None:
+        llm["api_base"] = api_base
+    return {
+        "max_iterations": 1,
+        "random_seed": 42,
+        "diff_based_evolution": True,
+        "max_code_length": 20_000,
+        "llm": llm,
+        "prompt": {
+            "system_message": system_prompt,
+            "num_top_programs": 2,
+            "num_diverse_programs": 1,
+        },
+        "database": {
+            "population_size": 32,
+            "archive_size": 8,
+            "num_islands": 1,
+        },
+        "evaluator": {
+            "timeout": 30,
+            "max_retries": 0,
+            "cascade_evaluation": False,
+            "use_llm_feedback": False,
+        },
+    }
+
+
+def _evaluator_source(payload: Mapping[str, object]) -> str:
+    """Create OpenEvolve's self-contained evaluator for one frozen snapshot."""
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"""\
+import importlib.util
+
+PAYLOAD = {serialized!r}
+
+def evaluate(program_path):
+    spec = importlib.util.spec_from_file_location("candidate_policy", program_path)
+    if spec is None or spec.loader is None:
+        return {{"combined_score": 0.0, "valid": 0.0}}
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        result = module.compute_placement(__import__("json").loads(PAYLOAD))
+        validation = _validate(__import__("json").loads(PAYLOAD), result)
+    except Exception:
+        return {{"combined_score": 0.0, "valid": 0.0}}
+    if not validation.get("valid"):
+        return {{"combined_score": 0.0, "valid": 0.0}}
+    placements = result["placements"]
+    placed = sum(item["decision"] == "place" for item in placements)
+    gpu_footprint = validation["gpu_footprint"]
+    return {{
+        "combined_score": float(placed * 1_000_000 - gpu_footprint),
+        "valid": 1.0,
+        "admitted_jobs": float(placed),
+        "gpu_footprint": float(gpu_footprint),
+    }}
+
+def _validate(payload, result):
+    jobs = payload.get("jobs_for_tick")
+    placements = result.get("placements") if isinstance(result, dict) else None
+    if (
+        not isinstance(result, dict)
+        or set(result) != {{"placements"}}
+        or not isinstance(jobs, list)
+        or not isinstance(placements, list)
+    ):
+        return {{"valid": False}}
+    if len(jobs) != len(placements):
+        return {{"valid": False}}
+    resources = payload["tandemn_state"]["resources"]
+    policies = {{
+        (value["model_id"], value["gpu_type"]): value
+        for value in payload["config_policy"]
+    }}
+    total_footprint = 0
+    for job, placement in zip(jobs, placements):
+        if (
+            not isinstance(placement, dict)
+            or set(placement) != {{
+                "decision",
+                "environment",
+                "instance_type",
+                "configuration",
+            }}
+        ):
+            return {{"valid": False}}
+        if placement.get("decision") == "defer":
+            keys = ("environment", "instance_type", "configuration")
+            if any(placement.get(key) is not None for key in keys):
+                return {{"valid": False}}
+            continue
+        if placement.get("decision") != "place":
+            return {{"valid": False}}
+        environment = placement.get("environment")
+        configuration = placement.get("configuration")
+        resource = resources.get(environment)
+        if (
+            not isinstance(environment, str)
+            or not isinstance(configuration, dict)
+            or not isinstance(resource, dict)
+            or set(configuration) != {{"replicas_needed", "tp", "pp", "dp"}}
+        ):
+            return {{"valid": False}}
+        names = ("replicas_needed", "tp", "pp", "dp")
+        values = [configuration.get(key) for key in names]
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in values
+        ):
+            return {{"valid": False}}
+        gpu_type = str(resource.get("gpu_type") or environment.split("|")[-1])
+        policy = policies.get((job["model_name"], gpu_type))
+        if policy is None or configuration["tp"] not in policy["allowed_tp"]:
+            return {{"valid": False}}
+
+        gpu_count = values[1] * values[2] * values[3]
+        capacity_per_replica = gpu_count
+        pools = resource.get("pools", [])
+        if not isinstance(pools, list) or any(
+            not isinstance(pool, dict) for pool in pools
+        ):
+            return {{"valid": False}}
+        instance_type = placement.get("instance_type")
+        pool = None
+        if pools:
+            if instance_type is None and len(pools) == 1:
+                pool = pools[0]
+            elif isinstance(instance_type, str):
+                pool = next(
+                    (
+                        candidate
+                        for candidate in pools
+                        if candidate.get("instance_type") == instance_type
+                    ),
+                    None,
+                )
+            if pool is None:
+                return {{"valid": False}}
+            allocation_kind = str(
+                pool.get("allocation_kind")
+                or pool.get("allocation_unit")
+                or "instance"
+            ).lower()
+            if allocation_kind != "gpu":
+                gpus_per_instance = pool.get("gpus_per_instance")
+                if (
+                    isinstance(gpus_per_instance, bool)
+                    or not isinstance(gpus_per_instance, int)
+                    or gpus_per_instance < gpu_count
+                ):
+                    return {{"valid": False}}
+                capacity_per_replica = gpus_per_instance
+        elif instance_type is not None:
+            return {{"valid": False}}
+
+        footprint = values[0] * capacity_per_replica
+        available = int(resource.get("free", 0))
+        if pool is not None:
+            available = min(available, int(pool.get("free", 0)))
+        if available < footprint:
+            return {{"valid": False}}
+        resource["free"] = int(resource.get("free", 0)) - footprint
+        if pool is not None:
+            pool["free"] = int(pool.get("free", 0)) - footprint
+        total_footprint += footprint
+    return {{"valid": True, "gpu_footprint": total_footprint}}
+"""
+
+
+def _validate_policy_response(
+    payload: Mapping[str, object],
+    response: Mapping[str, object],
+) -> None:
+    """Reject a winning policy unless it still validates against this snapshot."""
+    if set(response) != {"placements"}:
+        raise ValueError("OpenEvolve policy must return only placements")
+    jobs = payload.get("jobs_for_tick")
+    raw_placements = response.get("placements")
+    if not isinstance(jobs, list) or not isinstance(raw_placements, list):
+        raise ValueError("OpenEvolve jobs and placements must be arrays")
+    placements = _parse_placements(response)
+    if len(placements) != len(jobs):
+        raise ValueError(
+            f"OpenEvolve expected {len(jobs)} placements, received {len(placements)}"
+        )
+
+    state = _mapping(payload.get("tandemn_state"), "tandemn_state")
+    resources = deepcopy(_mapping(state.get("resources"), "resources"))
+    policies = payload.get("config_policy")
+    if not isinstance(policies, list):
+        raise ValueError("config_policy must be an array")
+
+    expected_placement = {
+        "decision",
+        "environment",
+        "instance_type",
+        "configuration",
+    }
+    for index, (raw_job, raw_placement, placement) in enumerate(
+        zip(jobs, raw_placements, placements, strict=True)
+    ):
+        try:
+            job = _mapping(raw_job, "job")
+            item = _mapping(raw_placement, "placement")
+            if set(item) != expected_placement:
+                raise ValueError("placement contains unexpected fields")
+            if placement.decision == "defer":
+                continue
+            if placement.environment is None or placement.configuration is None:
+                raise ValueError("place decision is incomplete")
+            resource = resources.get(placement.environment)
+            if not isinstance(resource, dict):
+                raise ValueError("environment is unknown")
+            config = placement.configuration
+            if set(config) != {"replicas_needed", "tp", "pp", "dp"}:
+                raise ValueError("configuration contains unexpected fields")
+            replicas = _positive_int(config.get("replicas_needed"), "replicas_needed")
+            tp = _positive_int(config.get("tp"), "tp")
+            pp = _positive_int(config.get("pp"), "pp")
+            dp = _positive_int(config.get("dp"), "dp")
+            gpu_type = str(
+                resource.get("gpu_type") or placement.environment.split("|")[-1]
+            )
+            policy = next(
+                (
+                    rule
+                    for rule in policies
+                    if isinstance(rule, Mapping)
+                    and rule.get("model_id") == job.get("model_name")
+                    and rule.get("gpu_type") == gpu_type
+                ),
+                None,
+            )
+            if policy is None:
+                raise ValueError(
+                    f"{job.get('model_name')} is unsupported on {gpu_type}"
+                )
+            allowed_tp = policy.get("allowed_tp")
+            if not isinstance(allowed_tp, list) or tp not in allowed_tp:
+                raise ValueError(f"tp={tp} is not allowed on {gpu_type}")
+
+            gpu_count = tp * pp * dp
+            pool = _select_pool(resource, placement.instance_type)
+            capacity_per_replica = gpu_count
+            if pool is not None:
+                allocation_kind = str(
+                    pool.get("allocation_kind")
+                    or pool.get("allocation_unit")
+                    or "instance"
+                ).lower()
+                if allocation_kind != "gpu":
+                    capacity_per_replica = _positive_int(
+                        pool.get("gpus_per_instance"),
+                        "gpus_per_instance",
+                    )
+                    if gpu_count > capacity_per_replica:
+                        raise ValueError(
+                            f"configuration needs {gpu_count} GPUs per replica but "
+                            f"the instance has {capacity_per_replica}"
+                        )
+            footprint = replicas * capacity_per_replica
+            available = int(resource.get("free", 0))
+            if pool is not None:
+                available = min(available, int(pool.get("free", 0)))
+            if footprint > available:
+                raise ValueError(
+                    f"placement needs {footprint} GPUs but only {available} are free"
+                )
+            resource["free"] = int(resource.get("free", 0)) - footprint
+            if pool is not None:
+                pool["free"] = int(pool.get("free", 0)) - footprint
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"OpenEvolve policy returned an invalid placement {index}: {error}"
+            ) from error
+
+
+def _mapping(value: object, name: str) -> dict[str, Any]:
+    """Require one mapping value."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object")
+    return {str(key): item for key, item in value.items()}
+
+
+def _required_text(value: object, name: str) -> str:
+    """Require one nonempty text setting."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _optional_text(value: object) -> str | None:
+    """Return one optional nonempty text setting."""
+    return None if value is None else _required_text(value, "optional text")
+
+
+def _positive_int(value: object, name: str) -> int:
+    """Require one positive integer setting."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _number(value: object) -> float | None:
+    """Return one optional numeric target."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+__all__ = [
+    "OPENEOLVE_INITIAL_PROGRAM",
+    "OPENEOLVE_SYSTEM_PROMPT",
+    "OnlineOpenEvolveClient",
+    "OpenEvolveClient",
+    "OpenEvolvePlacement",
+    "OpenEvolvePlannerDriver",
+    "OpenEvolvePolicy",
+    "StoreSnapshot",
+    "load_policy_source",
+    "run_openevolve",
+]

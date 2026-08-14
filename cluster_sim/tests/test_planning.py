@@ -57,7 +57,7 @@ class KoiPlannerDriverTest(unittest.TestCase):
         """Expose the implemented baseline drivers through the simulator CLI."""
         self.assertEqual(
             set(PLANNER_BUILDERS),
-            {"koi", "dynamo_aic", "bestfit", "vram", "gpt_only"},
+            {"koi", "dynamo_aic", "bestfit", "vram", "gpt_only", "openevolve"},
         )
 
     def test_tick_marks_koi_errors_as_degraded(self) -> None:
