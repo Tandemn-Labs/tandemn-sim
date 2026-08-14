@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import yaml
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 
@@ -32,7 +33,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_homogenous-32-2": 57.976,
         "job-benchmark_timing_real_3hr_homogenous-49-1": 109.256,
         "job-benchmark_timing_real_3hr_homogenous-49-2": 6.427,
-        "job-benchmark_timing_real_3hr_homogenous-67-1": 1928.805,
+        "job-benchmark_timing_real_3hr_homogenous-67-1": 1928.689,
         "job-benchmark_timing_real_3hr_homogenous-67-2": 247.878,
         "job-benchmark_timing_real_3hr_homogenous-67-3": 154.676,
         "job-benchmark_timing_real_3hr_homogenous-85-1": 570.518,
@@ -69,7 +70,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_12hr_192gpu-360-2": 840.193,
         "job-benchmark_timing_real_12hr_192gpu-420-1": 181.67,
         "job-benchmark_timing_real_12hr_192gpu-420-2": 772.286,
-        "job-benchmark_timing_real_12hr_192gpu-480-1": 2027.827,
+        "job-benchmark_timing_real_12hr_192gpu-480-1": 2027.71,
         "job-benchmark_timing_real_12hr_192gpu-480-2": 521.621,
         "job-benchmark_timing_real_12hr_192gpu-480-3": 1432.109,
         "job-benchmark_timing_real_12hr_192gpu-570-1": 457.339,
@@ -114,7 +115,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_24hr_192gpu-930-2": 1338.244,
         "job-benchmark_timing_real_24hr_192gpu-960-1": 772.286,
         "job-benchmark_timing_real_24hr_192gpu-960-2": 851.28,
-        "job-benchmark_timing_real_24hr_192gpu-1080-1": 2059.429,
+        "job-benchmark_timing_real_24hr_192gpu-1080-1": 2059.313,
         "job-benchmark_timing_real_24hr_192gpu-1080-2": 600.585,
         "job-benchmark_timing_real_24hr_192gpu-1200-1": 2211.014,
         "job-benchmark_timing_real_24hr_192gpu-1200-2": 7511.741,
@@ -137,7 +138,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_192gpu-25-3": 613.243,
         "job-benchmark_timing_real_3hr_192gpu-45-1": 2870.194,
         "job-benchmark_timing_real_3hr_192gpu-45-2": 646.833,
-        "job-benchmark_timing_real_3hr_192gpu-70-1": 1996.224,
+        "job-benchmark_timing_real_3hr_192gpu-70-1": 1996.108,
         "job-benchmark_timing_real_3hr_192gpu-70-2": 442.657,
         "job-benchmark_timing_real_3hr_192gpu-70-3": 203.419,
         "job-benchmark_timing_real_3hr_192gpu-95-1": 334.995,
@@ -176,7 +177,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_12hr-420-2": 3224.958,
         "job-benchmark_timing_12hr-465-1": 335.976,
         "job-benchmark_timing_12hr-480-1": 772.286,
-        "job-benchmark_timing_12hr-510-1": 2354.386,
+        "job-benchmark_timing_12hr-510-1": 2354.27,
         "job-benchmark_timing_12hr-510-2": 1469.192,
         "job-benchmark_timing_12hr-570-1": 274.252,
         "job-benchmark_timing_12hr-570-2": 457.339,
@@ -226,7 +227,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_24hr-960-2": 2636.558,
         "job-benchmark_timing_24hr-1020-1": 313.143,
         "job-benchmark_timing_24hr-1020-2": 556.716,
-        "job-benchmark_timing_24hr-1080-1": 2480.796,
+        "job-benchmark_timing_24hr-1080-1": 2480.68,
         "job-benchmark_timing_24hr-1080-2": 1679.763,
         "job-benchmark_timing_24hr-1140-1": 892.167,
         "job-benchmark_timing_24hr-1200-1": 9291.092,
@@ -237,30 +238,30 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_24hr-1410-2": 1667.625,
     },
     "simulation_3h": {
-        "job-benchmark_timing_3hr-0-1": 1064.314,
-        "job-benchmark_timing_3hr-0-2": 1640.938,
-        "job-benchmark_timing_3hr-0-3": 6591.789,
-        "job-benchmark_timing_3hr-0-4": 807.966,
+        "job-benchmark_timing_3hr-0-1": 7.966,
+        "job-benchmark_timing_3hr-0-2": 171.67,
+        "job-benchmark_timing_3hr-0-3": 102.824,
+        "job-benchmark_timing_3hr-0-4": 6.427,
         "job-benchmark_timing_3hr-0-5": 1.053,
-        "job-benchmark_timing_3hr-7-1": 16243.584,
+        "job-benchmark_timing_3hr-7-1": 176.994,
         "job-benchmark_timing_3hr-7-2": 1.077,
-        "job-benchmark_timing_3hr-7-3": 3932.206,
+        "job-benchmark_timing_3hr-7-3": 141.678,
         "job-benchmark_timing_3hr-15-1": 741.768,
         "job-benchmark_timing_3hr-15-2": 1.053,
         "job-benchmark_timing_3hr-15-3": 613.243,
-        "job-benchmark_timing_3hr-32-1": 19992.668,
-        "job-benchmark_timing_3hr-32-2": 2071.983,
-        "job-benchmark_timing_3hr-49-1": 11219.803,
-        "job-benchmark_timing_3hr-49-2": 1935.896,
-        "job-benchmark_timing_3hr-67-1": 2206.908,
-        "job-benchmark_timing_3hr-67-2": 995.407,
-        "job-benchmark_timing_3hr-67-3": 331.271,
+        "job-benchmark_timing_3hr-32-1": 208.215,
+        "job-benchmark_timing_3hr-32-2": 57.976,
+        "job-benchmark_timing_3hr-49-1": 109.256,
+        "job-benchmark_timing_3hr-49-2": 6.427,
+        "job-benchmark_timing_3hr-67-1": 1928.689,
+        "job-benchmark_timing_3hr-67-2": 247.878,
+        "job-benchmark_timing_3hr-67-3": 154.676,
         "job-benchmark_timing_3hr-85-1": 570.518,
         "job-benchmark_timing_3hr-100-1": 772.286,
-        "job-benchmark_timing_3hr-100-2": 1743.919,
-        "job-benchmark_timing_3hr-125-1": 702.026,
+        "job-benchmark_timing_3hr-100-2": 49.278,
+        "job-benchmark_timing_3hr-125-1": 175.948,
         "job-benchmark_timing_3hr-125-2": 313.143,
-        "job-benchmark_timing_3hr-145-1": 1171.456,
+        "job-benchmark_timing_3hr-145-1": 200.752,
         "job-benchmark_timing_3hr-145-2": 1432.109,
         "job-benchmark_timing_3hr-160-1": 251.363,
     },
@@ -313,6 +314,98 @@ class ModelArchitecture:
     linear_attention_layers: int = 0
     linear_cache_elements: int = 0
     causal: bool = True
+
+
+def model_architecture_from_huggingface(
+    config: Mapping[str, object],
+    parameter_count: int,
+) -> ModelArchitecture:
+    """Normalize one Hugging Face config into VRAM-relevant architecture facts."""
+    nested = config.get("text_config")
+    if isinstance(nested, Mapping):
+        config = nested
+    model_type = _text(config.get("model_type"), "model_type")
+    hidden_size = _positive_int(config.get("hidden_size"), "hidden_size")
+    intermediate_size = _positive_int(
+        config.get("intermediate_size"), "intermediate_size"
+    )
+    layers = _positive_int(config.get("num_hidden_layers"), "num_hidden_layers")
+    attention_heads = _positive_int(
+        config.get("num_attention_heads"), "num_attention_heads"
+    )
+    kv_heads = int(config.get("num_key_value_heads") or attention_heads)
+    head_dim = int(config.get("head_dim") or hidden_size // attention_heads)
+    mla_cache_elements = None
+    if config.get("kv_lora_rank") is not None:
+        mla_cache_elements = _positive_int(
+            config.get("kv_lora_rank"), "kv_lora_rank"
+        ) + _positive_int(config.get("qk_rope_head_dim"), "qk_rope_head_dim")
+
+    full_attention_interval = config.get("full_attention_interval")
+    linear_attention_layers = 0
+    linear_cache_elements = 0
+    attention_layers = layers
+    if full_attention_interval is not None:
+        interval = _positive_int(full_attention_interval, "full_attention_interval")
+        attention_layers = math.ceil(layers / interval)
+        linear_attention_layers = layers - attention_layers
+        linear_key_heads = _positive_int(
+            config.get("linear_num_key_heads"), "linear_num_key_heads"
+        )
+        linear_value_heads = _positive_int(
+            config.get("linear_num_value_heads"), "linear_num_value_heads"
+        )
+        linear_key_dim = _positive_int(
+            config.get("linear_key_head_dim"), "linear_key_head_dim"
+        )
+        linear_value_dim = _positive_int(
+            config.get("linear_value_head_dim"), "linear_value_head_dim"
+        )
+        convolution = _positive_int(
+            config.get("linear_conv_kernel_dim"), "linear_conv_kernel_dim"
+        )
+        recurrent_state = linear_value_heads * linear_key_dim * linear_value_dim
+        convolution_state = convolution * (
+            2 * linear_key_heads * linear_key_dim
+            + linear_value_heads * linear_value_dim
+        )
+        linear_cache_elements = recurrent_state + convolution_state
+
+    return ModelArchitecture(
+        parameter_count=parameter_count,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        attention_layers=attention_layers,
+        kv_heads=kv_heads,
+        head_dim=head_dim,
+        mla_cache_elements=mla_cache_elements,
+        linear_attention_layers=linear_attention_layers,
+        linear_cache_elements=linear_cache_elements,
+        causal=model_type not in {"bert", "xlm-roberta"},
+    )
+
+
+def fetch_huggingface_architectures(
+    model_ids: Sequence[str], token: str
+) -> dict[str, ModelArchitecture]:
+    """Fetch parameter counts and configs for benchmark models from Hugging Face."""
+    from huggingface_hub import HfApi, hf_hub_download
+
+    if not token:
+        raise ValueError("Hugging Face token must be non-empty")
+    api = HfApi(token=token)
+    architectures = {}
+    for model_id in sorted(set(model_ids)):
+        info = api.model_info(model_id, expand=["safetensors"])
+        if info.safetensors is None or info.safetensors.total is None:
+            raise ValueError(f"Hugging Face has no parameter count for {model_id}")
+        config_path = hf_hub_download(model_id, "config.json", token=token)
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        architectures[model_id] = model_architecture_from_huggingface(
+            _mapping(config, f"Hugging Face config for {model_id}"),
+            int(info.safetensors.total),
+        )
+    return architectures
 
 
 MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
@@ -375,7 +468,7 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         head_dim=128,
     ),
     "moonshotai/Kimi-K2-Instruct": ModelArchitecture(
-        parameter_count=1_026_470_731_056,
+        parameter_count=1_026_408_235_864,
         hidden_size=7_168,
         intermediate_size=18_432,
         attention_layers=61,
@@ -447,25 +540,42 @@ def calculate_max_vram_gib(
 
 def generate_vram_requirements(
     benchmarks_root: Path,
+    architectures: Mapping[str, ModelArchitecture] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Calculate the checked-in VRAM map from all benchmark definitions."""
+    """Calculate the checked-in VRAM map from executable workload definitions."""
+    architecture_catalog = architectures or MODEL_ARCHITECTURES
     requirements: dict[str, dict[str, float]] = {}
-    for path in sorted(benchmarks_root.glob("*/benchmark.md")):
-        jobs = _benchmark_jobs(path)
-        requirements[path.parent.name] = {}
+    for manifest_path in sorted(benchmarks_root.glob("*/benchmark.yaml")):
+        benchmark_root = manifest_path.parent
+        jobs = _benchmark_jobs(benchmark_root)
+        requirements[benchmark_root.name] = {}
         for job in jobs:
             spec = _mapping(job.get("spec_json"), "job spec_json")
             model_id = _text(spec.get("model_id"), "model_id")
             try:
-                architecture = MODEL_ARCHITECTURES[model_id]
+                architecture = architecture_catalog[model_id]
             except KeyError as error:
                 raise ValueError(f"missing architecture for {model_id}") from error
             job_id = _text(job.get("job_id"), "job_id")
-            requirements[path.parent.name][job_id] = calculate_max_vram_gib(
+            requirements[benchmark_root.name][job_id] = calculate_max_vram_gib(
                 architecture,
                 job,
             )
     return requirements
+
+
+def generate_vram_requirements_from_huggingface(
+    benchmarks_root: Path,
+    token: str,
+) -> dict[str, dict[str, float]]:
+    """Fetch every benchmark architecture and recalculate the VRAM artifact."""
+    model_ids = set()
+    for manifest_path in sorted(benchmarks_root.glob("*/benchmark.yaml")):
+        for job in _benchmark_jobs(manifest_path.parent):
+            spec = _mapping(job.get("spec_json"), "job spec_json")
+            model_ids.add(_text(spec.get("model_id"), "model_id"))
+    architectures = fetch_huggingface_architectures(tuple(model_ids), token)
+    return generate_vram_requirements(benchmarks_root, architectures)
 
 
 def _active_sequences(
@@ -497,8 +607,52 @@ def _cache_elements_per_token(architecture: ModelArchitecture) -> int:
     return architecture.attention_layers * elements_per_layer
 
 
-def _benchmark_jobs(path: Path) -> tuple[dict[str, Any], ...]:
-    """Read canonical jobs from the JSON blocks in one benchmark document."""
+def _benchmark_jobs(benchmark_root: Path) -> tuple[dict[str, Any], ...]:
+    """Read YAML jobs when executable, with legacy benchmark docs as fallback."""
+    jobs_directory = benchmark_root / "jobs"
+    if jobs_directory.is_dir():
+        return _yaml_benchmark_jobs(jobs_directory)
+    return _document_benchmark_jobs(benchmark_root / "benchmark.md")
+
+
+def _yaml_benchmark_jobs(jobs_directory: Path) -> tuple[dict[str, Any], ...]:
+    """Normalize executable workload YAML into the VRAM calculator contract."""
+    jobs = []
+    for path in sorted(jobs_directory.glob("*.yaml")):
+        document = _mapping(yaml.safe_load(path.read_text(encoding="utf-8")), str(path))
+        schedule = _mapping(document.get("schedule"), f"schedule in {path}")
+        if not schedule.get("enabled"):
+            continue
+        spec = _mapping(document.get("spec"), f"spec in {path}")
+        workload = _mapping(document.get("workload"), f"workload in {path}")
+        source = workload.get("benchmark") or workload.get("dataset")
+        source = _mapping(source, f"workload source in {path}")
+        kind = _text(schedule.get("kind"), f"schedule kind in {path}")
+        job = {
+            "job_id": _text(document.get("job_id"), f"job_id in {path}"),
+            "kind": kind,
+            "spec_json": {
+                "model_id": _text(source.get("model"), f"model in {path}"),
+                "precision": str(spec.get("precision") or "fp16"),
+                "job_features": _mapping(spec.get("features"), f"features in {path}"),
+            },
+        }
+        if kind == "batch":
+            partitioning = _mapping(
+                source.get("partitioning"), f"partitioning in {path}"
+            )
+            job["input_source"] = {
+                "requests_per_shard": _positive_int(
+                    partitioning.get("requests_per_shard"),
+                    f"requests_per_shard in {path}",
+                )
+            }
+        jobs.append(job)
+    return tuple(jobs)
+
+
+def _document_benchmark_jobs(path: Path) -> tuple[dict[str, Any], ...]:
+    """Read canonical jobs from a definition-only benchmark document."""
     jobs = []
     content = path.read_text(encoding="utf-8")
     for document in re.findall(r"```json\s*(.*?)```", content, re.DOTALL):

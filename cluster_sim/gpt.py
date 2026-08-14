@@ -29,7 +29,12 @@ Return exactly one place or defer decision for every jobs_for_tick entry, in the
 same order. Do not return job IDs; Tandemn Store owns job identity. For a place
 decision, select an exact environment key and, when pools are present, an
 instance_type from that environment. Supply only replicas_needed, tp, pp, and dp
-as configuration. Their combined allocation must fit the supplied free capacity.
+as configuration. Capacity is a global constraint across every placement in the
+response: process jobs in order and subtract each placement before sizing the
+next one. When a pool's allocation_kind/allocation_unit is absent or is not
+"gpu", each replica consumes one whole instance (gpus_per_instance GPUs), even
+when tp * pp * dp is smaller. Defer instead of oversubscribing an environment or
+instance pool.
 Account for model size, precision, token lengths, offered load, latency targets,
 and batch deadlines. Prefer tensor parallelism within a node. Use replicas for
 additional load. Obey config_policy from the user message: unlisted model and
@@ -110,6 +115,10 @@ class GptPlacement:
     environment: str | None
     instance_type: str | None
     configuration: Mapping[str, object] | None
+
+
+class PlacementCapacityError(ValueError):
+    """Report one otherwise valid GPT placement that cannot fit capacity."""
 
 
 class GptClient(Protocol):
@@ -373,8 +382,8 @@ class GptPlannerDriver:
             if placement.decision == "defer":
                 actions.append({"job_id": job_id, "type": "defer"})
                 continue
-            actions.append(
-                _place_action(
+            try:
+                action = _place_action(
                     job_id,
                     waiting,
                     self.jobs[job_id],
@@ -382,7 +391,10 @@ class GptPlannerDriver:
                     resources,
                     self.backend,
                 )
-            )
+            except PlacementCapacityError:
+                actions.append({"job_id": job_id, "type": "defer"})
+                continue
+            actions.append(action)
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
         for finished in snapshot.finished_jobs:
@@ -530,7 +542,7 @@ def _placement_ladder(
                 "gpus_per_instance",
             )
             if gpu_count > capacity_per_replica:
-                raise ValueError(
+                raise PlacementCapacityError(
                     f"{job.store_job_id} needs {gpu_count} GPUs per replica; "
                     f"{instance_type} has {capacity_per_replica}"
                 )
@@ -539,7 +551,7 @@ def _placement_ladder(
     if pool is not None:
         available = min(available, int(pool["free"]))
     if footprint > available:
-        raise ValueError(
+        raise PlacementCapacityError(
             f"{placement.environment} has {available} free GPUs, not {footprint}"
         )
     environment["free"] = int(environment["free"]) - footprint

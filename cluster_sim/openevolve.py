@@ -17,11 +17,13 @@ from typing import Any, Protocol, cast
 
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
 
 OPENEOLVE_SYSTEM_PROMPT = """You improve a deterministic placement policy for one
 frozen Tandemn scheduler tick. Modify only compute_placement(payload). The payload
-contains jobs, available GPU resources, and allowed configurations. Return one
-ordered place or defer decision for every job in payload['jobs_for_tick'].
+contains each job's required_vram_gib, available GPU resources with
+gpu_memory_gib, and allowed configurations. Return one ordered place or defer
+decision for every job in payload['jobs_for_tick'].
 
 Never use network, filesystem, subprocesses, hidden state, or third-party packages.
 Do not construct Tandemn Store actions. Choose only from the supplied environments
@@ -30,6 +32,8 @@ and configurations. Preserve the function signature and return only
 
 Prioritize valid plans, then admission of urgent work, then predicted SLO fitness,
 then lower cost and GPU use. Defer a job when no policy-compliant placement fits.
+VRAM for one runnable copy is gpu_memory_gib * tp * pp. DP and replicas create
+additional copies and do not increase the VRAM available to one copy.
 """
 
 OPENEOLVE_INITIAL_PROGRAM = '''\
@@ -62,12 +66,20 @@ def compute_placement(payload):
             rule = policy.get((job["model_name"], gpu_type))
             if rule is None:
                 continue
-            tp = min(rule["allowed_tp"])
+            required_vram_gib = float(job["required_vram_gib"])
+            gpu_memory_gib = float(resource["gpu_memory_gib"])
+            minimum_gpus = max(1, int(required_vram_gib / gpu_memory_gib))
+            if minimum_gpus * gpu_memory_gib < required_vram_gib:
+                minimum_gpus += 1
+            allowed_tp = sorted(int(value) for value in rule["allowed_tp"])
+            larger_tp = [value for value in allowed_tp if value >= minimum_gpus]
+            tp = min(larger_tp) if larger_tp else max(allowed_tp)
+            pp = max(1, (minimum_gpus + tp - 1) // tp)
             pools = resource.get("pools", [])
             targets = pools if pools else [None]
             for pool in targets:
                 instance_type = None
-                footprint = tp
+                footprint = tp * pp
                 available = remaining_by_environment.get(environment, 0)
                 if pool is not None:
                     instance_type = pool["instance_type"]
@@ -78,7 +90,7 @@ def compute_placement(payload):
                     ).lower()
                     if allocation_kind != "gpu":
                         gpus_per_instance = int(pool["gpus_per_instance"])
-                        if tp > gpus_per_instance:
+                        if footprint > gpus_per_instance:
                             continue
                         footprint = gpus_per_instance
                     available = min(
@@ -94,7 +106,7 @@ def compute_placement(payload):
                     "configuration": {
                         "replicas_needed": 1,
                         "tp": tp,
-                        "pp": 1,
+                        "pp": pp,
                         "dp": 1,
                     },
                 }
@@ -460,7 +472,7 @@ def _build_user_prompt(
             "tick": tick_number,
             "logical_time": logical_time.isoformat(),
             "tandemn_state": {
-                "resources": snapshot.resources,
+                "resources": _resource_prompt_payload(snapshot.resources),
                 "active_jobs": snapshot.running_jobs,
                 "pending_jobs": snapshot.waiting_jobs,
             },
@@ -573,6 +585,15 @@ def _placement_ladder(
         )
     gpu_count = tp * pp * dp
     pool = _select_pool(environment, placement.instance_type)
+    required_vram_gib = _job_required_vram_gib(job)
+    gpu_memory_gib = _gpu_memory_gib(environment, gpu_type, pool)
+    _validate_vram_fit(
+        job.store_job_id,
+        required_vram_gib,
+        gpu_memory_gib,
+        tp,
+        pp,
+    )
     capacity_per_replica = gpu_count
     instance_type = None
     if pool is not None:
@@ -818,16 +839,107 @@ def _target_tps(job: OnlineJob | BatchJob) -> float | None:
     if average is None or duration_seconds <= 0:
         return None
     record_count = _positive_int(job.workload.get("record_count"), "record_count")
-    return round(record_count * average / duration_seconds, 3)
+    return float(round(record_count * average / duration_seconds, 3))
 
 
 def _job_prompt_payload(job: OnlineJob | BatchJob) -> dict[str, object]:
     """Expose workload requirements without transferring Store job identity."""
+    required_vram_gib = _job_required_vram_gib(job)
+    if required_vram_gib is None:
+        raise ValueError(f"{job.store_job_id} is missing required_vram_gib")
     payload = asdict(job)
     payload.pop("name", None)
     payload.pop("store_job_id", None)
     payload["kind"] = "online" if isinstance(job, OnlineJob) else "batch"
+    payload["required_vram_gib"] = required_vram_gib
     return payload
+
+
+def _job_required_vram_gib(job: OnlineJob | BatchJob) -> float | None:
+    """Read one explicit or precomputed maximum workload VRAM requirement."""
+    features = job.workload.get("features", {})
+    sources = (features, job.workload)
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("required_vram_gib", "max_vram_gib", "vram_gib"):
+            value = _number(source.get(key))
+            if value is not None and value > 0:
+                return value
+    for requirements in VRAM_REQUIREMENTS_GIB.values():
+        value = requirements.get(job.store_job_id)
+        if value is not None:
+            return float(value)
+    return None
+
+
+def _resource_prompt_payload(
+    resources: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Expose normalized per-GPU memory alongside each schedulable resource."""
+    payload = {
+        environment_key: deepcopy(dict(resource))
+        for environment_key, resource in resources.items()
+    }
+    for environment_key, resource in payload.items():
+        gpu_type = str(resource.get("gpu_type") or environment_key.split("|")[-1])
+        memory_gib = _gpu_memory_gib(resource, gpu_type)
+        if memory_gib is None:
+            raise ValueError(f"{environment_key} is missing gpu_memory_gib")
+        resource["gpu_memory_gib"] = memory_gib
+        pools = resource.get("pools", [])
+        if not isinstance(pools, list):
+            raise ValueError("resource pools must be a list")
+        for pool in pools:
+            if not isinstance(pool, dict):
+                raise ValueError("resource pool must be an object")
+            pool_memory_gib = _gpu_memory_gib(resource, gpu_type, pool)
+            if pool_memory_gib is None:
+                raise ValueError(
+                    f"{environment_key} pool is missing gpu_memory_gib"
+                )
+            pool["gpu_memory_gib"] = pool_memory_gib
+    return payload
+
+
+def _gpu_memory_gib(
+    resource: Mapping[str, object],
+    gpu_type: str,
+    pool: Mapping[str, object] | None = None,
+) -> float | None:
+    """Read per-GPU memory from resource facts or the shared hardware table."""
+    for source in (pool or {}, resource):
+        for key in (
+            "gpu_memory_gib",
+            "gpu_memory_gb",
+            "memory_gib",
+            "memory_gb",
+        ):
+            value = _number(source.get(key))
+            if value is not None and value > 0:
+                return value
+    memory_gib = _HARDWARE_MEMORY_GIB.get(_canonical_hardware(gpu_type))
+    return None if memory_gib is None else float(memory_gib)
+
+
+def _validate_vram_fit(
+    job_id: str,
+    required_vram_gib: float | None,
+    gpu_memory_gib: float | None,
+    tp: int,
+    pp: int,
+) -> None:
+    """Require one TP/PP copy to hold the workload's maximum VRAM demand."""
+    if required_vram_gib is None:
+        raise ValueError(f"{job_id} is missing required_vram_gib")
+    if gpu_memory_gib is None:
+        raise ValueError(f"{job_id} target is missing gpu_memory_gib")
+    available_vram_gib = gpu_memory_gib * tp * pp
+    if available_vram_gib < required_vram_gib:
+        raise ValueError(
+            f"{job_id} needs {required_vram_gib} GiB but tp={tp}, pp={pp} on "
+            f"{gpu_memory_gib} GiB GPUs provides {available_vram_gib} GiB"
+        )
 
 
 def _known_job_fields(
@@ -1166,6 +1278,38 @@ def _validate(payload, result):
         elif instance_type is not None:
             return {{"valid": False}}
 
+        required_vram_gib = job.get("required_vram_gib")
+        if (
+            isinstance(required_vram_gib, bool)
+            or not isinstance(required_vram_gib, (int, float))
+            or required_vram_gib <= 0
+        ):
+            return {{"valid": False}}
+        memory_sources = (pool or {{}}, resource)
+        gpu_memory_gib = None
+        for source in memory_sources:
+            for key in (
+                "gpu_memory_gib",
+                "gpu_memory_gb",
+                "memory_gib",
+                "memory_gb",
+            ):
+                value = source.get(key)
+                if (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and value > 0
+                ):
+                    gpu_memory_gib = value
+                    break
+            if gpu_memory_gib is not None:
+                break
+        if (
+            gpu_memory_gib is None
+            or gpu_memory_gib * values[1] * values[2] < required_vram_gib
+        ):
+            return {{"valid": False}}
+
         footprint = values[0] * capacity_per_replica
         available = int(resource.get("free", 0))
         if pool is not None:
@@ -1271,6 +1415,18 @@ def _validate_policy_response(
                             f"configuration needs {gpu_count} GPUs per replica but "
                             f"the instance has {capacity_per_replica}"
                         )
+            required_vram_gib = _number(job.get("required_vram_gib"))
+            _validate_vram_fit(
+                str(job.get("model_name") or f"placement {index}"),
+                (
+                    required_vram_gib
+                    if required_vram_gib is not None and required_vram_gib > 0
+                    else None
+                ),
+                _gpu_memory_gib(resource, gpu_type, pool),
+                tp,
+                pp,
+            )
             footprint = replicas * capacity_per_replica
             available = int(resource.get("free", 0))
             if pool is not None:

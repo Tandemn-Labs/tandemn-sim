@@ -109,7 +109,9 @@ class AgenticPlannerTest(unittest.TestCase):
             sdk.options["env"],
             {
                 "CLAUDE_CODE_USE_BEDROCK": "1",
-                "AWS_REGION": "us-east-1",
+                "AWS_PROFILE": "default",
+                "AWS_REGION": "us-east-2",
+                "AWS_BEARER_TOKEN_BEDROCK": "",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": (
                     "us.anthropic.claude-haiku-4-5-20251001-v1:0"
                 ),
