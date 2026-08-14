@@ -479,15 +479,22 @@ class ClusterSimulator:
             ]
             result_offset += len(prepared.rank_runs)
             job_id = prepared.running.job.job_id
+            job = self._online_jobs.get(job_id) or self._batch_jobs.get(job_id)
+            features = job.workload.get("features", {})
             attempted_request_count = sum(
                 rank_run.request_count for rank_run in prepared.rank_runs
             )
-            request_summary = completed_request_summary(job_results)
+            request_summary = completed_request_summary(
+                job_results,
+                features.get("target_p99_ttft_ms"),
+                features.get("target_p99_tpot_ms"),
+            )
             completed_request_count = int(
                 request_summary["completed_request_count"]
             )
             request_summaries[job_id] = {
                 **request_summary,
+                "slo_count_scope": "completed_requests",
                 "attempted_request_count": attempted_request_count,
                 "unfinished_request_count": max(
                     0, attempted_request_count - completed_request_count
@@ -539,13 +546,21 @@ class ClusterSimulator:
             if progress is None:
                 continue
             staged_progress = replace(progress)
-            advance_batch_progress(
+            projected_completed = advance_batch_progress(
                 staged_progress,
                 job_results,
                 self.scenario.tick_duration_ns,
                 start_offset_ns,
                 attempted_requests=attempted_request_count,
             )
+            if completed_request_count and request_summary["slo_pass_count"] is not None:
+                estimated_pass = round(
+                    projected_completed * request_summary["slo_pass_count"] / completed_request_count)
+                request_summaries[job_id].update(
+                    slo_pass_count=estimated_pass,
+                    slo_fail_count=projected_completed - estimated_pass,
+                    slo_count_scope="estimated_probe",
+                )
             batch_progress_updates[job_id] = staged_progress
             if staged_progress.completed_requests == staged_progress.total_requests:
                 finished_batch.append(
@@ -671,6 +686,9 @@ class ClusterSimulator:
                             int(request_summary["unfinished_request_count"]),
                             request_summary["completion_ratio"],
                             "completed_requests",
+                            request_summary["slo_pass_count"],
+                            request_summary["slo_fail_count"],
+                            request_summary["slo_count_scope"],
                         ),
                     )
                 allocated_by_pool = {}

@@ -181,6 +181,9 @@ def job_window(
     unfinished_request_count: int = 0,
     completion_ratio: float | None = None,
     latency_scope: str = "completed_requests",
+    slo_pass_count: int | None = None,
+    slo_fail_count: int | None = None,
+    slo_count_scope: str = "completed_requests",
 ) -> dict[str, object]:
     """Build one job-performance observation, derived from its rank telemetry."""
     return {
@@ -203,6 +206,9 @@ def job_window(
         "unfinished_request_count": unfinished_request_count,
         "completion_ratio": completion_ratio,
         "latency_scope": latency_scope,
+        "slo_pass_count": slo_pass_count,
+        "slo_fail_count": slo_fail_count,
+        "slo_count_scope": slo_count_scope,
     }
 
 
