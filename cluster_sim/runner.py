@@ -20,6 +20,7 @@ from serving import (
     commit_tick_metrics,
     completed_request_summary,
     gpu_metrics_from_results,
+    merge_hardware_catalogs,
     prepare_rank_run,
     resolve_rank_hardware,
     run_ranks,
@@ -366,8 +367,11 @@ class ClusterSimulator:
             ResourceMapStore,
         )
 
-        catalog = HardwareCatalogStore(self.postgres).get()
-        if catalog is None:
+        catalog_store = HardwareCatalogStore(self.postgres)
+        all_catalogs = getattr(catalog_store, "all", lambda: None)()
+        catalogs = all_catalogs if isinstance(all_catalogs, list) else [catalog_store.get()]
+        catalog = merge_hardware_catalogs([item for item in catalogs if item is not None])
+        if not catalog["regions"]:
             raise ValueError("hardware catalog is required for rank simulation")
         resource_map = ResourceMapStore(self.postgres, user_id=self.user_id).get()
         prices = self._prices(resource_map)
@@ -419,7 +423,7 @@ class ClusterSimulator:
                         requests,
                         tick_number,
                         start_offset_ns,
-                        catalog.catalog,
+                        catalog,
                     ),
                     online_requests=requests,
                     source_exhausted=source_exhausted,
@@ -444,7 +448,7 @@ class ClusterSimulator:
                         probe,
                         tick_number,
                         start_offset_ns,
-                        catalog.catalog,
+                        catalog,
                     ),
                     batch_progress=progress,
                 )

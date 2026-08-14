@@ -447,7 +447,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 pass
 
             def get(self):
-                return SimpleNamespace(catalog={})
+                return SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "test", "instance_types": []}]})
 
         class ResourceMapStore:
             def __init__(self, postgres, user_id) -> None:
@@ -527,7 +527,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 pass
 
             def get(self):
-                return SimpleNamespace(catalog={})
+                return SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "test", "instance_types": []}]})
 
         class ResourceMapStore:
             def __init__(self, postgres, user_id) -> None:
@@ -675,7 +675,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 pass
 
             def get(self):
-                return SimpleNamespace(catalog={})
+                return SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "test", "instance_types": []}]})
 
         class ResourceMapStore:
             def __init__(self, postgres, user_id) -> None:
