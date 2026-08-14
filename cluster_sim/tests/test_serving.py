@@ -634,6 +634,21 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(summary["slo_fail_count"], 1)
         self.assertEqual(summary["qualified_output_tokens"], 600)
 
+    def test_encoder_summary_uses_latency_as_ttft(self) -> None:
+        result = RankResult(
+            SimpleNamespace(),
+            ({"latency": 50_000_000, "TTFT": -1, "TPOT": 0, "output": 0},),
+            (), "", "",
+        )
+
+        summary = completed_request_summary((result,), 60, 1, "embeddings")
+
+        self.assertEqual(summary["p99_ttft_ms"], 50)
+        self.assertIsNone(summary["p99_tpot_ms"])
+        self.assertEqual(summary["ttft_pass_count"], 1)
+        self.assertIsNone(summary["tpot_pass_count"])
+        self.assertEqual(summary["slo_pass_count"], 1)
+
     def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
         rows = (
             {"npu_prefix_hit_tokens": 1, "prefix_cache_requested_tokens": 10},
