@@ -603,6 +603,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiperf" },
+    { name = "huggingface-hub" },
     { name = "pyyaml" },
 ]
 
@@ -623,6 +624,7 @@ openevolve = [
 [package.metadata]
 requires-dist = [
     { name = "aiperf", specifier = "==0.11.0" },
+    { name = "huggingface-hub", specifier = ">=1.24,<2" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
 ]
 

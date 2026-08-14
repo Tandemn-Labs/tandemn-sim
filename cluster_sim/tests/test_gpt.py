@@ -13,7 +13,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from gpt import GptPlacement, GptPlannerDriver, StoreSnapshot, _build_user_prompt
+from gpt import (
+    SYSTEM_PROMPT,
+    GptPlacement,
+    GptPlannerDriver,
+    StoreSnapshot,
+    _build_user_prompt,
+)
 from models import OnlineJob, Scenario
 from policy import load_config_policy
 
@@ -105,6 +111,50 @@ class GptPlannerDriverTest(unittest.TestCase):
                 }
             ],
         )
+        self.assertIn("global constraint across every placement", SYSTEM_PROMPT)
+        self.assertIn("replica consumes one whole instance", SYSTEM_PROMPT)
+
+    def test_defers_only_placement_that_exceeds_cumulative_capacity(self) -> None:
+        """Keep an earlier placement and defer a later pool oversubscription."""
+        driver = _driver(("first", "second"))
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        snapshot = StoreSnapshot(
+            resources={
+                environment: {
+                    "gpu_type": "H100",
+                    "total": 8,
+                    "free": 8,
+                    "pools": [
+                        {
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 8,
+                            "free": 8,
+                        }
+                    ],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job("first"), _store_job("second")),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+        placements = tuple(
+            GptPlacement(
+                decision="place",
+                environment=environment,
+                instance_type="p5.48xlarge",
+                configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+            )
+            for _ in range(2)
+        )
+
+        actions = driver._build_actions(snapshot, placements)
+
+        self.assertEqual(
+            [(action["job_id"], action["type"]) for action in actions],
+            [("first", "place"), ("second", "defer")],
+        )
 
     def test_rejects_policy_invalid_tp(self) -> None:
         """Reject a positive TP value that the selected policy disallows."""
@@ -148,23 +198,26 @@ class GptPlannerDriverTest(unittest.TestCase):
             driver._build_actions(snapshot, ())
 
 
-def _driver() -> GptPlannerDriver:
+def _driver(job_ids: tuple[str, ...] = ("waiting",)) -> GptPlannerDriver:
     """Build a GPT driver without external Store or OpenAI clients."""
-    job = OnlineJob(
-        name="waiting",
-        store_job_id="waiting",
-        model_name="meta-llama/Llama-3.2-1B-Instruct",
-        starts_at_ns=0,
-        stops_at_ns=1,
-        workload={
-            "features": {
-                "isl_token_avg": 100,
-                "osl_token_avg": 20,
+    jobs = tuple(
+        OnlineJob(
+            name=job_id,
+            store_job_id=job_id,
+            model_name="meta-llama/Llama-3.2-1B-Instruct",
+            starts_at_ns=0,
+            stops_at_ns=1,
+            workload={
+                "features": {
+                    "isl_token_avg": 100,
+                    "osl_token_avg": 20,
+                },
+                "phases": [{"rate": 1.0}],
             },
-            "phases": [{"rate": 1.0}],
-        },
+        )
+        for job_id in job_ids
     )
-    scenario = Scenario("test", 1, 1, (job,), ())
+    scenario = Scenario("test", 1, 1, jobs, ())
     return GptPlannerDriver(
         user_id="user",
         scenario=scenario,
@@ -178,10 +231,10 @@ def _driver() -> GptPlannerDriver:
     )
 
 
-def _store_job() -> dict[str, object]:
+def _store_job(job_id: str = "waiting") -> dict[str, object]:
     """Create one canonical waiting Store job payload."""
     return {
-        "job_id": "waiting",
+        "job_id": job_id,
         "user_id": "tenant",
         "kind": "online",
         "spec_json": {

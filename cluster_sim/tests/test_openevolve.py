@@ -8,6 +8,7 @@ import ast
 import json
 import sys
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,9 +22,12 @@ from openevolve import (
     OpenEvolvePlacement,
     OpenEvolvePlannerDriver,
     StoreSnapshot,
+    _build_user_prompt,
     _evaluator_source,
+    _validate_policy_response,
     load_policy_source,
 )
+from policy import load_config_policy
 
 
 class OpenEvolvePlannerTest(unittest.TestCase):
@@ -123,32 +127,89 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(response["placements"][0]["decision"], "defer")
 
+    def test_prompt_exposes_workload_and_resource_vram(self) -> None:
+        """Give evolved policies the memory facts needed for valid placement."""
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100-SXM-80GB": {
+                    "gpu_type": "H100-SXM-80GB",
+                    "total": 8,
+                    "free": 8,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+
+        prompt = json.loads(
+            _build_user_prompt(
+                0,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                (driver.jobs["waiting"],),
+                load_config_policy(),
+            )
+        )
+
+        self.assertEqual(prompt["jobs_for_tick"][0]["required_vram_gib"], 7.966)
+        self.assertEqual(
+            prompt["tandemn_state"]["resources"]["env|H100-SXM-80GB"][
+                "gpu_memory_gib"
+            ],
+            80,
+        )
+
+    def test_evaluator_and_final_validator_reject_insufficient_vram(self) -> None:
+        """Reject a policy whose TP/PP copy cannot hold the workload."""
+        payload = _payload()
+        payload["jobs_for_tick"][0]["required_vram_gib"] = 171.67
+        payload["tandemn_state"]["resources"]["env|H100"][
+            "gpu_memory_gib"
+        ] = 40
+        payload["tandemn_state"]["resources"]["env|H100"]["total"] = 8
+        payload["tandemn_state"]["resources"]["env|H100"]["free"] = 8
+        payload["config_policy"][0]["allowed_tp"] = [2]
+        response = _placement_response(tp=2)
+        namespace: dict[str, object] = {}
+        exec(_evaluator_source(payload), namespace)
+
+        self.assertEqual(namespace["_validate"](payload, response), {"valid": False})
+        with self.assertRaisesRegex(ValueError, "needs 171.67 GiB"):
+            _validate_policy_response(payload, response)
+
     def test_seed_policy_selects_and_reserves_an_instance_pool(self) -> None:
         """Select an exact pool and reserve its whole-instance footprint."""
         payload = _payload()
         payload["tandemn_state"]["resources"]["env|H100"] = {
             "gpu_type": "H100",
+            "gpu_memory_gib": 80,
             "total": 16,
             "free": 16,
             "pools": [
                 {
                     "instance_type": "h100.8gpu-a",
                     "gpus_per_instance": 8,
+                    "gpu_memory_gib": 80,
                     "total": 8,
                     "free": 8,
                 },
                 {
                     "instance_type": "h100.8gpu-b",
                     "gpus_per_instance": 8,
+                    "gpu_memory_gib": 80,
                     "total": 8,
                     "free": 8,
                 },
             ],
         }
         payload["jobs_for_tick"] = [
-            {"model_name": "model"},
-            {"model_name": "model"},
-            {"model_name": "model"},
+            {"model_name": "model", "required_vram_gib": 1.0},
+            {"model_name": "model", "required_vram_gib": 1.0},
+            {"model_name": "model", "required_vram_gib": 1.0},
         ]
 
         response = load_policy_source(OPENEOLVE_INITIAL_PROGRAM)(payload)
@@ -178,6 +239,7 @@ def _payload() -> dict[str, object]:
             "resources": {
                 "env|H100": {
                     "gpu_type": "H100",
+                    "gpu_memory_gib": 80,
                     "total": 1,
                     "free": 1,
                     "pools": [],
@@ -194,7 +256,7 @@ def _payload() -> dict[str, object]:
                 "allowed_tp": [1],
             }
         ],
-        "jobs_for_tick": [{"model_name": "model"}],
+        "jobs_for_tick": [{"model_name": "model", "required_vram_gib": 1.0}],
     }
 
 
@@ -207,7 +269,11 @@ def _driver() -> OpenEvolvePlannerDriver:
         starts_at_ns=0,
         stops_at_ns=1,
         workload={
-            "features": {"isl_token_avg": 100, "osl_token_avg": 20},
+            "features": {
+                "isl_token_avg": 100,
+                "osl_token_avg": 20,
+                "required_vram_gib": 7.966,
+            },
             "phases": [{"rate": 1.0}],
         },
     )
@@ -258,3 +324,22 @@ def compute_placement(payload):
         ]
     }
 """
+
+
+def _placement_response(tp: int) -> dict[str, object]:
+    """Return one complete placement response for evaluator tests."""
+    return {
+        "placements": [
+            {
+                "decision": "place",
+                "environment": "env|H100",
+                "instance_type": None,
+                "configuration": {
+                    "replicas_needed": 1,
+                    "tp": tp,
+                    "pp": 1,
+                    "dp": 1,
+                },
+            }
+        ]
+    }

@@ -18,6 +18,8 @@ from vram import (
     VRAM_REQUIREMENTS_GIB,
     StoreSnapshot,
     VramPlannerDriver,
+    generate_vram_requirements,
+    model_architecture_from_huggingface,
 )
 
 
@@ -84,10 +86,54 @@ class VramPlannerDriverTest(unittest.TestCase):
         kimi = mappings["job-benchmark_timing_3hr-67-1"]
 
         self.assertEqual(encoder, 1.053)
-        self.assertEqual(kimi, 2206.908)
+        self.assertEqual(kimi, 1928.689)
         self.assertEqual(
             MODEL_ARCHITECTURES["moonshotai/Kimi-K2-Instruct"].mla_cache_elements, 576
         )
+
+    def test_huggingface_mla_config_derives_cache_shape(self) -> None:
+        """Derive DeepSeek-style MLA cache elements from public config fields."""
+        architecture = model_architecture_from_huggingface(
+            {
+                "model_type": "deepseek_v3",
+                "hidden_size": 7168,
+                "intermediate_size": 18432,
+                "num_hidden_layers": 61,
+                "num_attention_heads": 128,
+                "num_key_value_heads": 128,
+                "kv_lora_rank": 512,
+                "qk_rope_head_dim": 64,
+            },
+            684_531_386_000,
+        )
+
+        self.assertEqual(architecture.mla_cache_elements, 576)
+        self.assertEqual(architecture.head_dim, 56)
+
+    def test_huggingface_hybrid_config_derives_linear_cache(self) -> None:
+        """Derive Qwen3-Next full-attention and recurrent-cache dimensions."""
+        architecture = model_architecture_from_huggingface(
+            {
+                "model_type": "qwen3_next",
+                "hidden_size": 2048,
+                "intermediate_size": 5120,
+                "num_hidden_layers": 48,
+                "num_attention_heads": 16,
+                "num_key_value_heads": 2,
+                "head_dim": 256,
+                "full_attention_interval": 4,
+                "linear_num_key_heads": 16,
+                "linear_num_value_heads": 32,
+                "linear_key_head_dim": 128,
+                "linear_value_head_dim": 128,
+                "linear_conv_kernel_dim": 4,
+            },
+            81_324_862_720,
+        )
+
+        self.assertEqual(architecture.attention_layers, 12)
+        self.assertEqual(architecture.linear_attention_layers, 36)
+        self.assertEqual(architecture.linear_cache_elements, 557_056)
 
     def test_placement_uses_best_available_memory_fit(self) -> None:
         """Use another fitting GPU when the smallest accelerator is full."""
@@ -181,7 +227,7 @@ class VramPlannerDriverTest(unittest.TestCase):
 
         config = actions[0]["ladder"][0]["config"]
         self.assertEqual(config["gpu_type"], "H100")
-        self.assertEqual(config["tp"], 8)
+        self.assertEqual(config["tp"], 4)
         self.assertEqual(config["pp"], 1)
         self.assertEqual(config["dp"], 1)
         self.assertEqual(config["precision"], "bf16")
