@@ -717,6 +717,8 @@ def _observed_y(
 
 def completed_request_summary(
     results: Sequence[RankResult],
+    target_ttft_ms: float | None = None,
+    target_tpot_ms: float | None = None,
 ) -> dict[str, int | float | None]:
     """Summarize completed request latency across every rank of one job."""
     rows = [row for result in results for row in result.request_rows]
@@ -725,13 +727,22 @@ def completed_request_summary(
             "completed_request_count": 0,
             "p99_ttft_ms": None,
             "p99_tpot_ms": None,
+            "slo_pass_count": 0,
+            "slo_fail_count": 0,
         }
+    passed = sum(
+        row["TTFT"] <= target_ttft_ms * 1_000_000
+        and row["TPOT"] <= target_tpot_ms * 1_000_000
+        for row in rows
+    ) if target_ttft_ms is not None and target_tpot_ms is not None else None
     return {
         "completed_request_count": len(rows),
         "p99_ttft_ms": _percentile([row["TTFT"] for row in rows], 0.99)
         / 1_000_000,
         "p99_tpot_ms": _percentile([row["TPOT"] for row in rows], 0.99)
         / 1_000_000,
+        "slo_pass_count": passed,
+        "slo_fail_count": len(rows) - passed if passed is not None else None,
     }
 
 

@@ -189,6 +189,8 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["unfinished_request_count"], 20)
         self.assertEqual(event["completion_ratio"], 0.8)
         self.assertEqual(event["latency_scope"], "completed_requests")
+        self.assertIsNone(event["slo_pass_count"])
+        self.assertEqual(event["slo_count_scope"], "completed_requests")
 
     def test_pool_window_exposes_zero_filled_capacity(self) -> None:
         """Keep missing telemetry distinct from measured zero utilization."""

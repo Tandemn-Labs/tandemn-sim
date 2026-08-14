@@ -620,11 +620,13 @@ class ServingInputTest(unittest.TestCase):
                 "",
             )
 
-        summary = completed_request_summary((result((1, 100)), result((2, 3))))
+        summary = completed_request_summary((result((1, 100)), result((2, 3))), 10, 1)
 
         self.assertEqual(summary["completed_request_count"], 4)
         self.assertAlmostEqual(summary["p99_ttft_ms"], 97.09)
         self.assertAlmostEqual(summary["p99_tpot_ms"], 9.709)
+        self.assertEqual(summary["slo_pass_count"], 3)
+        self.assertEqual(summary["slo_fail_count"], 1)
 
     def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
         rows = (
