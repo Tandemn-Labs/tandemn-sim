@@ -80,6 +80,7 @@ class RankResult:
     status: str = "completed"
     completed_requests: tuple[Request, ...] = ()
     sim_time_ns: int = 0
+    admitted_requests: tuple[Request, ...] = ()
 
 
 def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
@@ -448,10 +449,11 @@ def parse_rank_result(
         summary["status"],
         tuple(completed_requests),
         summary["sim_time_ns"],
+        tuple(rank_run.requests[request_id] for request_id in summary["admitted_request_ids"]),
     )
 
 
-def _run_summary(output: str) -> dict[str, int | str]:
+def _run_summary(output: str) -> dict[str, object]:
     """Return and validate the terminal LLMServingSim status."""
     for line in reversed(output.splitlines()):
         if not line.startswith("SIM_RUN_SUMMARY "):
@@ -463,6 +465,7 @@ def _run_summary(output: str) -> dict[str, int | str]:
             completed = summary["completed_requests"]
             unfinished = summary["unfinished_requests"]
             sim_time_ns = summary["sim_time_ns"]
+            admitted = summary.get("admitted_request_ids", [])
         except (json.JSONDecodeError, KeyError, TypeError) as error:
             raise ValueError("invalid LLMServingSim run summary") from error
         if (
@@ -472,6 +475,9 @@ def _run_summary(output: str) -> dict[str, int | str]:
                 for value in (loaded, completed, unfinished, sim_time_ns)
             )
             or loaded != completed + unfinished
+            or not isinstance(admitted, list)
+            or any(type(value) is not int or value < 0 or value >= loaded for value in admitted)
+            or len(set(admitted)) != len(admitted)
         ):
             raise ValueError("invalid LLMServingSim run summary")
         return {
@@ -480,6 +486,7 @@ def _run_summary(output: str) -> dict[str, int | str]:
             "completed_requests": completed,
             "unfinished_requests": unfinished,
             "sim_time_ns": sim_time_ns,
+            "admitted_request_ids": admitted,
         }
     raise ValueError("LLMServingSim wrote no run summary")
 
@@ -727,22 +734,38 @@ def completed_request_summary(
             "completed_request_count": 0,
             "p99_ttft_ms": None,
             "p99_tpot_ms": None,
+            "ttft_pass_count": 0 if target_ttft_ms is not None else None,
+            "ttft_fail_count": 0 if target_ttft_ms is not None else None,
+            "tpot_pass_count": 0 if target_tpot_ms is not None else None,
+            "tpot_fail_count": 0 if target_tpot_ms is not None else None,
             "slo_pass_count": 0,
             "slo_fail_count": 0,
+            "qualified_output_tokens": 0 if target_ttft_ms is not None and target_tpot_ms is not None else None,
         }
+    ttft_passed = sum(row["TTFT"] <= target_ttft_ms * 1_000_000 for row in rows) if target_ttft_ms is not None else None
+    tpot_passed = sum(row["TPOT"] <= target_tpot_ms * 1_000_000 for row in rows) if target_tpot_ms is not None else None
     passed = sum(
         row["TTFT"] <= target_ttft_ms * 1_000_000
         and row["TPOT"] <= target_tpot_ms * 1_000_000
         for row in rows
-    ) if target_ttft_ms is not None and target_tpot_ms is not None else None
+    ) if ttft_passed is not None and tpot_passed is not None else None
     return {
         "completed_request_count": len(rows),
         "p99_ttft_ms": _percentile([row["TTFT"] for row in rows], 0.99)
         / 1_000_000,
         "p99_tpot_ms": _percentile([row["TPOT"] for row in rows], 0.99)
         / 1_000_000,
+        "ttft_pass_count": ttft_passed,
+        "ttft_fail_count": len(rows) - ttft_passed if ttft_passed is not None else None,
+        "tpot_pass_count": tpot_passed,
+        "tpot_fail_count": len(rows) - tpot_passed if tpot_passed is not None else None,
         "slo_pass_count": passed,
         "slo_fail_count": len(rows) - passed if passed is not None else None,
+        "qualified_output_tokens": sum(
+            row["output"] for row in rows
+            if row["TTFT"] <= target_ttft_ms * 1_000_000
+            and row["TPOT"] <= target_tpot_ms * 1_000_000
+        ) if passed is not None else None,
     }
 
 
