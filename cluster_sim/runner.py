@@ -36,6 +36,7 @@ from trace import (
     cluster_window,
     job_admitted,
     job_finished,
+    job_state_changed,
     job_submitted,
     job_window,
     gpu_sample,
@@ -135,6 +136,7 @@ class ClusterSimulator:
                 ),
             )
         self._submitted_jobs: set[str] = set()
+        self._trace_job_states: dict[str, str] = {}
         self._admitted_jobs: set[str] = set()
         self._admission_latencies_ms: list[float] = []
         self._admissions_in_tick = 0
@@ -272,6 +274,8 @@ class ClusterSimulator:
         apply_pending_plans(self.user_id, self.postgres)
         if trace_file is not None:
             for running in self.jobs.running_jobs(self.user_id):
+                self._trace_job_state(
+                    running.job.job_id, "RUNNING", start, "ranks_materialized")
                 for rank in running.ranks:
                     append_event(
                         trace_file,
@@ -334,6 +338,7 @@ class ClusterSimulator:
                     deadline_at,
                 ),
             )
+        self._trace_job_state(job.store_job_id, "WAITING", submitted_at, "submitted")
         self._submitted_jobs.add(job.name)
 
     def _offset_ns(self, timestamp: datetime) -> int:
@@ -492,9 +497,23 @@ class ClusterSimulator:
             completed_request_count = int(
                 request_summary["completed_request_count"]
             )
+            backlog_names = {
+                request.request_name for request in self._online_backlog.get(job_id, ())
+            }
             request_summaries[job_id] = {
                 **request_summary,
                 "slo_count_scope": "completed_requests",
+                "offered_request_count": (
+                    len(prepared.online_requests) - len(self._online_backlog[job_id])
+                    if prepared.online_requests is not None else None
+                ),
+                "admitted_request_count": (
+                    sum(
+                        request.request_name not in backlog_names
+                        for result in job_results
+                        for request in getattr(result, "admitted_requests", ())
+                    ) if prepared.online_requests is not None else None
+                ),
                 "attempted_request_count": attempted_request_count,
                 "unfinished_request_count": max(
                     0, attempted_request_count - completed_request_count
@@ -553,14 +572,20 @@ class ClusterSimulator:
                 start_offset_ns,
                 attempted_requests=attempted_request_count,
             )
-            if completed_request_count and request_summary["slo_pass_count"] is not None:
-                estimated_pass = round(
-                    projected_completed * request_summary["slo_pass_count"] / completed_request_count)
-                request_summaries[job_id].update(
-                    slo_pass_count=estimated_pass,
-                    slo_fail_count=projected_completed - estimated_pass,
-                    slo_count_scope="estimated_probe",
-                )
+            if completed_request_count:
+                for metric in ("ttft", "tpot", "slo"):
+                    passed = request_summary[f"{metric}_pass_count"]
+                    if passed is not None:
+                        estimated_pass = round(projected_completed * passed / completed_request_count)
+                        request_summaries[job_id].update({
+                            f"{metric}_pass_count": estimated_pass,
+                            f"{metric}_fail_count": projected_completed - estimated_pass,
+                        })
+                qualified_tokens = request_summary["qualified_output_tokens"]
+                if qualified_tokens is not None:
+                    request_summaries[job_id]["qualified_output_tokens"] = round(
+                        projected_completed * qualified_tokens / completed_request_count)
+            request_summaries[job_id]["slo_count_scope"] = "estimated_probe"
             batch_progress_updates[job_id] = staged_progress
             if staged_progress.completed_requests == staged_progress.total_requests:
                 finished_batch.append(
@@ -689,6 +714,13 @@ class ClusterSimulator:
                             request_summary["slo_pass_count"],
                             request_summary["slo_fail_count"],
                             request_summary["slo_count_scope"],
+                            request_summary["ttft_pass_count"],
+                            request_summary["ttft_fail_count"],
+                            request_summary["tpot_pass_count"],
+                            request_summary["tpot_fail_count"],
+                            request_summary["offered_request_count"],
+                            request_summary["admitted_request_count"],
+                            request_summary["qualified_output_tokens"],
                         ),
                     )
                 allocated_by_pool = {}
@@ -838,6 +870,7 @@ class ClusterSimulator:
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
             finished_at = finished_at or self.clock.now()
+            self._trace_job_state(running.job.job_id, "FINISHED", finished_at, "completed")
             batch_job = self._batch_jobs.get(running.job.job_id)
             deadline_slo_met = None
             if batch_job is not None:
@@ -860,6 +893,7 @@ class ClusterSimulator:
         """Cancel every job still running at the benchmark's logical hard stop."""
         from tandemn_system_data.models.enums import JobStatus, RankStatus
 
+        trace_file = getattr(self, "trace_file", None)
         for running in self.jobs.running_jobs(self.user_id):
             job_id = running.job.job_id
             if job_id in self._online_jobs:
@@ -883,9 +917,10 @@ class ClusterSimulator:
                 [JobStatus.RUNNING],
                 finish_reason="SIMULATION_HARD_STOP",
             )
-            trace_file = getattr(self, "trace_file", None)
             if trace_file is not None:
                 is_batch = job_id in self._batch_jobs
+                self._trace_job_state(
+                    job_id, "FINISHED", self.clock.now(), "SIMULATION_HARD_STOP")
                 append_event(
                     trace_file,
                     job_finished(
@@ -897,6 +932,52 @@ class ClusterSimulator:
                         unserved_request_count,
                     ),
                 )
+        for waiting in getattr(self.jobs, "waiting_jobs", lambda _: ()) (self.user_id):
+            job_id = waiting.job_id
+            if job_id in self._online_jobs:
+                unserved_request_count = sum(
+                    request.arrives_at_ns < self._offset_ns(self.clock.now())
+                    for request in self._requests[job_id]
+                )
+            elif job_id in self._batch_jobs:
+                unserved_request_count = self._batch_progress[job_id].total_requests
+            else:
+                unserved_request_count = 0
+            self.jobs.transition(
+                job_id,
+                JobStatus.FINISHED,
+                [JobStatus.WAITING],
+                finish_reason="SIMULATION_HARD_STOP",
+            )
+            if trace_file is not None:
+                self._trace_job_state(
+                    job_id, "FINISHED", self.clock.now(), "SIMULATION_HARD_STOP")
+                append_event(
+                    trace_file,
+                    job_finished(
+                        job_id,
+                        self.clock.now().isoformat(),
+                        False,
+                        "SIMULATION_HARD_STOP",
+                        False if job_id in self._batch_jobs else None,
+                        unserved_request_count,
+                    ),
+                )
+
+    def _trace_job_state(self, job_id, to_status, at, reason) -> None:
+        """Append one deduplicated logical lifecycle transition."""
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is None:
+            return
+        states = getattr(self, "_trace_job_states", None)
+        if states is None:
+            states = self._trace_job_states = {}
+        from_status = states.get(job_id)
+        if from_status == to_status:
+            return
+        append_event(trace_file, job_state_changed(
+            job_id, from_status, to_status, at.isoformat(), reason))
+        states[job_id] = to_status
 
 
 def verify_store_user(user_id: str, postgres: object) -> None:

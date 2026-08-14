@@ -513,7 +513,7 @@ class ServingInputTest(unittest.TestCase):
             rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (), 0,
-                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":2,"completed_requests":1,"unfinished_requests":1,"sim_time_ns":1000}',
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":2,"completed_requests":1,"unfinished_requests":1,"sim_time_ns":1000,"admitted_request_ids":[1]}',
                 "",
             )
             result = parse_rank_result(rank_run, completed)
@@ -522,6 +522,7 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(len(result.metric_samples), 1)
         self.assertEqual(result.status, "wall_time_limit")
         self.assertEqual(result.completed_requests, (requests[0],))
+        self.assertEqual(result.admitted_requests, (requests[1],))
         self.assertEqual(result.sim_time_ns, 1_000)
 
     def test_parse_rank_result_accepts_zero_completed_requests_after_wall_time_limit(self) -> None:
@@ -612,7 +613,7 @@ class ServingInputTest(unittest.TestCase):
             return RankResult(
                 SimpleNamespace(),
                 tuple(
-                    {"TTFT": value * 1_000_000, "TPOT": value * 100_000}
+                    {"TTFT": value * 1_000_000, "TPOT": value * 100_000, "output": 200}
                     for value in ttft_values
                 ),
                 (),
@@ -625,8 +626,13 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(summary["completed_request_count"], 4)
         self.assertAlmostEqual(summary["p99_ttft_ms"], 97.09)
         self.assertAlmostEqual(summary["p99_tpot_ms"], 9.709)
+        self.assertEqual(summary["ttft_pass_count"], 3)
+        self.assertEqual(summary["ttft_fail_count"], 1)
+        self.assertEqual(summary["tpot_pass_count"], 3)
+        self.assertEqual(summary["tpot_fail_count"], 1)
         self.assertEqual(summary["slo_pass_count"], 3)
         self.assertEqual(summary["slo_fail_count"], 1)
+        self.assertEqual(summary["qualified_output_tokens"], 600)
 
     def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
         rows = (

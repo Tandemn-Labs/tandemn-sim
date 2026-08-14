@@ -46,7 +46,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             with patch.object(simulator, "_hard_stop") as hard_stop:
                 result = simulator.run()
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[0])
 
         hard_stop.assert_called_once_with()
         self.assertEqual(result, ())
@@ -88,7 +88,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 )
 
             self.assertIsNotNone(simulator.trace_file)
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(event["run_id"], "run-1")
         self.assertEqual(event["method"], "first-fit")
@@ -275,7 +275,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             with patch("runner.submit_waiting_job"):
                 simulator._submit(job)
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[0])
 
         self.assertEqual(event["job_kind"], "batch")
         self.assertEqual(event["submitted_at"], "2026-01-01T00:01:00+00:00")
@@ -310,7 +310,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             simulator.trace_file = Path(directory) / "trace.jsonl"
             simulator._finish(running)
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
 
         self.assertTrue(event["completed_successfully"])
         self.assertTrue(event["deadline_slo_met"])
@@ -341,7 +341,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             simulator.trace_file = Path(directory) / "trace.jsonl"
             simulator._hard_stop()
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
 
         self.assertFalse(event["completed_successfully"])
         self.assertFalse(event["deadline_slo_met"])
@@ -371,9 +371,34 @@ class RunnerDataPlaneTest(unittest.TestCase):
             simulator.trace_file = Path(directory) / "trace.jsonl"
             simulator._hard_stop()
 
-            event = json.loads(simulator.trace_file.read_text(encoding="utf-8"))
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
 
         self.assertEqual(event["unserved_request_count"], 3)
+
+    def test_hard_stop_censors_waiting_batch(self) -> None:
+        """Record full batch backlog when the campaign never reaches a rank."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        waiting = SimpleNamespace(job_id="job-a")
+        calls = []
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (),
+            waiting_jobs=lambda user_id: (waiting,),
+            transition=lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+        simulator.user_id = "user_1"
+        simulator._online_jobs = {}
+        simulator._online_backlog = {}
+        simulator._batch_jobs = {"job-a": object()}
+        simulator._batch_progress = {"job-a": BatchProgress(total_requests=10)}
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            simulator._hard_stop()
+            event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
+
+        self.assertEqual(event["unserved_request_count"], 10)
+        self.assertEqual(len(calls), 1)
 
     def test_active_jobs_share_one_global_rank_pool(self) -> None:
         """Launch ranks from different jobs in one bounded worker pool."""

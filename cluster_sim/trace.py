@@ -133,6 +133,24 @@ def job_admitted(
     }
 
 
+def job_state_changed(
+    job_id: str,
+    from_status: str | None,
+    to_status: str,
+    at: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build one logical job lifecycle transition for queue-time accounting."""
+    return {
+        "kind": "job_state_changed",
+        "job_id": job_id,
+        "from_status": from_status,
+        "to_status": to_status,
+        "at": at,
+        "reason": reason,
+    }
+
+
 def rank_window(
     tick: int,
     job_id: str,
@@ -184,6 +202,13 @@ def job_window(
     slo_pass_count: int | None = None,
     slo_fail_count: int | None = None,
     slo_count_scope: str = "completed_requests",
+    ttft_pass_count: int | None = None,
+    ttft_fail_count: int | None = None,
+    tpot_pass_count: int | None = None,
+    tpot_fail_count: int | None = None,
+    offered_request_count: int | None = None,
+    admitted_request_count: int | None = None,
+    qualified_output_tokens: int | None = None,
 ) -> dict[str, object]:
     """Build one job-performance observation, derived from its rank telemetry."""
     return {
@@ -209,6 +234,13 @@ def job_window(
         "slo_pass_count": slo_pass_count,
         "slo_fail_count": slo_fail_count,
         "slo_count_scope": slo_count_scope,
+        "ttft_pass_count": ttft_pass_count,
+        "ttft_fail_count": ttft_fail_count,
+        "tpot_pass_count": tpot_pass_count,
+        "tpot_fail_count": tpot_fail_count,
+        "offered_request_count": offered_request_count,
+        "admitted_request_count": admitted_request_count,
+        "qualified_output_tokens": qualified_output_tokens,
     }
 
 
