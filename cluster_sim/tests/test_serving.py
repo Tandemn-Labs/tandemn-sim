@@ -25,6 +25,7 @@ from serving import (
     RankResult,
     build_rank_cluster,
     build_rank_deployments,
+    merge_hardware_catalogs,
     commit_tick_metrics,
     completed_request_summary,
     gpu_metrics_from_results,
@@ -179,6 +180,21 @@ class ServingInputTest(unittest.TestCase):
         }
 
         self.assertEqual(resolve_rank_hardware(deployment, catalog)["profile"], "H100")
+
+    def test_merges_aws_and_azure_catalogs(self) -> None:
+        catalogs = (
+            SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "us-east-1", "instance_types": []}]}),
+            SimpleNamespace(catalog={
+                "cloud": "azure", "regions": ["eastus"],
+                "instance_types": [{"offerings": [{"region": "eastus"}]}],
+            }),
+        )
+
+        regions = merge_hardware_catalogs(catalogs)["regions"]
+        self.assertEqual(
+            [(region["cloud"], region["region"]) for region in regions],
+            [("aws", "us-east-1"), ("azure", "eastus")],
+        )
 
     def test_rank_workload_rebases_arrivals_and_preserves_prefixes(self) -> None:
         """Write rank-local LLMServingSim rows from global logical arrivals."""

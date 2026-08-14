@@ -192,16 +192,18 @@ def resolve_rank_hardware(
             if instance["instance_type"] != instance_type:
                 continue
             for accelerator in instance["accelerators"]:
-                if gpu_type not in {
-                    accelerator.get("name"),
-                    accelerator.get("canonical_gpu_name"),
+                if _gpu_name(gpu_type) not in {
+                    _gpu_name(accelerator.get("name")),
+                    _gpu_name(accelerator.get("canonical_gpu_name")),
                 }:
                     continue
                 profile = PROFILE_ALIASES.get(gpu_type)
                 if profile is None:
                     raise ValueError(f"no LLMServingSim profile alias for {gpu_type}")
-                link = accelerator.get("nvlink_bandwidth_gbps") or accelerator.get(
-                    "pcie_bandwidth_gbps"
+                link = (
+                    accelerator.get("infinity_fabric_bandwidth_gbps")
+                    or accelerator.get("nvlink_bandwidth_gbps")
+                    or accelerator.get("pcie_bandwidth_gbps")
                 )
                 if not link:
                     link = max(card["peak_bandwidth_gbps"] for card in instance["network"]["network_cards"])
@@ -213,6 +215,31 @@ def resolve_rank_hardware(
                     "link_latency_ns": 0,
                 }
     raise ValueError(f"hardware catalog has no {cloud}/{region}/{instance_type}/{gpu_type} entry")
+
+
+def _gpu_name(value: object) -> str:
+    return str(value or "").upper().replace("_", "-")
+
+
+def merge_hardware_catalogs(catalogs: Sequence[object]) -> dict[str, object]:
+    """Normalize every seeded cloud catalog into resolver regions."""
+    regions = []
+    for hardware in catalogs:
+        catalog = hardware.catalog
+        source_regions = catalog.get("regions", [])
+        if source_regions and isinstance(source_regions[0], dict):
+            regions.extend(source_regions)
+        elif catalog.get("cloud") == "azure":
+            for region in source_regions:
+                regions.append({
+                    "cloud": "azure",
+                    "region": region,
+                    "instance_types": [
+                        instance for instance in catalog["instance_types"]
+                        if any(offering["region"] == region for offering in instance["offerings"])
+                    ],
+                })
+    return {"regions": regions}
 
 
 def write_rank_workload(
