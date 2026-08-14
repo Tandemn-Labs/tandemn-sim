@@ -17,6 +17,7 @@ from trace import (
     gpu_sample,
     job_admitted,
     job_finished,
+    job_state_changed,
     job_submitted,
     job_window,
     planner_finished,
@@ -174,11 +175,29 @@ class TracePathTest(unittest.TestCase):
             50,
             True,
             True,
+            100,
+            80,
+            20,
+            0.8,
+            "completed_requests",
+            offered_request_count=100,
         )
 
         self.assertEqual(event["p99_ttft_ms"], 840)
         self.assertTrue(event["ttft_slo_met"])
         self.assertEqual(event["cost_per_token"], 0.000012)
+        self.assertEqual(event["attempted_request_count"], 100)
+        self.assertEqual(event["completed_request_count"], 80)
+        self.assertEqual(event["unfinished_request_count"], 20)
+        self.assertEqual(event["completion_ratio"], 0.8)
+        self.assertEqual(event["latency_scope"], "completed_requests")
+        self.assertIsNone(event["slo_pass_count"])
+        self.assertEqual(event["slo_count_scope"], "completed_requests")
+        self.assertIsNone(event["ttft_pass_count"])
+        self.assertIsNone(event["tpot_pass_count"])
+        self.assertEqual(event["offered_request_count"], 100)
+        self.assertIsNone(event["admitted_request_count"])
+        self.assertIsNone(event["qualified_output_tokens"])
 
     def test_pool_window_exposes_zero_filled_capacity(self) -> None:
         """Keep missing telemetry distinct from measured zero utilization."""
@@ -233,11 +252,20 @@ class TracePathTest(unittest.TestCase):
             True,
             None,
             True,
+            0,
         )
 
         self.assertTrue(event["completed_successfully"])
         self.assertTrue(event["deadline_slo_met"])
         self.assertIsNone(event["finish_reason"])
+        self.assertEqual(event["unserved_request_count"], 0)
+
+    def test_job_state_changed_preserves_queue_transition(self) -> None:
+        event = job_state_changed(
+            "job-a", "WAITING", "RUNNING", "2026-01-01T00:40:00+00:00", "ranks_materialized")
+
+        self.assertEqual(event["from_status"], "WAITING")
+        self.assertEqual(event["to_status"], "RUNNING")
 
     def test_gpu_sample_keeps_idle_store_telemetry(self) -> None:
         """Keep actual idle GPU rows distinct from pool-level zero filling."""

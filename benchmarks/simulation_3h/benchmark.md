@@ -22,7 +22,7 @@ Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, 
 
 Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `intfloat/multilingual-e5-large`, `BAAI/bge-reranker-v2-m3`
 
-Model precision: `fp16`
+Model precision: workload-defined `fp16`, `bf16`, or `bf16-fp8` according to the profiled variant.
 
 ## Frozen Cluster Resources
 
@@ -81,6 +81,8 @@ Planner fairness: descriptions, trace names, human-readable tenant labels, and `
 Traffic: `max_concurrent_streaming` is the planner-facing service cap; the matching AIPerf phase `concurrency` is the client cap. AIPerf phase `rate` is the submitted request rate and is deliberately bounded by the capacity envelope. `request_arrival_rate` is omitted from the Orca payload so Orca remains in concurrency mode. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
 
 Input modes: every online job uses `api_load_generator` to ping an OpenAI-compatible endpoint under its concurrency profile. Every batch campaign uses a finite `dataset` partitioned into required shards.
+
+Encoder convention: embedding and reranking workloads remain online requests. Their end-to-end request latency is evaluated as TTFT; TPOT is not applicable and is excluded from TPOT attainment denominators.
 
 Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 

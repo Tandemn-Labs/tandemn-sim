@@ -28,7 +28,7 @@ class CliTest(unittest.TestCase):
                 "usr_sim",
                 "--planner",
                 "first-fit",
-                "--parallel-ranks-per-job",
+                "--parallel-simulators",
                 "6",
                 "--ticks",
                 "5",
@@ -43,7 +43,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(args.user_id, "usr_sim")
         self.assertEqual(args.planner, "first-fit")
-        self.assertEqual(args.parallel_ranks_per_job, 6)
+        self.assertEqual(args.parallel_simulators, 6)
         self.assertEqual(args.ticks, 5)
         self.assertEqual(args.trace_root, Path("traces"))
         self.assertEqual(args.trace_run_id, "run-1")

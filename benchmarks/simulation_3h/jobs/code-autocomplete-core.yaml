@@ -11,7 +11,7 @@ schedule:
 spec:
   user_id: tenant_code_autocomplete
   optimization_goal: latency
-  precision: fp16
+  precision: bf16
   features:
     isl_token_avg: 1800
     isl_token_min: 450

@@ -9,9 +9,10 @@ import math
 import shutil
 import subprocess
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from time import time
 from typing import Mapping, Sequence
 
 from models import ChainBinding, RankDeployment, RankMetricSample, Request
@@ -36,6 +37,7 @@ CSV_HEADER = [
 ]
 SECOND = 1_000_000_000
 SAMPLE_BUCKET_NS = 10 * SECOND
+SERVING_WINDOW_SECONDS = 300
 PROFILE_ALIASES = {
     "H100": "H100",
     "H100-SXM-80GB": "H100",
@@ -57,6 +59,7 @@ class RankRun:
     """One rank-local LLMServingSim command and its expected output."""
 
     deployment: RankDeployment
+    requests: tuple[Request, ...]
     command: tuple[str, ...]
     output_path: Path
     metrics_path: Path
@@ -74,6 +77,10 @@ class RankResult:
     metric_samples: tuple[RankMetricSample, ...]
     stdout: str
     stderr: str
+    status: str = "completed"
+    completed_requests: tuple[Request, ...] = ()
+    sim_time_ns: int = 0
+    admitted_requests: tuple[Request, ...] = ()
 
 
 def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
@@ -185,16 +192,18 @@ def resolve_rank_hardware(
             if instance["instance_type"] != instance_type:
                 continue
             for accelerator in instance["accelerators"]:
-                if gpu_type not in {
-                    accelerator.get("name"),
-                    accelerator.get("canonical_gpu_name"),
+                if _gpu_name(gpu_type) not in {
+                    _gpu_name(accelerator.get("name")),
+                    _gpu_name(accelerator.get("canonical_gpu_name")),
                 }:
                     continue
                 profile = PROFILE_ALIASES.get(gpu_type)
                 if profile is None:
                     raise ValueError(f"no LLMServingSim profile alias for {gpu_type}")
-                link = accelerator.get("nvlink_bandwidth_gbps") or accelerator.get(
-                    "pcie_bandwidth_gbps"
+                link = (
+                    accelerator.get("infinity_fabric_bandwidth_gbps")
+                    or accelerator.get("nvlink_bandwidth_gbps")
+                    or accelerator.get("pcie_bandwidth_gbps")
                 )
                 if not link:
                     link = max(card["peak_bandwidth_gbps"] for card in instance["network"]["network_cards"])
@@ -206,6 +215,31 @@ def resolve_rank_hardware(
                     "link_latency_ns": 0,
                 }
     raise ValueError(f"hardware catalog has no {cloud}/{region}/{instance_type}/{gpu_type} entry")
+
+
+def _gpu_name(value: object) -> str:
+    return str(value or "").upper().replace("_", "-")
+
+
+def merge_hardware_catalogs(catalogs: Sequence[object]) -> dict[str, object]:
+    """Normalize every seeded cloud catalog into resolver regions."""
+    regions = []
+    for hardware in catalogs:
+        catalog = hardware.catalog
+        source_regions = catalog.get("regions", [])
+        if source_regions and isinstance(source_regions[0], dict):
+            regions.extend(source_regions)
+        elif catalog.get("cloud") == "azure":
+            for region in source_regions:
+                regions.append({
+                    "cloud": "azure",
+                    "region": region,
+                    "instance_types": [
+                        instance for instance in catalog["instance_types"]
+                        if any(offering["region"] == region for offering in instance["offerings"])
+                    ],
+                })
+    return {"regions": regions}
 
 
 def write_rank_workload(
@@ -273,6 +307,8 @@ def build_rank_command(
         relative(metrics_path),
         "--num-reqs",
         str(request_count),
+        "--max-wall-time-seconds",
+        str(SERVING_WINDOW_SECONDS),
         "--request-routing-policy",
         "RR",
         "--run-id",
@@ -304,6 +340,7 @@ def prepare_rank_run(
     write_rank_workload(requests, workload_path, tick_start_ns)
     return RankRun(
         deployment,
+        tuple(requests),
         build_rank_command(
             container,
             llmservingsim_root,
@@ -322,20 +359,55 @@ def prepare_rank_run(
     )
 
 
-def run_ranks(rank_runs: Sequence[RankRun], max_parallel: int) -> tuple[RankResult, ...]:
+def run_ranks(
+    rank_runs: Sequence[RankRun],
+    max_parallel: int,
+    deadline_epoch_seconds: float | None = None,
+    progress=None,
+) -> tuple[RankResult, ...]:
     """Run independent rank simulations concurrently and fail as one batch."""
     if max_parallel < 1:
         raise ValueError("max_parallel must be positive")
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-        futures = [executor.submit(_run_rank, rank_run) for rank_run in rank_runs]
-        return tuple(future.result() for future in futures)
+        futures = {
+            executor.submit(_run_rank, rank_run, deadline_epoch_seconds): index
+            for index, rank_run in enumerate(rank_runs)
+        }
+        results = [None] * len(rank_runs)
+        for completed, future in enumerate(as_completed(futures), start=1):
+            index = futures[future]
+            results[index] = future.result()
+            if progress is not None:
+                progress(completed, len(rank_runs), rank_runs[index])
+        return tuple(results)
 
 
-def _run_rank(rank_run: RankRun) -> RankResult:
+def _run_rank(
+    rank_run: RankRun, deadline_epoch_seconds: float | None = None
+) -> RankResult:
     """Run and parse one rank simulation command."""
+    if deadline_epoch_seconds is not None and time() >= deadline_epoch_seconds:
+        if rank_run.cleanup_dir is not None:
+            shutil.rmtree(rank_run.cleanup_dir)
+        return RankResult(
+            rank_run.deployment,
+            (),
+            (),
+            "",
+            "",
+            "wall_time_limit",
+            (),
+        )
+    command = rank_run.command
+    if deadline_epoch_seconds is not None:
+        command = (
+            *command,
+            "--wall-deadline-epoch-seconds",
+            str(deadline_epoch_seconds),
+        )
     try:
         completed = subprocess.run(
-            rank_run.command,
+            command,
             capture_output=True,
             text=True,
             timeout=rank_run.timeout_seconds,
@@ -357,8 +429,7 @@ def parse_rank_result(
     output = f"{completed.stdout}\n{completed.stderr}"
     if completed.returncode:
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
-    if "ERROR: Some Requests Remain" in output or "All Request Has Been Exited" not in output:
-        raise RuntimeError(f"{rank_run.deployment.rank_name} did not finish all requests")
+    summary = _run_summary(output)
     if not rank_run.output_path.is_file():
         raise RuntimeError(f"{rank_run.deployment.rank_name} wrote no request CSV")
 
@@ -367,17 +438,84 @@ def parse_rank_result(
         if reader.fieldnames != CSV_HEADER:
             raise ValueError(f"unexpected LLMServingSim CSV header: {reader.fieldnames!r}")
         rows = tuple(_row(row) for row in reader)
-    if len(rows) != rank_run.request_count:
+    if summary["completed_requests"] != len(rows):
+        raise ValueError("LLMServingSim summary does not match completed request rows")
+    if summary["loaded_requests"] != rank_run.request_count:
+        raise ValueError("LLMServingSim summary does not match submitted requests")
+    if summary["status"] == "completed" and len(rows) != rank_run.request_count:
         raise ValueError(f"expected {rank_run.request_count} request rows, got {len(rows)}")
-    if len({row["request id"] for row in rows}) != len(rows):
+    if len(rows) > rank_run.request_count:
+        raise ValueError(f"expected at most {rank_run.request_count} request rows, got {len(rows)}")
+    completed_ids = []
+    completed_requests = []
+    for row in rows:
+        request_id = row["request id"]
+        if not math.isfinite(request_id) or request_id != int(request_id):
+            raise ValueError("LLMServingSim returned an invalid request ID")
+        request_id = int(request_id)
+        if request_id < 0 or request_id >= len(rank_run.requests):
+            raise ValueError("LLMServingSim returned an unknown request ID")
+        completed_ids.append(request_id)
+        completed_requests.append(rank_run.requests[request_id])
+    if len(set(completed_ids)) != len(completed_ids):
         raise ValueError("LLMServingSim returned duplicate request IDs")
 
     expected_instances = set(range(len(rank_run.deployment.chains)))
-    if any(int(row["instance id"]) not in expected_instances for row in rows):
-        raise ValueError("LLMServingSim returned an unknown instance ID")
+    for row in rows:
+        instance_id = _whole_number(row["instance id"], "instance ID")
+        if instance_id not in expected_instances:
+            raise ValueError("LLMServingSim returned an unknown instance ID")
     metric_samples = _read_metric_samples(rank_run.metrics_path, expected_instances)
 
-    return RankResult(rank_run.deployment, rows, metric_samples, completed.stdout, completed.stderr)
+    return RankResult(
+        rank_run.deployment,
+        rows,
+        metric_samples,
+        completed.stdout,
+        completed.stderr,
+        summary["status"],
+        tuple(completed_requests),
+        summary["sim_time_ns"],
+        tuple(rank_run.requests[request_id] for request_id in summary["admitted_request_ids"]),
+    )
+
+
+def _run_summary(output: str) -> dict[str, object]:
+    """Return and validate the terminal LLMServingSim status."""
+    for line in reversed(output.splitlines()):
+        if not line.startswith("SIM_RUN_SUMMARY "):
+            continue
+        try:
+            summary = json.loads(line.removeprefix("SIM_RUN_SUMMARY "))
+            status = summary["status"]
+            loaded = summary["loaded_requests"]
+            completed = summary["completed_requests"]
+            unfinished = summary["unfinished_requests"]
+            sim_time_ns = summary["sim_time_ns"]
+            admitted = summary.get("admitted_request_ids", [])
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise ValueError("invalid LLMServingSim run summary") from error
+        if (
+            status not in {"completed", "wall_time_limit"}
+            or any(
+                type(value) is not int or value < 0
+                for value in (loaded, completed, unfinished, sim_time_ns)
+            )
+            or loaded != completed + unfinished
+            or not isinstance(admitted, list)
+            or any(type(value) is not int or value < 0 or value >= loaded for value in admitted)
+            or len(set(admitted)) != len(admitted)
+        ):
+            raise ValueError("invalid LLMServingSim run summary")
+        return {
+            "status": status,
+            "loaded_requests": loaded,
+            "completed_requests": completed,
+            "unfinished_requests": unfinished,
+            "sim_time_ns": sim_time_ns,
+            "admitted_request_ids": admitted,
+        }
+    raise ValueError("LLMServingSim wrote no run summary")
 
 
 def _row(row: Mapping[str, str]) -> dict[str, float]:
@@ -390,6 +528,16 @@ def _row(row: Mapping[str, str]) -> dict[str, float]:
         }
     except ValueError as error:
         raise ValueError("LLMServingSim CSV contains a nonnumeric value") from error
+
+
+def _whole_number(value: object, name: str) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid {name}") from error
+    if not math.isfinite(numeric) or numeric != int(numeric):
+        raise ValueError(f"invalid {name}")
+    return int(numeric)
 
 
 def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[RankMetricSample, ...]:
@@ -408,13 +556,15 @@ def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[Rank
             raise ValueError(f"metrics JSONL line {line_number} must be an object")
         if row.get("sample_kind") not in {"periodic", "final"}:
             raise ValueError(f"metrics JSONL line {line_number} has invalid sample_kind")
-        if row["sample_kind"] == "final":
-            continue
         try:
-            sim_time_ns = int(row["sim_time_ns"])
-            sample_interval_ns = int(row["sample_interval_ns"])
-            instance_id = int(row["instance_id"])
-        except (KeyError, TypeError, ValueError) as error:
+            sim_time_ns = _whole_number(row["sim_time_ns"], "metric sim_time_ns")
+            instance_id = _whole_number(row["instance_id"], "metric instance_id")
+            sample_interval_ns = (
+                _whole_number(row["sample_interval_ns"], "metric sample_interval_ns")
+                if row["sample_kind"] == "periodic"
+                else sim_time_ns
+            )
+        except (KeyError, ValueError) as error:
             raise ValueError(f"metrics JSONL line {line_number} has invalid identity") from error
         if sim_time_ns < 0 or sample_interval_ns <= 0:
             raise ValueError(f"metrics JSONL line {line_number} has invalid interval")
@@ -479,6 +629,7 @@ def gpu_metrics_from_results(
                     sample.sample_interval_ns,
                     target_ttft,
                     price_per_hour,
+                    shape.get("task"),
                 )
                 values = {**direct, **observed}
                 for local_rank in range(binding.gpu_count):
@@ -572,6 +723,7 @@ def _observed_y(
     horizon_ns: float,
     target_ttft: float,
     price_per_hour: float | None,
+    task: object = None,
 ) -> dict[str, float | None]:
     """Derive chain outcomes from its completed LLMServingSim request rows."""
     if not rows:
@@ -586,8 +738,13 @@ def _observed_y(
         }
 
     throughput = sum(row["output"] for row in rows) * SECOND / horizon_ns
-    p99_ttft = _percentile([row["TTFT"] for row in rows], 0.99) / 1_000_000
-    p99_tpot = _percentile([row["TPOT"] for row in rows], 0.99) / 1_000_000
+    encoder = task == "embeddings"
+    p99_ttft = _percentile(
+        [row["latency"] if encoder else row["TTFT"] for row in rows], 0.99
+    ) / 1_000_000
+    p99_tpot = None if encoder else _percentile(
+        [row["TPOT"] for row in rows], 0.99
+    ) / 1_000_000
     return {
         "throughput_token_per_sec": throughput,
         "p99_ttft_ms": p99_ttft,
@@ -596,6 +753,60 @@ def _observed_y(
         "slo_margin": (target_ttft - p99_ttft) / target_ttft if target_ttft else None,
         "input_length_observed": sum(row["input"] for row in rows) / len(rows),
         "output_length_observed": sum(row["output"] for row in rows) / len(rows),
+    }
+
+
+def completed_request_summary(
+    results: Sequence[RankResult],
+    target_ttft_ms: float | None = None,
+    target_tpot_ms: float | None = None,
+    task: object = None,
+) -> dict[str, int | float | None]:
+    """Summarize completed request latency across every rank of one job."""
+    rows = [row for result in results for row in result.request_rows]
+    if not rows:
+        return {
+            "completed_request_count": 0,
+            "p99_ttft_ms": None,
+            "p99_tpot_ms": None,
+            "ttft_pass_count": 0 if target_ttft_ms is not None else None,
+            "ttft_fail_count": 0 if target_ttft_ms is not None else None,
+            "tpot_pass_count": None if task == "embeddings" else 0 if target_tpot_ms is not None else None,
+            "tpot_fail_count": None if task == "embeddings" else 0 if target_tpot_ms is not None else None,
+            "slo_pass_count": 0,
+            "slo_fail_count": 0,
+            "qualified_output_tokens": 0 if target_ttft_ms is not None and target_tpot_ms is not None else None,
+        }
+    encoder = task == "embeddings"
+    ttft_passed = sum(
+        (row["latency"] if encoder else row["TTFT"]) <= target_ttft_ms * 1_000_000
+        for row in rows
+    ) if target_ttft_ms is not None else None
+    tpot_passed = None if encoder else sum(
+        row["TPOT"] <= target_tpot_ms * 1_000_000 for row in rows
+    ) if target_tpot_ms is not None else None
+    passed = sum(
+        row["TTFT"] <= target_ttft_ms * 1_000_000
+        and row["TPOT"] <= target_tpot_ms * 1_000_000
+        for row in rows
+    ) if not encoder and ttft_passed is not None and tpot_passed is not None else ttft_passed
+    return {
+        "completed_request_count": len(rows),
+        "p99_ttft_ms": _percentile(
+            [row["latency"] if encoder else row["TTFT"] for row in rows], 0.99
+        ) / 1_000_000,
+        "p99_tpot_ms": None if encoder else _percentile([row["TPOT"] for row in rows], 0.99) / 1_000_000,
+        "ttft_pass_count": ttft_passed,
+        "ttft_fail_count": len(rows) - ttft_passed if ttft_passed is not None else None,
+        "tpot_pass_count": tpot_passed,
+        "tpot_fail_count": len(rows) - tpot_passed if tpot_passed is not None else None,
+        "slo_pass_count": passed,
+        "slo_fail_count": len(rows) - passed if passed is not None else None,
+        "qualified_output_tokens": sum(
+            row["output"] for row in rows
+            if (row["latency"] if encoder else row["TTFT"]) <= target_ttft_ms * 1_000_000
+            and (encoder or row["TPOT"] <= target_tpot_ms * 1_000_000)
+        ) if passed is not None else None,
     }
 
 

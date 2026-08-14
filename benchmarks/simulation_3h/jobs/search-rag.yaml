@@ -15,7 +15,7 @@ spec:
   features:
     isl_token_avg: 9000
     isl_token_min: 2250
-    isl_token_max: 32000
+    isl_token_max: 16382
     isl_distribution_type: LogNormal
     osl_token_avg: 220
     osl_token_min: 55

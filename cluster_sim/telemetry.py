@@ -24,6 +24,7 @@ METRIC_POLICIES = {
     "kv_cache_util": "mean",
     "activation_mem_pressure": "mean",
     "gpu_mem_used_fraction": "mean",
+    "sm_utilization": "mean",
     "vram_headroom_gb": "mean",
     "nvlink_tput_observed": "mean",
     "pcie_tput_observed": "mean",

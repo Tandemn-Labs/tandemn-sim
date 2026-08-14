@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,11 +25,16 @@ from serving import (
     RankResult,
     build_rank_cluster,
     build_rank_deployments,
+    merge_hardware_catalogs,
     commit_tick_metrics,
+    completed_request_summary,
     gpu_metrics_from_results,
     parse_rank_result,
     prepare_rank_run,
     resolve_rank_hardware,
+    _read_metric_samples,
+    _run_rank,
+    _run_summary,
     _tick_kvcache_hit_rate,
     write_rank_workload,
 )
@@ -175,6 +181,21 @@ class ServingInputTest(unittest.TestCase):
 
         self.assertEqual(resolve_rank_hardware(deployment, catalog)["profile"], "H100")
 
+    def test_merges_aws_and_azure_catalogs(self) -> None:
+        catalogs = (
+            SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "us-east-1", "instance_types": []}]}),
+            SimpleNamespace(catalog={
+                "cloud": "azure", "regions": ["eastus"],
+                "instance_types": [{"offerings": [{"region": "eastus"}]}],
+            }),
+        )
+
+        regions = merge_hardware_catalogs(catalogs)["regions"]
+        self.assertEqual(
+            [(region["cloud"], region["region"]) for region in regions],
+            [("aws", "us-east-1"), ("azure", "eastus")],
+        )
+
     def test_rank_workload_rebases_arrivals_and_preserves_prefixes(self) -> None:
         """Write rank-local LLMServingSim rows from global logical arrivals."""
         requests = (
@@ -213,6 +234,51 @@ class ServingInputTest(unittest.TestCase):
             self.assertTrue((run_dir / "workload.jsonl").is_file())
             self.assertEqual(rank_run.output_path, run_dir / "requests.csv")
             self.assertEqual(rank_run.metrics_path, run_dir / "metrics.jsonl")
+            self.assertEqual(
+                rank_run.command[
+                    rank_run.command.index("--max-wall-time-seconds") + 1
+                ],
+                "300",
+            )
+
+    def test_rank_run_receives_shared_deadline(self) -> None:
+        """Append one tick deadline to an active simulator command."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330)
+        parsed = SimpleNamespace()
+        completed = subprocess.CompletedProcess((), 0, "", "")
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=completed) as run,
+            patch("serving.parse_rank_result", return_value=parsed),
+        ):
+            result = _run_rank(rank_run, 1_300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(
+            run.call_args.args[0][-2:],
+            ("--wall-deadline-epoch-seconds", "1300"),
+        )
+
+    def test_rank_queued_past_shared_deadline_is_not_started(self) -> None:
+        """Return an unfinished result without launching a late simulator."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            cleanup_dir = Path(directory) / "rank"
+            cleanup_dir.mkdir()
+            rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 330, cleanup_dir)
+            with (
+                patch("serving.time", return_value=1_301),
+                patch("serving.subprocess.run") as run,
+            ):
+                result = _run_rank(rank_run, 1_300)
+
+            self.assertFalse(cleanup_dir.exists())
+
+        run.assert_not_called()
+        self.assertEqual(result.status, "wall_time_limit")
+        self.assertEqual(result.completed_requests, ())
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""
@@ -222,7 +288,7 @@ class ServingInputTest(unittest.TestCase):
             with output_path.open("w", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=CSV_HEADER)
                 writer.writeheader()
-                for request_id, instance_id in enumerate((0, 1)):
+                for request_id, instance_id in ((1, 0), (0, 1)):
                     writer.writerow(
                         {
                             "instance id": instance_id,
@@ -272,11 +338,23 @@ class ServingInputTest(unittest.TestCase):
                                 "kv_cache_util": 0.0,
                             }
                         ),
+                        json.dumps(
+                            {
+                                "sim_time_ns": 11_000_000_000,
+                                "sample_kind": "final",
+                                "instance_id": 1,
+                                "kv_cache_util": 0.0,
+                            }
+                        ),
                     )
                 )
                 + "\n"
             )
-            rank_run = RankRun(deployment, (), output_path, metrics_path, 2, 30)
+            requests = (
+                Request("request_0", "session", 0, 0, 100, 20, None),
+                Request("request_1", "session", 0, 0, 100, 20, None),
+            )
+            rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (),
                 0,
@@ -285,6 +363,7 @@ class ServingInputTest(unittest.TestCase):
                         "SIM_METRICS instance=0 kv_cache_util=0.5",
                         "SIM_METRICS instance=1 kv_cache_util=0.6",
                         "All Request Has Been Exited",
+                        'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":11000}',
                     )
                 ),
                 "",
@@ -292,9 +371,105 @@ class ServingInputTest(unittest.TestCase):
             result = parse_rank_result(rank_run, completed)
 
         self.assertEqual(len(result.request_rows), 2)
-        self.assertEqual(len(result.metric_samples), 2)
+        self.assertEqual(len(result.metric_samples), 4)
         self.assertEqual(result.metric_samples[0].metrics["kv_cache_util"], 0.5)
         self.assertEqual(result.metric_samples[1].metrics["kv_cache_util"], 0.6)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.completed_requests, (requests[1], requests[0]))
+        self.assertEqual(result.sim_time_ns, 11_000)
+
+    def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:
+        """Only LLMServingSim's two explicit terminal states are accepted."""
+        for output in (
+            "",
+            "SIM_RUN_SUMMARY {",
+            'SIM_RUN_SUMMARY {"status":"crashed","loaded_requests":1,"completed_requests":0,"unfinished_requests":1,"sim_time_ns":0}',
+        ):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                _run_summary(output)
+
+    def test_parse_rank_result_rejects_invalid_request_ids(self) -> None:
+        """Completed rows must name a unique, rank-local request index."""
+        rank = SimpleNamespace(rank_id="rank_ids", n_replicas=1, shape_json=self.ranks[0].shape_json)
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+        requests = (
+            Request("request_0", "session", 0, 0, 100, 20, None),
+            Request("request_1", "session", 0, 0, 100, 20, None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics_path = root / "metrics.jsonl"
+            metrics_path.write_text(json.dumps({
+                "sim_time_ns": 1, "sample_interval_ns": 1,
+                "sample_kind": "periodic", "instance_id": 0,
+            }) + "\n")
+            for ids in ((0.5, 1), (-1, 1), (2, 1), (0, 0)):
+                output_path = root / "requests.csv"
+                with output_path.open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=CSV_HEADER)
+                    writer.writeheader()
+                    for request_id in ids:
+                        writer.writerow(dict.fromkeys(CSV_HEADER, request_id))
+                rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
+                completed = subprocess.CompletedProcess(
+                    (), 0,
+                    'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":1000}',
+                    "",
+                )
+                with self.subTest(ids=ids), self.assertRaises(ValueError):
+                    parse_rank_result(rank_run, completed)
+
+    def test_metric_samples_reject_fractional_instance_ids(self) -> None:
+        """Metric identities must not silently truncate fractional instance IDs."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metrics.jsonl"
+            path.write_text(json.dumps({
+                "sim_time_ns": 1, "sample_interval_ns": 1,
+                "sample_kind": "periodic", "instance_id": 0.5,
+            }) + "\n")
+            with self.assertRaises(ValueError):
+                _read_metric_samples(path, {0})
+
+    def test_metric_samples_keep_final_only_telemetry(self) -> None:
+        """Short completed runs still produce telemetry when only final rows exist."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "metrics.jsonl"
+            path.write_text("\n".join(json.dumps({
+                "sim_time_ns": 5, "sample_kind": "final", "instance_id": instance_id,
+                "kv_cache_util": 0.5 + instance_id / 10,
+            }) for instance_id in (0, 1)) + "\n")
+            samples = _read_metric_samples(path, {0, 1})
+
+        self.assertEqual(len(samples), 2)
+        self.assertTrue(all(sample.sample_interval_ns == 5 for sample in samples))
+
+    def test_rank_local_request_ids_do_not_cross_rank_runs(self) -> None:
+        """Every rank's request ID zero resolves against that rank's input order."""
+        rank = SimpleNamespace(rank_id="rank_local", n_replicas=1, shape_json=self.ranks[0].shape_json)
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = subprocess.CompletedProcess(
+                (), 0,
+                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":1,"completed_requests":1,"unfinished_requests":0,"sim_time_ns":1000}',
+                "",
+            )
+            results = []
+            for name in ("rank_a_request", "rank_b_request"):
+                output_path = root / f"{name}.csv"
+                output_path.write_text(",".join(CSV_HEADER) + "\n0,0,model,1,1,0,1,1,0,1,1,[],0,0,0\n")
+                metrics_path = root / f"{name}.jsonl"
+                metrics_path.write_text(json.dumps({
+                    "sim_time_ns": 1, "sample_interval_ns": 1,
+                    "sample_kind": "periodic", "instance_id": 0,
+                }) + "\n")
+                request = Request(name, "session", 0, 0, 1, 1, None)
+                results.append(parse_rank_result(
+                    RankRun(deployment, (request,), (), output_path, metrics_path, 1, 30), completed))
+
+        self.assertEqual([result.completed_requests[0].request_name for result in results], [
+            "rank_a_request", "rank_b_request",
+        ])
 
     def test_parse_rank_result_rejects_missing_replica_metrics(self) -> None:
         """Require final runtime metrics from every chain replica."""
@@ -318,15 +493,76 @@ class ServingInputTest(unittest.TestCase):
                 )
                 + "\n"
             )
-            rank_run = RankRun(deployment, (), output_path, metrics_path, 2, 30)
+            requests = (
+                Request("request_0", "session", 0, 0, 100, 20, None),
+                Request("request_1", "session", 0, 0, 100, 20, None),
+            )
+            rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
             completed = subprocess.CompletedProcess(
                 (),
                 0,
-                "SIM_METRICS instance=0 kv_cache_util=0.5\nAll Request Has Been Exited",
+                'SIM_RUN_SUMMARY {"status":"completed","loaded_requests":2,"completed_requests":2,"unfinished_requests":0,"sim_time_ns":1000}',
                 "",
             )
             with self.assertRaises(ValueError):
                 parse_rank_result(rank_run, completed)
+
+    def test_parse_rank_result_accepts_completed_rows_after_wall_time_limit(self) -> None:
+        """Accept the completed-only artifacts emitted by a timed-out ServingSim run."""
+        rank = SimpleNamespace(rank_id="rank_partial", n_replicas=1, shape_json=self.ranks[0].shape_json)
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "requests.csv"
+            with output_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=CSV_HEADER)
+                writer.writeheader()
+                writer.writerow(dict.fromkeys(CSV_HEADER, 0))
+            metrics_path = Path(directory) / "metrics.jsonl"
+            metrics_path.write_text(json.dumps({
+                "sim_time_ns": 1, "sample_interval_ns": 1,
+                "sample_kind": "periodic", "instance_id": 0,
+            }) + "\n")
+            requests = (
+                Request("request_0", "session", 0, 0, 100, 20, None),
+                Request("request_1", "session", 0, 0, 100, 20, None),
+            )
+            rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 2, 30)
+            completed = subprocess.CompletedProcess(
+                (), 0,
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":2,"completed_requests":1,"unfinished_requests":1,"sim_time_ns":1000,"admitted_request_ids":[1]}',
+                "",
+            )
+            result = parse_rank_result(rank_run, completed)
+
+        self.assertEqual(len(result.request_rows), 1)
+        self.assertEqual(len(result.metric_samples), 1)
+        self.assertEqual(result.status, "wall_time_limit")
+        self.assertEqual(result.completed_requests, (requests[0],))
+        self.assertEqual(result.admitted_requests, (requests[1],))
+        self.assertEqual(result.sim_time_ns, 1_000)
+
+    def test_parse_rank_result_accepts_zero_completed_requests_after_wall_time_limit(self) -> None:
+        """A cutoff before the first completion is still a valid simulator result."""
+        rank = SimpleNamespace(rank_id="rank_empty", n_replicas=1, shape_json=self.ranks[0].shape_json)
+        deployment = build_rank_deployments(self.job, (rank,))[0]
+        requests = (Request("request_0", "session", 0, 0, 100, 20, None),)
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "requests.csv"
+            output_path.write_text(",".join(CSV_HEADER) + "\n")
+            metrics_path = Path(directory) / "metrics.jsonl"
+            metrics_path.write_text(json.dumps({
+                "sim_time_ns": 1, "sample_interval_ns": 1,
+                "sample_kind": "periodic", "instance_id": 0,
+            }) + "\n")
+            rank_run = RankRun(deployment, requests, (), output_path, metrics_path, 1, 30)
+            completed = subprocess.CompletedProcess(
+                (), 0,
+                'SIM_RUN_SUMMARY {"status":"wall_time_limit","loaded_requests":1,"completed_requests":0,"unfinished_requests":1,"sim_time_ns":0}',
+                "",
+            )
+            result = parse_rank_result(rank_run, completed)
+
+        self.assertEqual(result.completed_requests, ())
 
     def test_rank_results_expand_to_one_metric_per_simulated_gpu(self) -> None:
         """Convert two TP=2 replicas into four canonical Store GPU metrics."""
@@ -386,6 +622,48 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(len(tick_summary), 4)
         self.assertTrue(all(metric.kvcache_hit_rate == 125 / 300 for metric in tick_summary))
         self.assertTrue(all(metric.kv_cache_util is None for metric in tick_summary))
+
+    def test_completed_request_summary_merges_rows_across_ranks(self) -> None:
+        """Calculate one percentile from all completed job requests."""
+        def result(ttft_values):
+            return RankResult(
+                SimpleNamespace(),
+                tuple(
+                    {"TTFT": value * 1_000_000, "TPOT": value * 100_000, "output": 200}
+                    for value in ttft_values
+                ),
+                (),
+                "",
+                "",
+            )
+
+        summary = completed_request_summary((result((1, 100)), result((2, 3))), 10, 1)
+
+        self.assertEqual(summary["completed_request_count"], 4)
+        self.assertAlmostEqual(summary["p99_ttft_ms"], 97.09)
+        self.assertAlmostEqual(summary["p99_tpot_ms"], 9.709)
+        self.assertEqual(summary["ttft_pass_count"], 3)
+        self.assertEqual(summary["ttft_fail_count"], 1)
+        self.assertEqual(summary["tpot_pass_count"], 3)
+        self.assertEqual(summary["tpot_fail_count"], 1)
+        self.assertEqual(summary["slo_pass_count"], 3)
+        self.assertEqual(summary["slo_fail_count"], 1)
+        self.assertEqual(summary["qualified_output_tokens"], 600)
+
+    def test_encoder_summary_uses_latency_as_ttft(self) -> None:
+        result = RankResult(
+            SimpleNamespace(),
+            ({"latency": 50_000_000, "TTFT": -1, "TPOT": 0, "output": 0},),
+            (), "", "",
+        )
+
+        summary = completed_request_summary((result,), 60, 1, "embeddings")
+
+        self.assertEqual(summary["p99_ttft_ms"], 50)
+        self.assertIsNone(summary["p99_tpot_ms"])
+        self.assertEqual(summary["ttft_pass_count"], 1)
+        self.assertIsNone(summary["tpot_pass_count"])
+        self.assertEqual(summary["slo_pass_count"], 1)
 
     def test_tick_cache_hit_rate_is_token_weighted(self) -> None:
         rows = (

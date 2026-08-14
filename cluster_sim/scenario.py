@@ -69,6 +69,7 @@ def load_scenario(overview_path: Path) -> Scenario:
                         "features": features,
                         "phases": benchmark["phases"],
                         "seed": workload["randomSeed"],
+                        "task": benchmark["endpoint"]["type"],
                     },
                 )
             )
@@ -89,8 +90,9 @@ def load_scenario(overview_path: Path) -> Scenario:
                     "input": _distribution(features, "isl"),
                     "output": _distribution(features, "osl"),
                     "record_count": dataset["record_count"],
-                    "requests_per_shard": partitioning["requests_per_shard"],
-                    "seed": dataset["seed"],
+                        "requests_per_shard": partitioning["requests_per_shard"],
+                        "seed": dataset["seed"],
+                        "task": dataset["request_format"],
                 },
             )
         )

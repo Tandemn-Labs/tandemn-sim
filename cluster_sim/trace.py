@@ -133,6 +133,24 @@ def job_admitted(
     }
 
 
+def job_state_changed(
+    job_id: str,
+    from_status: str | None,
+    to_status: str,
+    at: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build one logical job lifecycle transition for queue-time accounting."""
+    return {
+        "kind": "job_state_changed",
+        "job_id": job_id,
+        "from_status": from_status,
+        "to_status": to_status,
+        "at": at,
+        "reason": reason,
+    }
+
+
 def rank_window(
     tick: int,
     job_id: str,
@@ -176,6 +194,21 @@ def job_window(
     target_p99_tpot_ms: float | None,
     ttft_slo_met: bool | None,
     tpot_slo_met: bool | None,
+    attempted_request_count: int = 0,
+    completed_request_count: int = 0,
+    unfinished_request_count: int = 0,
+    completion_ratio: float | None = None,
+    latency_scope: str = "completed_requests",
+    slo_pass_count: int | None = None,
+    slo_fail_count: int | None = None,
+    slo_count_scope: str = "completed_requests",
+    ttft_pass_count: int | None = None,
+    ttft_fail_count: int | None = None,
+    tpot_pass_count: int | None = None,
+    tpot_fail_count: int | None = None,
+    offered_request_count: int | None = None,
+    admitted_request_count: int | None = None,
+    qualified_output_tokens: int | None = None,
 ) -> dict[str, object]:
     """Build one job-performance observation, derived from its rank telemetry."""
     return {
@@ -193,6 +226,21 @@ def job_window(
         "target_p99_tpot_ms": target_p99_tpot_ms,
         "ttft_slo_met": ttft_slo_met,
         "tpot_slo_met": tpot_slo_met,
+        "attempted_request_count": attempted_request_count,
+        "completed_request_count": completed_request_count,
+        "unfinished_request_count": unfinished_request_count,
+        "completion_ratio": completion_ratio,
+        "latency_scope": latency_scope,
+        "slo_pass_count": slo_pass_count,
+        "slo_fail_count": slo_fail_count,
+        "slo_count_scope": slo_count_scope,
+        "ttft_pass_count": ttft_pass_count,
+        "ttft_fail_count": ttft_fail_count,
+        "tpot_pass_count": tpot_pass_count,
+        "tpot_fail_count": tpot_fail_count,
+        "offered_request_count": offered_request_count,
+        "admitted_request_count": admitted_request_count,
+        "qualified_output_tokens": qualified_output_tokens,
     }
 
 
@@ -278,6 +326,7 @@ def job_finished(
     completed_successfully: bool,
     finish_reason: str | None,
     deadline_slo_met: bool | None,
+    unserved_request_count: int = 0,
 ) -> dict[str, object]:
     """Build one terminal job fact for JCT and batch deadline derivation."""
     return {
@@ -287,6 +336,7 @@ def job_finished(
         "completed_successfully": completed_successfully,
         "finish_reason": finish_reason,
         "deadline_slo_met": deadline_slo_met,
+        "unserved_request_count": unserved_request_count,
     }
 
 
@@ -322,4 +372,3 @@ def gpu_sample(
         "instance_type": instance_type,
         "metrics": metrics,
     }
-

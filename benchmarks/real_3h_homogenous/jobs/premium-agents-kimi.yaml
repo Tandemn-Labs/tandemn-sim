@@ -11,7 +11,7 @@ schedule:
 spec:
   user_id: tenant_agents_premium
   optimization_goal: latency
-  precision: fp16
+  precision: bf16-fp8
   features:
     isl_token_avg: 1400
     isl_token_min: 350
