@@ -602,6 +602,7 @@ def gpu_metrics_from_results(
                     sample.sample_interval_ns,
                     target_ttft,
                     price_per_hour,
+                    shape.get("task"),
                 )
                 values = {**direct, **observed}
                 for local_rank in range(binding.gpu_count):
@@ -695,6 +696,7 @@ def _observed_y(
     horizon_ns: float,
     target_ttft: float,
     price_per_hour: float | None,
+    task: object = None,
 ) -> dict[str, float | None]:
     """Derive chain outcomes from its completed LLMServingSim request rows."""
     if not rows:
@@ -709,8 +711,13 @@ def _observed_y(
         }
 
     throughput = sum(row["output"] for row in rows) * SECOND / horizon_ns
-    p99_ttft = _percentile([row["TTFT"] for row in rows], 0.99) / 1_000_000
-    p99_tpot = _percentile([row["TPOT"] for row in rows], 0.99) / 1_000_000
+    encoder = task == "embeddings"
+    p99_ttft = _percentile(
+        [row["latency"] if encoder else row["TTFT"] for row in rows], 0.99
+    ) / 1_000_000
+    p99_tpot = None if encoder else _percentile(
+        [row["TPOT"] for row in rows], 0.99
+    ) / 1_000_000
     return {
         "throughput_token_per_sec": throughput,
         "p99_ttft_ms": p99_ttft,
@@ -726,6 +733,7 @@ def completed_request_summary(
     results: Sequence[RankResult],
     target_ttft_ms: float | None = None,
     target_tpot_ms: float | None = None,
+    task: object = None,
 ) -> dict[str, int | float | None]:
     """Summarize completed request latency across every rank of one job."""
     rows = [row for result in results for row in result.request_rows]
@@ -736,25 +744,31 @@ def completed_request_summary(
             "p99_tpot_ms": None,
             "ttft_pass_count": 0 if target_ttft_ms is not None else None,
             "ttft_fail_count": 0 if target_ttft_ms is not None else None,
-            "tpot_pass_count": 0 if target_tpot_ms is not None else None,
-            "tpot_fail_count": 0 if target_tpot_ms is not None else None,
+            "tpot_pass_count": None if task == "embeddings" else 0 if target_tpot_ms is not None else None,
+            "tpot_fail_count": None if task == "embeddings" else 0 if target_tpot_ms is not None else None,
             "slo_pass_count": 0,
             "slo_fail_count": 0,
             "qualified_output_tokens": 0 if target_ttft_ms is not None and target_tpot_ms is not None else None,
         }
-    ttft_passed = sum(row["TTFT"] <= target_ttft_ms * 1_000_000 for row in rows) if target_ttft_ms is not None else None
-    tpot_passed = sum(row["TPOT"] <= target_tpot_ms * 1_000_000 for row in rows) if target_tpot_ms is not None else None
+    encoder = task == "embeddings"
+    ttft_passed = sum(
+        (row["latency"] if encoder else row["TTFT"]) <= target_ttft_ms * 1_000_000
+        for row in rows
+    ) if target_ttft_ms is not None else None
+    tpot_passed = None if encoder else sum(
+        row["TPOT"] <= target_tpot_ms * 1_000_000 for row in rows
+    ) if target_tpot_ms is not None else None
     passed = sum(
         row["TTFT"] <= target_ttft_ms * 1_000_000
         and row["TPOT"] <= target_tpot_ms * 1_000_000
         for row in rows
-    ) if ttft_passed is not None and tpot_passed is not None else None
+    ) if not encoder and ttft_passed is not None and tpot_passed is not None else ttft_passed
     return {
         "completed_request_count": len(rows),
-        "p99_ttft_ms": _percentile([row["TTFT"] for row in rows], 0.99)
-        / 1_000_000,
-        "p99_tpot_ms": _percentile([row["TPOT"] for row in rows], 0.99)
-        / 1_000_000,
+        "p99_ttft_ms": _percentile(
+            [row["latency"] if encoder else row["TTFT"] for row in rows], 0.99
+        ) / 1_000_000,
+        "p99_tpot_ms": None if encoder else _percentile([row["TPOT"] for row in rows], 0.99) / 1_000_000,
         "ttft_pass_count": ttft_passed,
         "ttft_fail_count": len(rows) - ttft_passed if ttft_passed is not None else None,
         "tpot_pass_count": tpot_passed,
@@ -763,8 +777,8 @@ def completed_request_summary(
         "slo_fail_count": len(rows) - passed if passed is not None else None,
         "qualified_output_tokens": sum(
             row["output"] for row in rows
-            if row["TTFT"] <= target_ttft_ms * 1_000_000
-            and row["TPOT"] <= target_tpot_ms * 1_000_000
+            if (row["latency"] if encoder else row["TTFT"]) <= target_ttft_ms * 1_000_000
+            and (encoder or row["TPOT"] <= target_tpot_ms * 1_000_000)
         ) if passed is not None else None,
     }
 

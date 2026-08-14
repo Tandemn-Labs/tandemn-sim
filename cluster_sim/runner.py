@@ -493,6 +493,7 @@ class ClusterSimulator:
                 job_results,
                 features.get("target_p99_ttft_ms"),
                 features.get("target_p99_tpot_ms"),
+                job.workload.get("task", "generate"),
             )
             completed_request_count = int(
                 request_summary["completed_request_count"]
@@ -710,7 +711,7 @@ class ClusterSimulator:
                             int(request_summary["completed_request_count"]),
                             int(request_summary["unfinished_request_count"]),
                             request_summary["completion_ratio"],
-                            "completed_requests",
+                            "encoder_latency_as_ttft" if job.workload.get("task") == "embeddings" else "completed_requests",
                             request_summary["slo_pass_count"],
                             request_summary["slo_fail_count"],
                             request_summary["slo_count_scope"],
@@ -800,11 +801,13 @@ class ClusterSimulator:
         model_catalog = ModelCatalogStore(self.postgres).get(running.job.spec_json["model_id"])
         if model_catalog is None:
             raise ValueError(f"model catalog missing {running.job.spec_json['model_id']!r}")
+        benchmark_job = self._online_jobs.get(running.job.job_id) or self._batch_jobs[running.job.job_id]
         for deployment in deployments:
             deployment.shape["weight_dtype"] = model_catalog.weight_dtype
             deployment.shape["weight_quantization_method"] = (
                 model_catalog.weight_quantization_method
             )
+            deployment.shape["task"] = benchmark_job.workload.get("task", "generate")
         if len(deployments) == 1:
             rank_shares = {deployments[0].rank_name: 1.0}
         else:
