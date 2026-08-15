@@ -1096,7 +1096,7 @@ def _resources_with_free_capacity(
                 environment,
                 _optional_text(shape.get("instance_type")),
             )
-            footprint = count * replicas
+            footprint = count
             if pool is not None:
                 allocation_kind = str(
                     pool.get("allocation_kind")

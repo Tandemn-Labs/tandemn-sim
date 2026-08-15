@@ -720,12 +720,14 @@ class RunnerDataPlaneTest(unittest.TestCase):
         scenario = Scenario("runner-smoke", 300_000_000_000, 300_000_000_000, (job,), ())
         rank = SimpleNamespace(
             rank_id="rank_1",
-            n_replicas=1,
+            n_replicas=4,
             shape_json={
                 "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
-                "count": 1,
+                "count": 4,
                 "tp": 1,
                 "pp": 1,
+                "dp": 4,
+                "gpu_count": 4,
                 "ep": 1,
                 "instance_type": "sim.h100.8gpu",
                 "target_p99_ttft_ms": 600,
@@ -915,7 +917,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(job_event["completion_ratio"], 1.0)
         self.assertEqual(job_event["latency_scope"], "completed_requests")
         self.assertEqual(pool_event["expected_gpu_count"], 8)
-        self.assertEqual(pool_event["allocated_gpu_count"], 1)
+        self.assertEqual(pool_event["allocated_gpu_count"], 4)
         self.assertEqual(cluster_event["capacity_gpu_hours"], 16 * 300 / 3600)
         self.assertEqual(cluster_event["jobs_admitted_in_tick"], 2)
         self.assertEqual(cluster_event["rolling_admission_time_ms"], 12_000.0)
