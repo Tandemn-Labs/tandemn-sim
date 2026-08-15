@@ -1286,7 +1286,7 @@ def _place_action(
                     "instance_type": target.instance_type,
                     "gpu_type": target.gpu_type,
                     "gpu_count": gpu_count,
-                    "count": tp * pp,
+                    "count": gpu_count,
                     "tp": tp,
                     "pp": pp,
                     "dp": dp,
@@ -1373,7 +1373,7 @@ def _resources_with_free_capacity(
                 environment,
                 _optional_text(shape.get("instance_type")),
             )
-            footprint = count * replicas
+            footprint = count
             if pool is not None:
                 allocation_kind = str(
                     pool.get("allocation_kind")

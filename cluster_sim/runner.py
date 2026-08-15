@@ -738,8 +738,9 @@ class ClusterSimulator:
                             continue
                         key = ("|".join(env), shape.get("instance_type"))
                         pool_by_rank[rank.rank_id] = key
+                        # Store count is the total rank footprint; replicas are chains.
                         allocated_by_pool[key] = allocated_by_pool.get(key, 0) + (
-                            rank.n_replicas * int(shape["count"])
+                            int(shape["count"])
                         )
                 pool_facts = []
                 for env_key, summary in resource_map.scheduling_summary().items():

@@ -139,6 +139,10 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         placed = actions[1]
         self.assertEqual(placed["ladder"][0]["config"]["model_id"], "model")
         self.assertEqual(placed["ladder"][0]["config"]["dp"], 1)
+        self.assertEqual(
+            placed["ladder"][0]["config"]["count"],
+            placed["ladder"][0]["config"]["gpu_count"],
+        )
         self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
         self.assertRegex(placed["ladder"][0]["rank_id"], r"^rank_[0-7][0-9A-HJKMNP-TV-Z]{25}$")
 
