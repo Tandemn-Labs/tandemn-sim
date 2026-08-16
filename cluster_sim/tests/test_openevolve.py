@@ -77,8 +77,8 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         self.assertEqual(client.tick_number, 1)
         self.assertEqual(client.initial_program, _VALID_POLICY)
 
-    def test_driver_builds_complete_store_actions(self) -> None:
-        """Own canonical lifecycle action construction inside this planner."""
+    def test_driver_excludes_terminal_jobs(self) -> None:
+        """Own lifecycle actions without acting on terminal jobs."""
         driver = _driver()
         snapshot = StoreSnapshot(
             resources={
@@ -109,7 +109,6 @@ class OpenEvolvePlannerTest(unittest.TestCase):
                 ("running", "keep"),
                 ("waiting", "place"),
                 ("paused", "defer"),
-                ("finished", "preempt"),
             ],
         )
         placed = actions[1]

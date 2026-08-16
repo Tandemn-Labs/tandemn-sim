@@ -280,6 +280,32 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(result.status, "wall_time_limit")
         self.assertEqual(result.completed_requests, ())
 
+    def test_rank_parse_failure_cleans_up_generated_files(self) -> None:
+        """Remove one failed rank's generated simulator inputs."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            cleanup_dir = Path(directory) / "rank"
+            cleanup_dir.mkdir()
+            rank_run = RankRun(
+                deployment,
+                (),
+                ("python3", "-m", "serving"),
+                Path(),
+                Path(),
+                0,
+                30,
+                cleanup_dir,
+            )
+            completed = subprocess.CompletedProcess((), 1, "", "unexpected failure")
+
+            with (
+                patch("serving.subprocess.run", return_value=completed),
+                self.assertRaisesRegex(RuntimeError, "unexpected failure"),
+            ):
+                _run_rank(rank_run)
+
+            self.assertFalse(cleanup_dir.exists())
+
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
@@ -377,6 +403,32 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.completed_requests, (requests[1], requests[0]))
         self.assertEqual(result.sim_time_ns, 11_000)
+
+    def test_parse_rank_result_marks_memory_capacity_failure_as_oom(self) -> None:
+        """Convert a simulator startup memory failure into a terminal rank result."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 30)
+        completed = subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            "[MemoryModel] Model size 254GB exceeds total NPU memory 134GB",
+        )
+
+        result = parse_rank_result(rank_run, completed)
+
+        self.assertEqual(result.status, "oom")
+        self.assertEqual(result.request_rows, ())
+        self.assertEqual(result.metric_samples, ())
+
+    def test_parse_rank_result_rejects_non_oom_process_failure(self) -> None:
+        """Keep unrelated simulator failures visible to the caller."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 30)
+        completed = subprocess.CompletedProcess((), 1, "", "unexpected failure")
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected failure"):
+            parse_rank_result(rank_run, completed)
 
     def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:
         """Only LLMServingSim's two explicit terminal states are accepted."""

@@ -406,19 +406,20 @@ def _run_rank(
             str(deadline_epoch_seconds),
         )
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=rank_run.timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"{rank_run.deployment.rank_name} simulation timed out") from error
-    result = parse_rank_result(rank_run, completed)
-    if rank_run.cleanup_dir is not None:
-        shutil.rmtree(rank_run.cleanup_dir)
-    return result
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=rank_run.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(f"{rank_run.deployment.rank_name} simulation timed out") from error
+        return parse_rank_result(rank_run, completed)
+    finally:
+        if rank_run.cleanup_dir is not None and rank_run.cleanup_dir.exists():
+            shutil.rmtree(rank_run.cleanup_dir)
 
 
 def parse_rank_result(
@@ -428,6 +429,23 @@ def parse_rank_result(
     """Parse one rank's request CSV and periodic metrics artifact."""
     output = f"{completed.stdout}\n{completed.stderr}"
     if completed.returncode:
+        lowered = output.lower()
+        if (
+            "memoryerror" in lowered
+            or "out of memory" in lowered
+            or (
+                "[memorymodel]" in lowered
+                and "exceeds total npu memory" in lowered
+            )
+        ):
+            return RankResult(
+                rank_run.deployment,
+                (),
+                (),
+                completed.stdout,
+                completed.stderr,
+                "oom",
+            )
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
     summary = _run_summary(output)
     if not rank_run.output_path.is_file():
