@@ -194,6 +194,23 @@ class VramPlannerDriverTest(unittest.TestCase):
         self.assertEqual(actions[0]["type"], "place")
         self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_type"], "A10G")
 
+    def test_terminal_jobs_produce_no_actions(self) -> None:
+        """Keep terminal jobs out of future placement plans."""
+        base = _snapshot(
+            "job-benchmark_timing_3hr-0-5",
+            a10g_free=1,
+            h100_free=0,
+        )
+        snapshot = StoreSnapshot(
+            resources=base.resources,
+            running_jobs=(),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=({"job_id": "finished"},),
+        )
+
+        self.assertEqual(_driver()._build_actions(snapshot), [])
+
     def test_policy_skips_unsupported_model_hardware_pair(self) -> None:
         """Defer when capacity exists only on policy-incompatible hardware."""
         driver = _driver()

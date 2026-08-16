@@ -44,6 +44,7 @@ from trace import (
     planner_finished,
     pool_window,
     placement_observed,
+    rank_failed,
     rank_window,
     resource_snapshot,
     run_finished,
@@ -390,6 +391,8 @@ class ClusterSimulator:
 
         running_jobs = self.jobs.running_jobs(self.user_id)
         for running in running_jobs:
+            if not running.ranks:
+                continue
             job = self._online_jobs.get(running.job.job_id)
             if job is None:
                 continue
@@ -440,6 +443,8 @@ class ClusterSimulator:
             )
 
         for running in running_jobs:
+            if not running.ranks:
+                continue
             job = self._batch_jobs.get(running.job.job_id)
             if job is None:
                 continue
@@ -498,6 +503,12 @@ class ClusterSimulator:
             result_offset += len(prepared.rank_runs)
             job_id = prepared.running.job.job_id
             job = self._online_jobs.get(job_id) or self._batch_jobs.get(job_id)
+            if any(
+                getattr(result, "status", "completed") == "oom"
+                for result in job_results
+            ):
+                self._fail_oom(prepared.running, job_results)
+                continue
             features = job.workload.get("features", {})
             attempted_request_count = sum(
                 rank_run.request_count for rank_run in prepared.rank_runs
@@ -905,6 +916,48 @@ class ClusterSimulator:
                     deadline_slo_met,
                 ),
             )
+
+    def _fail_oom(self, running, results) -> None:
+        """Mark only ranks that exceed simulated device memory as failed."""
+        from tandemn_system_data.models.enums import RankStatus, ReasonCode
+
+        oom_results = tuple(result for result in results if result.status == "oom")
+        oom_by_rank = {result.deployment.rank_name: result for result in oom_results}
+        trace_file = getattr(self, "trace_file", None)
+        for rank in running.ranks:
+            result = oom_by_rank.get(rank.rank_id)
+            if result is None:
+                continue
+            self.jobs.set_rank_status(
+                rank.rank_id,
+                RankStatus.FAILED,
+                [RankStatus.LAUNCHING, RankStatus.RUNNING],
+                reason_code=ReasonCode.OOM,
+            )
+            if trace_file is not None:
+                shape = getattr(rank, "shape_json", {})
+                gpu_count = (
+                    shape.get("gpu_count", shape.get("count"))
+                    if isinstance(shape, dict)
+                    else None
+                )
+                released_gpu_count = (
+                    gpu_count
+                    if isinstance(gpu_count, int) and not isinstance(gpu_count, bool)
+                    else None
+                )
+                error_detail = result.stderr or result.stdout or "LLMServingSim OOM"
+                append_event(
+                    trace_file,
+                    rank_failed(
+                        running.job.job_id,
+                        rank.rank_id,
+                        self.clock.now().isoformat(),
+                        ReasonCode.OOM,
+                        released_gpu_count,
+                        error_detail[-1_000:],
+                    ),
+                )
 
     def _hard_stop(self) -> None:
         """Cancel every job still running at the benchmark's logical hard stop."""

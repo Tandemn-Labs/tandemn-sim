@@ -41,8 +41,8 @@ class AgenticPlannerTest(unittest.TestCase):
 
         self.assertEqual(methods["methods"]["agentic"]["status"], "implemented")
 
-    def test_driver_builds_actions_without_another_scheduler(self) -> None:
-        """Create canonical actions through the independent agentic driver."""
+    def test_driver_excludes_terminal_jobs(self) -> None:
+        """Create actions without acting on terminal jobs."""
         driver = _driver()
         snapshot = StoreSnapshot(
             resources={
@@ -73,7 +73,6 @@ class AgenticPlannerTest(unittest.TestCase):
                 ("running", "keep"),
                 ("waiting", "place"),
                 ("paused", "defer"),
-                ("finished", "preempt"),
             ],
         )
         self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "bf16")

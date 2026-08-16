@@ -104,8 +104,8 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                     f"{hardware} exceeds market capacity at minute {offset}",
                 )
 
-    def test_waiting_jobs_reserve_capacity_greedily(self) -> None:
-        """Defer a later mapped job after the first consumes its hardware."""
+    def test_waiting_jobs_exclude_terminal_jobs(self) -> None:
+        """Defer a later mapped job without an action for a terminal job."""
         driver = _driver()
         first = "job-benchmark_timing_real_12hr_192gpu-0-1"
         second = "job-benchmark_timing_real_12hr_192gpu-0-2"
@@ -133,7 +133,6 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 (first, "place"),
                 (second, "defer"),
                 ("paused", "defer"),
-                ("finished", "preempt"),
             ],
         )
         placed = actions[1]

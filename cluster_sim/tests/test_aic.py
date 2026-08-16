@@ -125,8 +125,8 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertEqual(actions, [{"job_id": "job_1", "type": "defer"}])
         self.assertEqual(client.requests, [])
 
-    def test_best_hardware_and_complete_lifecycle_plan(self) -> None:
-        """Pick the highest-throughput hardware and include every Store job."""
+    def test_best_hardware_excludes_terminal_jobs(self) -> None:
+        """Pick hardware without producing an action for a terminal job."""
         job = _job("waiting")
         client = FakeAicClient(throughput={"h100_sxm": 300, "a100_sxm": 200})
         driver = _driver((job,), client)
@@ -153,7 +153,6 @@ class AicPlannerDriverTest(unittest.TestCase):
                 ("running", "keep"),
                 ("waiting", "place"),
                 ("paused", "defer"),
-                ("finished", "preempt"),
             ],
         )
         placed = actions[1]

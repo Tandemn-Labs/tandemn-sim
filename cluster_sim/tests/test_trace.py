@@ -24,6 +24,7 @@ from trace import (
     placement_observed,
     pool_window,
     read_events,
+    rank_failed,
     rank_window,
     resource_snapshot,
     run_finished,
@@ -266,6 +267,22 @@ class TracePathTest(unittest.TestCase):
 
         self.assertEqual(event["from_status"], "WAITING")
         self.assertEqual(event["to_status"], "RUNNING")
+
+    def test_rank_failed_records_oom_slo_and_released_capacity(self) -> None:
+        """Expose one rank-local failure without terminalizing its job."""
+        event = rank_failed(
+            "job-a",
+            "rank-a",
+            "2026-01-01T00:40:00+00:00",
+            "OOM",
+            8,
+            "Model size exceeds total NPU memory",
+        )
+
+        self.assertEqual(event["reason"], "OOM")
+        self.assertEqual(event["slo_outcome"], "failed")
+        self.assertEqual(event["released_gpu_count"], 8)
+        self.assertIn("memory", event["error_detail"])
 
     def test_gpu_sample_keeps_idle_store_telemetry(self) -> None:
         """Keep actual idle GPU rows distinct from pool-level zero filling."""

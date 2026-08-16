@@ -27,8 +27,8 @@ from policy import load_config_policy
 class GptPlannerDriverTest(unittest.TestCase):
     """Verify GPT decisions become complete canonical Store actions."""
 
-    def test_builds_complete_lifecycle_actions(self) -> None:
-        """Combine GPT placement fields with deterministic Store data."""
+    def test_builds_actions_without_terminal_jobs(self) -> None:
+        """Combine GPT placement fields without acting on terminal jobs."""
         driver = _driver()
         snapshot = StoreSnapshot(
             resources={
@@ -59,7 +59,6 @@ class GptPlannerDriverTest(unittest.TestCase):
                 ("running", "keep"),
                 ("waiting", "place"),
                 ("paused", "defer"),
-                ("finished", "preempt"),
             ],
         )
         placed = actions[1]
