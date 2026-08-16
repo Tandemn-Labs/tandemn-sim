@@ -27,7 +27,7 @@ from models import (
     Scenario,
 )
 from routing import StickyRoundRobinRouter
-from runner import ClusterSimulator, LogicalClock, advance_batch_progress
+from runner import ClusterSimulator, LogicalClock, advance_batch_progress, submit_waiting_job
 from scenario import load_scenario
 from serving import RankResult
 
@@ -252,6 +252,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator = object.__new__(ClusterSimulator)
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator.user_id = "user_1"
+        simulator.postgres = object()
         simulator.jobs = object()
         simulator._submitted_jobs = set()
         job = BatchJob(
@@ -272,7 +273,13 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
-            with patch("runner.submit_waiting_job"):
+            with (
+                patch(
+                    "tandemn_system_data.clients.ModelCatalogStore",
+                    return_value=SimpleNamespace(get=lambda _: None),
+                ),
+                patch("runner.submit_waiting_job"),
+            ):
                 simulator._submit(job)
 
             event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[0])
@@ -280,6 +287,69 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(event["job_kind"], "batch")
         self.assertEqual(event["submitted_at"], "2026-01-01T00:01:00+00:00")
         self.assertEqual(event["deadline_at"], "2026-01-01T01:01:00+00:00")
+
+    def test_submit_uses_model_catalog_prefix_cache_setting(self) -> None:
+        """Pass the catalog's prefix-cache setting into the submitted job spec."""
+        job = OnlineJob(
+            "online-a",
+            "job-a",
+            "model-a",
+            0,
+            60_000_000_000,
+            {"features": {}},
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.jobs = object()
+        simulator._submitted_jobs = set()
+
+        for catalog_value, expected in ((True, True), (False, False), (None, False)):
+            with self.subTest(catalog_value=catalog_value):
+                catalog = (
+                    None
+                    if catalog_value is None
+                    else SimpleNamespace(prefix_cache_enabled=catalog_value)
+                )
+                with (
+                    patch(
+                        "tandemn_system_data.clients.ModelCatalogStore",
+                        return_value=SimpleNamespace(get=lambda _: catalog),
+                    ),
+                    patch("runner.submit_waiting_job") as submit,
+                ):
+                    simulator._submit(job)
+
+                self.assertEqual(submit.call_args.kwargs["prefix_cache_enabled"], expected)
+                simulator._submitted_jobs.clear()
+
+    def test_submit_preserves_catalog_prefix_cache_setting(self) -> None:
+        """Keep the catalog-derived setting in canonical Store job metadata."""
+        job = OnlineJob(
+            "online-a",
+            "job-a",
+            "model-a",
+            0,
+            60_000_000_000,
+            {
+                "features": {
+                    "target_p99_ttft_ms": 100,
+                    "target_p99_tpot_ms": 10,
+                }
+            },
+        )
+        submitted = []
+
+        submit_waiting_job(
+            job,
+            "user-a",
+            SimpleNamespace(submit=submitted.append),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            prefix_cache_enabled=True,
+        )
+
+        self.assertTrue(submitted[0].spec_json["prefix_cache_enabled"])
 
     def test_finish_trace_records_batch_deadline_outcome(self) -> None:
         """Use the simulation clock, not Store wall time, for batch completion."""
