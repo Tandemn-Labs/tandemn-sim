@@ -151,6 +151,27 @@ def job_state_changed(
     }
 
 
+def rank_failed(
+    job_id: str,
+    rank_id: str,
+    failed_at: str,
+    reason: str,
+    released_gpu_count: int | None,
+    error_detail: str,
+) -> dict[str, object]:
+    """Build one rank-local failure with its SLO and capacity effects."""
+    return {
+        "kind": "rank_failed",
+        "job_id": job_id,
+        "rank_id": rank_id,
+        "failed_at": failed_at,
+        "reason": reason,
+        "slo_outcome": "failed",
+        "released_gpu_count": released_gpu_count,
+        "error_detail": error_detail,
+    }
+
+
 def rank_window(
     tick: int,
     job_id: str,
