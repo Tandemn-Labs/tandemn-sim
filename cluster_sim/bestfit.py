@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
 from rank_ids import rank_id
@@ -1124,29 +1124,12 @@ class BestFitPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
-        finished = tuple(self._finished_jobs())
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
             waiting_jobs=tuple(_model_payload(job) for job in waiting),
             paused_jobs=tuple(_model_payload(job) for job in paused),
-            finished_jobs=tuple(_model_payload(job) for job in finished),
-        )
-
-    def _finished_jobs(self) -> Sequence[object]:
-        """Read terminal jobs through the Store's available lifecycle API."""
-        reader = getattr(self.job_store, "finished_jobs", None)
-        if callable(reader):
-            return cast(Sequence[object], reader(self.user_id))
-        status_reader = getattr(self.job_store, "_jobs_with_status", None)
-        if not callable(status_reader):
-            raise RuntimeError("JobStore does not expose finished jobs")
-
-        from tandemn_system_data.models import JobStatus
-
-        return cast(
-            Sequence[object],
-            status_reader(self.user_id, JobStatus.FINISHED),
+            finished_jobs=(),
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
@@ -1189,8 +1172,6 @@ class BestFitPlannerDriver:
             )
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
-        for finished in snapshot.finished_jobs:
-            actions.append({"job_id": finished["job_id"], "type": "preempt"})
         _validate_complete_job_actions(snapshot, actions)
         return actions
 
@@ -1487,7 +1468,6 @@ def _validate_complete_job_actions(
         snapshot.running_jobs,
         snapshot.waiting_jobs,
         snapshot.paused_jobs,
-        snapshot.finished_jobs,
     ):
         store_ids.extend(_text(job.get("job_id"), "Store job_id") for job in jobs)
     action_ids = [_text(action.get("job_id"), "plan job_id") for action in actions]
