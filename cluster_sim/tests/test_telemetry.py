@@ -136,6 +136,28 @@ class MetricValueTest(unittest.TestCase):
         self.assertEqual(observation["physical_sm_utilization_percent"], 15.0)
         self.assertEqual(observation["telemetry_coverage_percent"], 75.0)
 
+    def test_uses_latest_non_null_sm_sample_per_gpu(self) -> None:
+        """Do not let a later sparse cache summary erase an SM observation."""
+        started_at = datetime(2026, 1, 1, tzinfo=UTC)
+        rows = (
+            SimpleNamespace(
+                gpu_uuid="GPU-1",
+                ts=started_at,
+                sm_utilization=100.0,
+            ),
+            SimpleNamespace(
+                gpu_uuid="GPU-1",
+                ts=started_at + timedelta(seconds=10),
+                sm_utilization=None,
+                kvcache_hit_rate=0.5,
+            ),
+        )
+
+        observation = pool_telemetry(8, 1, rows)
+
+        self.assertEqual(observation["reported_gpu_count"], 1)
+        self.assertEqual(observation["physical_sm_utilization_percent"], 12.5)
+
     def test_empty_existing_pool_has_zero_utilization(self) -> None:
         """Treat an existing unoccupied ResourceMap pool as zero utilization."""
         observation = pool_telemetry(8, 0, ())

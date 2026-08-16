@@ -226,19 +226,22 @@ def pool_telemetry(
     allocated_gpu_count: int,
     rows: Iterable[Any],
 ) -> dict[str, int | float]:
-    """Summarize one existing ResourceMap pool with absent GPUs counted as zero."""
-    latest_by_gpu = {}
+    """Summarize a pool using each GPU's latest valid SM sample."""
+    reported_gpu_ids = set()
+    latest_sm_by_gpu = {}
     for row in rows:
         gpu_uuid = getattr(row, "gpu_uuid", None)
         if gpu_uuid is None:
             continue
-        previous = latest_by_gpu.get(gpu_uuid)
-        if previous is None or row.ts > previous.ts:
-            latest_by_gpu[gpu_uuid] = row
-    reported_gpu_count = len(latest_by_gpu)
-    sm_utilization_sum = sum(
-        _metric_value(row, "sm_utilization") or 0.0 for row in latest_by_gpu.values()
-    )
+        reported_gpu_ids.add(gpu_uuid)
+        sm_utilization = _metric_value(row, "sm_utilization")
+        if sm_utilization is None:
+            continue
+        previous = latest_sm_by_gpu.get(gpu_uuid)
+        if previous is None or row.ts > previous[0]:
+            latest_sm_by_gpu[gpu_uuid] = (row.ts, sm_utilization)
+    reported_gpu_count = len(reported_gpu_ids)
+    sm_utilization_sum = sum(value for _, value in latest_sm_by_gpu.values())
     return {
         "expected_gpu_count": expected_gpu_count,
         "reported_gpu_count": reported_gpu_count,
