@@ -316,8 +316,17 @@ class ClusterSimulator:
 
     def _submit(self, job: OnlineJob | BatchJob) -> None:
         """Persist one waiting job with its exact logical benchmark release time."""
+        from tandemn_system_data.clients import ModelCatalogStore
+
         submitted_at = self.clock.start + timedelta(microseconds=self._release_ns(job) // 1_000)
-        submit_waiting_job(job, self.user_id, self.jobs, submitted_at)
+        catalog = ModelCatalogStore(self.postgres).get(job.model_name)
+        submit_waiting_job(
+            job,
+            self.user_id,
+            self.jobs,
+            submitted_at,
+            prefix_cache_enabled=bool(catalog and catalog.prefix_cache_enabled),
+        )
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
             features = job.workload["features"]
@@ -1002,6 +1011,8 @@ def submit_waiting_job(
     user_id: str,
     job_store: object,
     submitted_at: datetime,
+    *,
+    prefix_cache_enabled: bool = False,
 ) -> None:
     """Submit one released benchmark job with its logical submission time."""
     from tandemn_orca.scripts.submit_job import normalize_job_spec
@@ -1011,6 +1022,7 @@ def submit_waiting_job(
     spec_json = normalize_job_spec(
         {
             "model_id": job.model_name,
+            "prefix_cache_enabled": prefix_cache_enabled,
             "job_features": dict(job.workload["features"]),
         },
         kind,
