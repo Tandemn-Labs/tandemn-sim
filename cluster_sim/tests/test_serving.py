@@ -35,7 +35,7 @@ from serving import (
     _read_metric_samples,
     _run_rank,
     _run_summary,
-    _tick_kvcache_hit_rate,
+    _kvcache_hit_rate,
     write_rank_workload,
 )
 
@@ -618,10 +618,9 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(replica_zero[0].p99_ttft_ms, 100.0)
         self.assertEqual(replica_zero[0].kv_cache_util, 0.5)
 
-        tick_summary = [metric for metric in metrics if metric.kvcache_hit_rate is not None]
-        self.assertEqual(len(tick_summary), 4)
-        self.assertTrue(all(metric.kvcache_hit_rate == 125 / 300 for metric in tick_summary))
-        self.assertTrue(all(metric.kv_cache_util is None for metric in tick_summary))
+        self.assertTrue(
+            all(metric.kvcache_hit_rate == 125 / 300 for metric in periodic)
+        )
 
     def test_completed_request_summary_merges_rows_across_ranks(self) -> None:
         """Calculate one percentile from all completed job requests."""
@@ -671,10 +670,10 @@ class ServingInputTest(unittest.TestCase):
             {"npu_prefix_hit_tokens": 90, "prefix_cache_requested_tokens": 90},
         )
 
-        self.assertEqual(_tick_kvcache_hit_rate(rows), 91 / 100)
-        self.assertIsNone(_tick_kvcache_hit_rate(()))
+        self.assertEqual(_kvcache_hit_rate(rows), 91 / 100)
+        self.assertIsNone(_kvcache_hit_rate(()))
         with self.assertRaises(ValueError):
-            _tick_kvcache_hit_rate(
+            _kvcache_hit_rate(
                 ({"npu_prefix_hit_tokens": 11, "prefix_cache_requested_tokens": 10},)
             )
 

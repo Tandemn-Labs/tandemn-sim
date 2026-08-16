@@ -613,7 +613,7 @@ def gpu_metrics_from_results(
         instance_type = str(shape["instance_type"])
         target_ttft = float(shape.get("target_p99_ttft_ms", 0))
         price_per_hour = price_by_instance_type.get(instance_type)
-        tick_kvcache_hit_rate = _tick_kvcache_hit_rate(result.request_rows)
+        prefix_cache_enabled = bool(shape.get("prefix_cache_enabled", False))
         samples = _latest_samples_per_bucket(result.metric_samples, tick_duration_ns)
 
         for instance_id, binding in enumerate(deployment.chains):
@@ -624,6 +624,7 @@ def gpu_metrics_from_results(
                     for name, value in sample.metrics.items()
                     if name in GpuMetric.model_fields and name != "kvcache_hit_rate"
                 }
+                interval_rows = _completed_in_sample(result.request_rows, sample)
                 observed = _observed_y(
                     _completed_in_sample(rows, sample),
                     sample.sample_interval_ns,
@@ -631,7 +632,15 @@ def gpu_metrics_from_results(
                     price_per_hour,
                     shape.get("task"),
                 )
-                values = {**direct, **observed}
+                values = {
+                    **direct,
+                    **observed,
+                    "kvcache_hit_rate": (
+                        _kvcache_hit_rate(interval_rows)
+                        if prefix_cache_enabled
+                        else None
+                    ),
+                }
                 for local_rank in range(binding.gpu_count):
                     metrics.append(
                         GpuMetric(
@@ -647,25 +656,6 @@ def gpu_metrics_from_results(
                             instance_type=instance_type,
                             model_name=deployment.model_name,
                             **values,
-                        )
-                    )
-
-            if tick_kvcache_hit_rate is not None:
-                for local_rank in range(binding.gpu_count):
-                    metrics.append(
-                        GpuMetric(
-                            ts=_logical_sample_time(tick_start, tick_duration_ns - 1_000),
-                            job_id=job.job_id,
-                            gpu_uuid=(
-                                f"sim:{binding.rank_id}:{binding.chain_index}:{local_rank}"
-                            ),
-                            rank_id=binding.rank_id,
-                            chain_index=binding.chain_index,
-                            local_rank=str(local_rank),
-                            role="aggregate",
-                            instance_type=instance_type,
-                            model_name=deployment.model_name,
-                            kvcache_hit_rate=tick_kvcache_hit_rate,
                         )
                     )
     return metrics
@@ -707,8 +697,8 @@ def _logical_sample_time(tick_start: datetime, sim_time_ns: int) -> datetime:
     return tick_start + timedelta(microseconds=max(0, sim_time_ns) // 1_000)
 
 
-def _tick_kvcache_hit_rate(rows: Sequence[dict[str, float]]) -> float | None:
-    """Return the token-weighted NPU prefix-cache hit rate for one rank tick."""
+def _kvcache_hit_rate(rows: Sequence[dict[str, float]]) -> float | None:
+    """Return the token-weighted NPU prefix-cache hit rate for request rows."""
     requested = sum(row.get("prefix_cache_requested_tokens", 0.0) for row in rows)
     hits = sum(row.get("npu_prefix_hit_tokens", 0.0) for row in rows)
     if requested <= 0:
