@@ -100,7 +100,7 @@ class BatchProbeMeasurementTest(unittest.TestCase):
 class BatchProbeMetricTest(unittest.TestCase):
     """Verify stationary batch metrics come from the representative probe."""
 
-    def test_prefers_weighted_periodic_metrics_over_final_state(self) -> None:
+    def test_prefers_latest_periodic_metrics_over_final_state(self) -> None:
         deployment = SimpleNamespace(
             chains=(object(),),
             shape={"target_p99_ttft_ms": 100, "prefix_cache_enabled": False},
@@ -153,7 +153,7 @@ class BatchProbeMetricTest(unittest.TestCase):
 
         metrics = batch_probe_chain_metrics(result, measurement, 36.0)
 
-        self.assertAlmostEqual(metrics[0]["kv_cache_util"], 0.4)
+        self.assertEqual(metrics[0]["kv_cache_util"], 0.6)
         self.assertEqual(metrics[0]["throughput_token_per_sec"], 1.5)
         self.assertEqual(metrics[0]["p99_ttft_ms"], 19.9)
 
