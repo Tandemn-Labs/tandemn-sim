@@ -761,6 +761,69 @@ def gpu_metrics_from_results(
     return metrics
 
 
+def batch_probe_chain_metrics(
+    result: RankResult,
+    measurement: BatchProbeMeasurement,
+    price_per_hour: float | None,
+) -> dict[int, dict[str, float | None]]:
+    """Build one stationary metric set for each chain in a batch probe."""
+    from tandemn_system_data.models import GpuMetric
+
+    shape = result.deployment.shape
+    target_ttft = float(shape.get("target_p99_ttft_ms", 0))
+    prefix_cache_enabled = bool(shape.get("prefix_cache_enabled", False))
+    metrics = {}
+    for instance_id in range(len(result.deployment.chains)):
+        rows = tuple(
+            row
+            for row in result.request_rows
+            if int(row["instance id"]) == instance_id
+        )
+        samples = _stationary_probe_samples(result.metric_samples, instance_id)
+        direct = {
+            name: value
+            for name, value in _time_weighted_metrics(samples).items()
+            if name in GpuMetric.model_fields and name != "kvcache_hit_rate"
+        }
+        metrics[instance_id] = {
+            **direct,
+            **_observed_y(
+                rows,
+                measurement.horizon_ns,
+                target_ttft,
+                price_per_hour,
+                shape.get("task"),
+            ),
+            "kvcache_hit_rate": _kvcache_hit_rate(rows) if prefix_cache_enabled else None,
+        }
+    return metrics
+
+
+def _stationary_probe_samples(
+    samples: Sequence[RankMetricSample],
+    instance_id: int,
+) -> tuple[RankMetricSample, ...]:
+    """Prefer steady-state samples and use the final sample only as fallback."""
+    matching = tuple(sample for sample in samples if sample.instance_id == instance_id)
+    periodic = tuple(sample for sample in matching if sample.sample_kind == "periodic")
+    return periodic or matching
+
+
+def _time_weighted_metrics(
+    samples: Sequence[RankMetricSample],
+) -> dict[str, float]:
+    """Return interval-weighted means for finite probe metrics."""
+    totals: dict[str, float] = {}
+    durations: dict[str, int] = {}
+    for sample in samples:
+        for name, value in sample.metrics.items():
+            if value is None:
+                continue
+            totals[name] = totals.get(name, 0.0) + value * sample.sample_interval_ns
+            durations[name] = durations.get(name, 0) + sample.sample_interval_ns
+    return {name: total / durations[name] for name, total in totals.items()}
+
+
 def _latest_samples_per_bucket(
     samples: Sequence[RankMetricSample], tick_duration_ns: int
 ) -> dict[int, tuple[RankMetricSample, ...]]:
