@@ -25,6 +25,7 @@ from serving import (
     RankRun,
     RankResult,
     batch_probe_measurements,
+    batch_probe_chain_metrics,
     build_rank_cluster,
     build_rank_deployments,
     merge_hardware_catalogs,
@@ -94,6 +95,102 @@ class BatchProbeMeasurementTest(unittest.TestCase):
         )
 
         self.assertEqual(batch_probe_measurements((result,)), ())
+
+
+class BatchProbeMetricTest(unittest.TestCase):
+    """Verify stationary batch metrics come from the representative probe."""
+
+    def test_prefers_weighted_periodic_metrics_over_final_state(self) -> None:
+        deployment = SimpleNamespace(
+            chains=(object(),),
+            shape={"target_p99_ttft_ms": 100, "prefix_cache_enabled": False},
+        )
+        result = RankResult(
+            deployment=deployment,
+            request_rows=(
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+                {
+                    "instance id": 0,
+                    "input": 200,
+                    "output": 20,
+                    "end_time": 20_000_000_000,
+                    "TTFT": 20_000_000,
+                    "TPOT": 2_000_000,
+                },
+            ),
+            metric_samples=(
+                RankMetricSample(
+                    10_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.2},
+                ),
+                RankMetricSample(
+                    20_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.6},
+                ),
+                RankMetricSample(
+                    21_000_000_000,
+                    21_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.0},
+                    "final",
+                ),
+            ),
+            stdout="",
+            stderr="",
+        )
+        measurement = BatchProbeMeasurement(deployment, 20_000_000_000, 2, 30)
+
+        metrics = batch_probe_chain_metrics(result, measurement, 36.0)
+
+        self.assertAlmostEqual(metrics[0]["kv_cache_util"], 0.4)
+        self.assertEqual(metrics[0]["throughput_token_per_sec"], 1.5)
+        self.assertEqual(metrics[0]["p99_ttft_ms"], 19.9)
+
+    def test_uses_final_metrics_when_the_probe_has_no_periodic_sample(self) -> None:
+        deployment = SimpleNamespace(
+            chains=(object(),),
+            shape={"target_p99_ttft_ms": 100},
+        )
+        result = RankResult(
+            deployment=deployment,
+            request_rows=(
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 5_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+            ),
+            metric_samples=(
+                RankMetricSample(
+                    5_000_000_000,
+                    5_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.8},
+                    "final",
+                ),
+            ),
+            stdout="",
+            stderr="",
+        )
+        measurement = BatchProbeMeasurement(deployment, 5_000_000_000, 1, 10)
+
+        metrics = batch_probe_chain_metrics(result, measurement, None)
+
+        self.assertEqual(metrics[0]["kv_cache_util"], 0.8)
 
 
 class ServingInputTest(unittest.TestCase):
