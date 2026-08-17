@@ -779,10 +779,10 @@ def batch_probe_chain_metrics(
             for row in result.request_rows
             if int(row["instance id"]) == instance_id
         )
-        samples = _stationary_probe_samples(result.metric_samples, instance_id)
+        sample = _stationary_probe_sample(result.metric_samples, instance_id)
         direct = {
             name: value
-            for name, value in _time_weighted_metrics(samples).items()
+            for name, value in (sample.metrics if sample is not None else {}).items()
             if name in GpuMetric.model_fields and name != "kvcache_hit_rate"
         }
         metrics[instance_id] = {
@@ -799,29 +799,14 @@ def batch_probe_chain_metrics(
     return metrics
 
 
-def _stationary_probe_samples(
+def _stationary_probe_sample(
     samples: Sequence[RankMetricSample],
     instance_id: int,
-) -> tuple[RankMetricSample, ...]:
+) -> RankMetricSample | None:
     """Prefer steady-state samples and use the final sample only as fallback."""
     matching = tuple(sample for sample in samples if sample.instance_id == instance_id)
     periodic = tuple(sample for sample in matching if sample.sample_kind == "periodic")
-    return periodic or matching
-
-
-def _time_weighted_metrics(
-    samples: Sequence[RankMetricSample],
-) -> dict[str, float]:
-    """Return interval-weighted means for finite probe metrics."""
-    totals: dict[str, float] = {}
-    durations: dict[str, int] = {}
-    for sample in samples:
-        for name, value in sample.metrics.items():
-            if value is None:
-                continue
-            totals[name] = totals.get(name, 0.0) + value * sample.sample_interval_ns
-            durations[name] = durations.get(name, 0) + sample.sample_interval_ns
-    return {name: total / durations[name] for name, total in totals.items()}
+    return max(periodic or matching, key=lambda sample: sample.sim_time_ns, default=None)
 
 
 def _latest_samples_per_bucket(
