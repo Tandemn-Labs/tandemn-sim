@@ -268,8 +268,8 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["from_status"], "WAITING")
         self.assertEqual(event["to_status"], "RUNNING")
 
-    def test_rank_failed_records_oom_slo_and_released_capacity(self) -> None:
-        """Expose one rank-local failure without terminalizing its job."""
+    def test_rank_failed_records_oom_degradation_and_released_capacity(self) -> None:
+        """Expose one rank-local failure without declaring a job SLO outcome."""
         event = rank_failed(
             "job-a",
             "rank-a",
@@ -280,7 +280,8 @@ class TracePathTest(unittest.TestCase):
         )
 
         self.assertEqual(event["reason"], "OOM")
-        self.assertEqual(event["slo_outcome"], "failed")
+        self.assertEqual(event["service_impact"], "degraded")
+        self.assertNotIn("slo_outcome", event)
         self.assertEqual(event["released_gpu_count"], 8)
         self.assertIn("memory", event["error_detail"])
 

@@ -390,11 +390,17 @@ class RunnerDataPlaneTest(unittest.TestCase):
         """Mark only the OOM rank failed so Koi can repair the job."""
         rank_calls = []
         job_calls = []
+        removed_assignments = []
         simulator = object.__new__(ClusterSimulator)
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator.jobs = SimpleNamespace(
             set_rank_status=lambda *args, **kwargs: rank_calls.append((args, kwargs)),
             fail=lambda *args, **kwargs: job_calls.append((args, kwargs)),
+        )
+        simulator._router = SimpleNamespace(
+            remove_rank=lambda job_name, rank_name: removed_assignments.append(
+                (job_name, rank_name)
+            )
         )
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a"),
@@ -420,7 +426,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
-            simulator._fail_oom(running, results)
+            simulator._fail_oom(running, "online", results)
             events = [
                 json.loads(line)
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
@@ -431,8 +437,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(rank_calls[0][0][1], "failed")
         self.assertEqual(rank_calls[0][1]["reason_code"], "OOM")
         self.assertEqual(job_calls, [])
+        self.assertEqual(removed_assignments, [("online", "rank-oom")])
         self.assertEqual(events[0]["kind"], "rank_failed")
-        self.assertEqual(events[0]["slo_outcome"], "failed")
+        self.assertEqual(events[0]["service_impact"], "degraded")
         self.assertEqual(events[0]["released_gpu_count"], 8)
 
     def test_hard_stop_trace_marks_batch_as_unsuccessful(self) -> None:
@@ -614,47 +621,63 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ],
         )
 
-    def test_oom_rank_does_not_abort_healthy_job_work(self) -> None:
-        """Fail an OOM rank while healthy jobs finish their tick work."""
-        oom_job = OnlineJob("oom", "job-a", "model", 0, 300_000_000_000, {"features": {}})
-        healthy_job = OnlineJob("healthy", "job-b", "model", 0, 300_000_000_000, {"features": {}})
-        oom_running = SimpleNamespace(
+    def test_oom_rank_requeues_failed_requests_and_preserves_siblings(self) -> None:
+        """Retry failed-rank traffic while preserving healthy-rank work."""
+        job = OnlineJob("online", "job-a", "model", 0, 300_000_000_000, {"features": {}})
+        running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a", spec_json={"model_id": "model"}),
-            ranks=(SimpleNamespace(rank_id="rank-oom"),),
-        )
-        healthy_running = SimpleNamespace(
-            job=SimpleNamespace(job_id="job-b", spec_json={"model_id": "model"}),
-            ranks=(SimpleNamespace(rank_id="rank-healthy"),),
+            ranks=(
+                SimpleNamespace(
+                    rank_id="rank-oom",
+                    shape_json={
+                        "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
+                        "instance_type": "g6e.48xlarge",
+                        "count": 3,
+                        "gpu_count": 3,
+                    },
+                ),
+                SimpleNamespace(
+                    rank_id="rank-healthy",
+                    shape_json={
+                        "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
+                        "instance_type": "g6e.48xlarge",
+                        "count": 2,
+                        "gpu_count": 2,
+                    },
+                ),
+            ),
         )
         rank_calls = []
-        metrics = []
         simulator = object.__new__(ClusterSimulator)
         simulator.scenario = Scenario(
             "oom",
             300_000_000_000,
             300_000_000_000,
-            (oom_job, healthy_job),
+            (job,),
             (),
         )
         simulator.user_id = "user-a"
         simulator.postgres = object()
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator.jobs = SimpleNamespace(
-            running_jobs=lambda user_id: (oom_running, healthy_running),
+            running_jobs=lambda user_id: (running,),
             set_rank_status=lambda *args, **kwargs: rank_calls.append((args, kwargs)),
         )
         simulator.llmservingsim_root = Path(tempfile.gettempdir())
         simulator.parallel_simulators = 1
+        simulator._router = StickyRoundRobinRouter()
         simulator._traffic_starts = {}
         simulator._requests = {
-            "job-a": (Request("request-a", "session", 0, 0, 1, 1, None),),
-            "job-b": (Request("request-b", "session", 0, 0, 1, 1, None),)
+            "job-a": (
+                Request("request-oom", "oom-session", 0, 0, 1, 1, None),
+                Request("request-healthy", "healthy-session", 0, 0, 1, 1, None),
+            ),
         }
-        simulator._online_jobs = {"job-a": oom_job, "job-b": healthy_job}
-        simulator._online_backlog = {"job-a": (), "job-b": ()}
+        simulator._online_jobs = {"job-a": job}
+        simulator._online_backlog = {"job-a": ()}
         simulator._batch_jobs = {}
         simulator._batch_progress = {}
-        simulator.trace_file = None
+        metric_calls = []
 
         class HardwareCatalogStore:
             def __init__(self, postgres) -> None:
@@ -670,7 +693,26 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 pass
 
             def get(self):
-                return SimpleNamespace(scheduling_summary=lambda: {})
+                return SimpleNamespace(
+                    scheduling_summary=lambda: {
+                        "reserved|aws|us-east-1|us-east-1a|L40S": {
+                            "pools": [
+                                {
+                                    "fabric_id": "efa",
+                                    "instance_type": "g6e.48xlarge",
+                                    "total": 16,
+                                    "total_instances": 2,
+                                    "gpus_per_instance": 8,
+                                    "price_per_instance_hour": 10.0,
+                                }
+                            ]
+                        }
+                    }
+                )
+
+        class GpuMetricStore:
+            def __init__(self, postgres) -> None:
+                pass
 
         oom_rank_run = SimpleNamespace(
             deployment=SimpleNamespace(rank_name="rank-oom"),
@@ -691,34 +733,51 @@ class RunnerDataPlaneTest(unittest.TestCase):
         healthy_result = SimpleNamespace(
             status="completed",
             deployment=healthy_rank_run.deployment,
-            request_rows=(),
-            completed_requests=(),
+            request_rows=(
+                {"TTFT": 1, "TPOT": 1, "output": 1, "end_time": 1},
+            ),
+            completed_requests=(simulator._requests["job-a"][1],),
             stdout="",
             stderr="",
         )
 
-        with (
-            patch("tandemn_system_data.clients.HardwareCatalogStore", HardwareCatalogStore),
-            patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
-            patch.object(
-                simulator,
-                "_prepare_job_runs",
-                side_effect=lambda running, *args: (
-                    (oom_rank_run,)
-                    if running.job.job_id == "job-a"
-                    else (healthy_rank_run,)
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with (
+                patch("tandemn_system_data.clients.HardwareCatalogStore", HardwareCatalogStore),
+                patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
+                patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
+                patch.object(
+                    simulator,
+                    "_prepare_job_runs",
+                    return_value=(oom_rank_run, healthy_rank_run),
                 ),
-            ),
-            patch("runner.run_ranks", return_value=(oom_result, healthy_result)),
-            patch(
-                "runner.gpu_metrics_from_results",
-                side_effect=lambda *args: metrics.append(args) or [],
-            ),
-        ):
-            simulator._simulate_tick(0, 0, 300_000_000_000)
+                patch("runner.run_ranks", return_value=(oom_result, healthy_result)),
+                patch("runner.collect_rank_telemetry", return_value=([], {})),
+                patch("runner.commit_tick_metrics"),
+                patch(
+                    "runner.gpu_metrics_from_results",
+                    side_effect=lambda *args: metric_calls.append(args)
+                    or [SimpleNamespace(job_id="job-a")],
+                ),
+            ):
+                simulator._simulate_tick(0, 0, 300_000_000_000)
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+            ]
 
         self.assertEqual(rank_calls[0][0][0], "rank-oom")
-        self.assertEqual([call[0].job_id for call in metrics], ["job-b"])
+        self.assertEqual([call[0].job_id for call in metric_calls], ["job-a"])
+        self.assertEqual(metric_calls[0][1], (healthy_rank_run.deployment,))
+        self.assertEqual(
+            [request.request_name for request in simulator._online_backlog["job-a"]],
+            ["request-oom"],
+        )
+        pool_event = next(event for event in events if event["kind"] == "pool_window")
+        cluster_event = next(event for event in events if event["kind"] == "cluster_window")
+        self.assertEqual(pool_event["allocated_gpu_count"], 2)
+        self.assertEqual(cluster_event["allocated_gpu_hours"], 2 * 300 / 3600)
 
     def test_rankless_running_job_is_skipped(self) -> None:
         """Wait for a planner replacement instead of routing into no ranks."""

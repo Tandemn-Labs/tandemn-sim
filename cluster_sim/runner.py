@@ -496,6 +496,7 @@ class ClusterSimulator:
         batch_progress_updates = {}
         finished_batch = []
         request_summaries = {}
+        failed_rank_ids = set()
         for prepared in prepared_jobs:
             job_results = results[
                 result_offset : result_offset + len(prepared.rank_runs)
@@ -503,18 +504,30 @@ class ClusterSimulator:
             result_offset += len(prepared.rank_runs)
             job_id = prepared.running.job.job_id
             job = self._online_jobs.get(job_id) or self._batch_jobs.get(job_id)
+            result_pairs = tuple(zip(prepared.rank_runs, job_results, strict=True))
             if any(
                 getattr(result, "status", "completed") == "oom"
-                for result in job_results
+                for _, result in result_pairs
             ):
-                self._fail_oom(prepared.running, job_results)
-                continue
+                failed_rank_ids.update(
+                    result.deployment.rank_name
+                    for _, result in result_pairs
+                    if getattr(result, "status", "completed") == "oom"
+                )
+                self._fail_oom(prepared.running, job.name, job_results)
+            active_pairs = tuple(
+                (rank_run, result)
+                for rank_run, result in result_pairs
+                if getattr(result, "status", "completed") != "oom"
+            )
+            active_rank_runs = tuple(rank_run for rank_run, _ in active_pairs)
+            active_results = tuple(result for _, result in active_pairs)
             features = job.workload.get("features", {})
             attempted_request_count = sum(
                 rank_run.request_count for rank_run in prepared.rank_runs
             )
             request_summary = completed_request_summary(
-                job_results,
+                active_results,
                 features.get("target_p99_ttft_ms"),
                 features.get("target_p99_tpot_ms"),
                 job.workload.get("task", "generate"),
@@ -535,7 +548,7 @@ class ClusterSimulator:
                 "admitted_request_count": (
                     sum(
                         request.request_name not in backlog_names
-                        for result in job_results
+                        for result in active_results
                         for request in getattr(result, "admitted_requests", ())
                     ) if prepared.online_requests is not None else None
                 ),
@@ -552,10 +565,8 @@ class ClusterSimulator:
             metrics.extend(
                 gpu_metrics_from_results(
                     prepared.running.job,
-                    tuple(
-                        rank_run.deployment for rank_run in prepared.rank_runs
-                    ),
-                    job_results,
+                    tuple(rank_run.deployment for rank_run in active_rank_runs),
+                    active_results,
                     tick_start,
                     self.scenario.tick_duration_ns,
                     prices,
@@ -564,7 +575,7 @@ class ClusterSimulator:
             if prepared.online_requests is not None:
                 completed_names = {
                     request.request_name
-                    for result in job_results
+                    for result in active_results
                     for request in result.completed_requests
                 }
                 unfinished = tuple(
@@ -592,10 +603,12 @@ class ClusterSimulator:
             staged_progress = replace(progress)
             projected_completed = advance_batch_progress(
                 staged_progress,
-                job_results,
+                active_results,
                 self.scenario.tick_duration_ns,
                 start_offset_ns,
-                attempted_requests=attempted_request_count,
+                attempted_requests=sum(
+                    rank_run.request_count for rank_run in active_rank_runs
+                ),
             )
             if completed_request_count:
                 for metric in ("ttft", "tpot", "slo"):
@@ -752,6 +765,8 @@ class ClusterSimulator:
                 pool_by_rank = {}
                 for running in running_jobs:
                     for rank in running.ranks:
+                        if rank.rank_id in failed_rank_ids:
+                            continue
                         shape = rank.shape_json
                         env = shape.get("env")
                         if not isinstance(env, list):
@@ -917,7 +932,7 @@ class ClusterSimulator:
                 ),
             )
 
-    def _fail_oom(self, running, results) -> None:
+    def _fail_oom(self, running, job_name, results) -> None:
         """Mark only ranks that exceed simulated device memory as failed."""
         from tandemn_system_data.models.enums import RankStatus, ReasonCode
 
@@ -934,6 +949,7 @@ class ClusterSimulator:
                 [RankStatus.LAUNCHING, RankStatus.RUNNING],
                 reason_code=ReasonCode.OOM,
             )
+            self._router.remove_rank(job_name, rank.rank_id)
             if trace_file is not None:
                 shape = getattr(rank, "shape_json", {})
                 gpu_count = (
