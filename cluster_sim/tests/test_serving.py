@@ -30,6 +30,7 @@ from serving import (
     completed_request_summary,
     gpu_metrics_from_results,
     parse_rank_result,
+    profile_coverage_error,
     prepare_rank_run,
     resolve_rank_hardware,
     _read_metric_samples,
@@ -104,6 +105,20 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(deployment.shape["count"], 2)
         self.assertEqual(len(deployment.chains), 4)
         self.assertTrue(all(chain.gpu_count == 2 for chain in deployment.chains))
+
+    def test_profile_coverage_requires_requested_tp(self) -> None:
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment.shape["weight_dtype"] = "float16"
+        with tempfile.TemporaryDirectory() as directory:
+            profile = (
+                Path(directory)
+                / "profiler/perf/H100/meta-llama/Llama-3.1-8B-Instruct/fp16/tp2"
+            )
+            profile.mkdir(parents=True)
+            profile.parent.joinpath("meta.yaml").touch()
+            self.assertIsNone(profile_coverage_error(deployment, self.hardware, Path(directory)))
+            deployment.shape["tp"] = 3
+            self.assertIn("available_tp=[2]", profile_coverage_error(deployment, self.hardware, Path(directory)))
 
     def test_store_hardware_catalog_resolves_rank_profile(self) -> None:
         """Resolve one rank's Store catalog entry into H100 simulator facts."""

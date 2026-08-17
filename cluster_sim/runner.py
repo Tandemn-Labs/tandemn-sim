@@ -21,6 +21,7 @@ from serving import (
     completed_request_summary,
     gpu_metrics_from_results,
     merge_hardware_catalogs,
+    profile_coverage_error,
     prepare_rank_run,
     resolve_rank_hardware,
     run_ranks,
@@ -61,6 +62,13 @@ class _PreparedJob:
     batch_progress: BatchProgress | None = None
     online_requests: tuple[Request, ...] | None = None
     source_exhausted: bool = False
+
+
+@dataclass(frozen=True)
+class _RankFailure:
+    rank_id: str
+    reason_code: str
+    error_detail: str
 
 
 class LogicalClock:
@@ -388,6 +396,7 @@ class ClusterSimulator:
         tick_start = self.clock.now()
         prepared_jobs: list[_PreparedJob] = []
         finished_online = []
+        failed_rank_ids = set()
 
         running_jobs = self.jobs.running_jobs(self.user_id)
         for running in running_jobs:
@@ -426,17 +435,20 @@ class ClusterSimulator:
                 )
                 source_exhausted = relative_end >= duration
             requests = (*backlog, *fresh_requests)
+            rank_runs, failures = self._prepare_job_runs(
+                running,
+                job.name,
+                requests,
+                tick_number,
+                start_offset_ns,
+                catalog,
+            )
+            failed_rank_ids.update(failure.rank_id for failure in failures)
+            self._fail_ranks(running, job.name, failures)
             prepared_jobs.append(
                 _PreparedJob(
                     running,
-                    self._prepare_job_runs(
-                        running,
-                        job.name,
-                        requests,
-                        tick_number,
-                        start_offset_ns,
-                        catalog,
-                    ),
+                    rank_runs,
                     online_requests=requests,
                     source_exhausted=source_exhausted,
                 )
@@ -453,17 +465,20 @@ class ClusterSimulator:
                 replace(request, arrives_at_ns=start_offset_ns)
                 for request in build_batch_probe(job, progress)
             )
+            rank_runs, failures = self._prepare_job_runs(
+                running,
+                job.name,
+                probe,
+                tick_number,
+                start_offset_ns,
+                catalog,
+            )
+            failed_rank_ids.update(failure.rank_id for failure in failures)
+            self._fail_ranks(running, job.name, failures)
             prepared_jobs.append(
                 _PreparedJob(
                     running,
-                    self._prepare_job_runs(
-                        running,
-                        job.name,
-                        probe,
-                        tick_number,
-                        start_offset_ns,
-                        catalog,
-                    ),
+                    rank_runs,
                     batch_progress=progress,
                 )
             )
@@ -496,7 +511,6 @@ class ClusterSimulator:
         batch_progress_updates = {}
         finished_batch = []
         request_summaries = {}
-        failed_rank_ids = set()
         for prepared in prepared_jobs:
             job_results = results[
                 result_offset : result_offset + len(prepared.rank_runs)
@@ -833,9 +847,10 @@ class ClusterSimulator:
         tick_number: int,
         tick_start_ns: int,
         catalog,
-    ) -> tuple[RankRun, ...]:
+    ) -> tuple[tuple[RankRun, ...], tuple[_RankFailure, ...]]:
         """Prepare one job's rank simulations for the tick-wide worker pool."""
         from tandemn_system_data.clients import ModelCatalogStore
+        from tandemn_system_data.models.enums import ReasonCode
 
         deployments = build_rank_deployments(running.job, running.ranks)
         model_catalog = ModelCatalogStore(self.postgres).get(running.job.spec_json["model_id"])
@@ -848,6 +863,30 @@ class ClusterSimulator:
                 model_catalog.weight_quantization_method
             )
             deployment.shape["task"] = benchmark_job.workload.get("task", "generate")
+        failures = []
+        supported = []
+        for deployment in deployments:
+            try:
+                error_detail = profile_coverage_error(
+                    deployment,
+                    resolve_rank_hardware(deployment, catalog),
+                    self.llmservingsim_root,
+                )
+            except (FileNotFoundError, KeyError, ValueError) as error:
+                error_detail = f"PROFILE_UNAVAILABLE: {error}"
+            if error_detail is None:
+                supported.append(deployment)
+            else:
+                failures.append(
+                    _RankFailure(
+                        deployment.rank_name,
+                        ReasonCode.SOFTWARE_STACK_RANK_FAILURE,
+                        error_detail,
+                    )
+                )
+        deployments = tuple(supported)
+        if not deployments:
+            return (), tuple(failures)
         if len(deployments) == 1:
             rank_shares = {deployments[0].rank_name: 1.0}
         else:
@@ -886,8 +925,8 @@ class ClusterSimulator:
                 )
             )
         if not rank_runs:
-            return ()
-        return tuple(rank_runs)
+            return (), tuple(failures)
+        return tuple(rank_runs), tuple(failures)
 
     @staticmethod
     def _prices(resource_map) -> dict[str, float]:
@@ -932,48 +971,55 @@ class ClusterSimulator:
                 ),
             )
 
-    def _fail_oom(self, running, job_name, results) -> None:
-        """Mark only ranks that exceed simulated device memory as failed."""
-        from tandemn_system_data.models.enums import RankStatus, ReasonCode
+    def _fail_ranks(self, running, job_name, failures: tuple[_RankFailure, ...]) -> None:
+        """Mark rank-local failures while siblings continue serving the job."""
+        from tandemn_system_data.models.enums import RankStatus
 
-        oom_results = tuple(result for result in results if result.status == "oom")
-        oom_by_rank = {result.deployment.rank_name: result for result in oom_results}
+        failures_by_rank = {failure.rank_id: failure for failure in failures}
         trace_file = getattr(self, "trace_file", None)
         for rank in running.ranks:
-            result = oom_by_rank.get(rank.rank_id)
-            if result is None:
+            failure = failures_by_rank.get(rank.rank_id)
+            if failure is None:
                 continue
             self.jobs.set_rank_status(
                 rank.rank_id,
                 RankStatus.FAILED,
                 [RankStatus.LAUNCHING, RankStatus.RUNNING],
-                reason_code=ReasonCode.OOM,
+                reason_code=failure.reason_code,
             )
             self._router.remove_rank(job_name, rank.rank_id)
             if trace_file is not None:
                 shape = getattr(rank, "shape_json", {})
-                gpu_count = (
-                    shape.get("gpu_count", shape.get("count"))
-                    if isinstance(shape, dict)
-                    else None
-                )
-                released_gpu_count = (
-                    gpu_count
-                    if isinstance(gpu_count, int) and not isinstance(gpu_count, bool)
-                    else None
-                )
-                error_detail = result.stderr or result.stdout or "LLMServingSim OOM"
+                gpu_count = shape.get("gpu_count", shape.get("count")) if isinstance(shape, dict) else None
                 append_event(
                     trace_file,
                     rank_failed(
                         running.job.job_id,
                         rank.rank_id,
                         self.clock.now().isoformat(),
-                        ReasonCode.OOM,
-                        released_gpu_count,
-                        error_detail[-1_000:],
+                        failure.reason_code,
+                        gpu_count if isinstance(gpu_count, int) and not isinstance(gpu_count, bool) else None,
+                        failure.error_detail[-1_000:],
                     ),
                 )
+
+    def _fail_oom(self, running, job_name, results) -> None:
+        """Mark only ranks that exceed simulated device memory as failed."""
+        from tandemn_system_data.models.enums import ReasonCode
+
+        oom_results = tuple(result for result in results if result.status == "oom")
+        self._fail_ranks(
+            running,
+            job_name,
+            tuple(
+                _RankFailure(
+                    result.deployment.rank_name,
+                    ReasonCode.OOM,
+                    result.stderr or result.stdout or "LLMServingSim OOM",
+                )
+                for result in oom_results
+            ),
+        )
 
     def _hard_stop(self) -> None:
         """Cancel every job still running at the benchmark's logical hard stop."""
