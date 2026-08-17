@@ -83,6 +83,42 @@ class RankResult:
     admitted_requests: tuple[Request, ...] = ()
 
 
+@dataclass(frozen=True)
+class BatchProbeMeasurement:
+    """Completed work and elapsed simulation time from one batch rank probe."""
+
+    deployment: RankDeployment
+    horizon_ns: int
+    completed_request_count: int
+    completed_output_tokens: float
+
+
+def batch_probe_measurements(
+    results: Sequence[RankResult],
+) -> tuple[BatchProbeMeasurement, ...]:
+    """Return completed work and elapsed simulation time for each batch probe."""
+    measurements = []
+    for result in results:
+        if not result.request_rows:
+            continue
+        horizon_ns = (
+            result.sim_time_ns
+            if result.status == "wall_time_limit"
+            else max(row["end_time"] for row in result.request_rows)
+        )
+        if horizon_ns <= 0:
+            continue
+        measurements.append(
+            BatchProbeMeasurement(
+                result.deployment,
+                int(horizon_ns),
+                len(result.request_rows),
+                sum(row["output"] for row in result.request_rows),
+            )
+        )
+    return tuple(measurements)
+
+
 def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple[RankDeployment, ...]:
     """Build one simulation deployment per canonical Store rank."""
     deployments = []
@@ -641,7 +677,15 @@ def _read_metric_samples(path: Path, expected_instances: set[int]) -> tuple[Rank
             if not math.isfinite(numeric):
                 raise ValueError(f"metrics JSONL line {line_number} has non-finite {name}")
             values[name] = numeric
-        samples.append(RankMetricSample(sim_time_ns, sample_interval_ns, instance_id, values))
+        samples.append(
+            RankMetricSample(
+                sim_time_ns,
+                sample_interval_ns,
+                instance_id,
+                values,
+                row["sample_kind"],
+            )
+        )
         by_time.setdefault(sim_time_ns, set()).add(instance_id)
 
     for sim_time_ns, instances in by_time.items():

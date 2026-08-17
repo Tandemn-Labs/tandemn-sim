@@ -89,12 +89,13 @@ class RankDeployment:
 
 @dataclass(frozen=True)
 class RankMetricSample:
-    """One periodic LLMServingSim metric payload for one rank instance."""
+    """One LLMServingSim metric payload for one rank instance."""
 
     sim_time_ns: int
     sample_interval_ns: int
     instance_id: int
     metrics: dict[str, float | None]
+    sample_kind: str = "periodic"
 
 
 @dataclass(frozen=True)

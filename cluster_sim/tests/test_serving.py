@@ -20,9 +20,11 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from models import RankMetricSample, Request
 from serving import (
+    BatchProbeMeasurement,
     CSV_HEADER,
     RankRun,
     RankResult,
+    batch_probe_measurements,
     build_rank_cluster,
     build_rank_deployments,
     merge_hardware_catalogs,
@@ -39,6 +41,59 @@ from serving import (
     _kvcache_hit_rate,
     write_rank_workload,
 )
+
+
+class BatchProbeMeasurementTest(unittest.TestCase):
+    """Verify batch measurements use the actual probe horizon."""
+
+    def test_completed_probe_uses_last_completion(self) -> None:
+        result = RankResult(
+            deployment=SimpleNamespace(),
+            request_rows=(
+                {"end_time": 1_000_000_000, "output": 10},
+                {"end_time": 2_000_000_000, "output": 20},
+            ),
+            metric_samples=(),
+            stdout="",
+            stderr="",
+        )
+
+        measurements = batch_probe_measurements((result,))
+
+        self.assertEqual(
+            measurements,
+            (
+                BatchProbeMeasurement(result.deployment, 2_000_000_000, 2, 30),
+            ),
+        )
+
+    def test_wall_limited_probe_uses_simulator_horizon(self) -> None:
+        result = RankResult(
+            deployment=SimpleNamespace(),
+            request_rows=({"end_time": 2_000_000_000, "output": 10},),
+            metric_samples=(),
+            stdout="",
+            stderr="",
+            status="wall_time_limit",
+            sim_time_ns=10_000_000_000,
+        )
+
+        measurements = batch_probe_measurements((result,))
+
+        self.assertEqual(measurements[0].horizon_ns, 10_000_000_000)
+
+    def test_ignores_probe_without_completed_work(self) -> None:
+        result = RankResult(
+            deployment=SimpleNamespace(),
+            request_rows=(),
+            metric_samples=(),
+            stdout="",
+            stderr="",
+            status="wall_time_limit",
+            sim_time_ns=10_000_000_000,
+        )
+
+        self.assertEqual(batch_probe_measurements((result,)), ())
 
 
 class ServingInputTest(unittest.TestCase):
@@ -415,6 +470,10 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(len(result.metric_samples), 4)
         self.assertEqual(result.metric_samples[0].metrics["kv_cache_util"], 0.5)
         self.assertEqual(result.metric_samples[1].metrics["kv_cache_util"], 0.6)
+        self.assertEqual(
+            [sample.sample_kind for sample in result.metric_samples],
+            ["periodic", "periodic", "final", "final"],
+        )
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.completed_requests, (requests[1], requests[0]))
         self.assertEqual(result.sim_time_ns, 11_000)
@@ -509,6 +568,7 @@ class ServingInputTest(unittest.TestCase):
 
         self.assertEqual(len(samples), 2)
         self.assertTrue(all(sample.sample_interval_ns == 5 for sample in samples))
+        self.assertTrue(all(sample.sample_kind == "final" for sample in samples))
 
     def test_rank_local_request_ids_do_not_cross_rank_runs(self) -> None:
         """Every rank's request ID zero resolves against that rank's input order."""
