@@ -34,13 +34,13 @@ Overlap: `base_service` remains active, `additive_stream` adds demand to an exis
 
 Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized job features. Hardware placement and market preferences are deliberately absent from job inputs.
 
-Traffic: `max_concurrent_streaming` is the sole authoritative submitted traffic field. `request_arrival_rate` is omitted so Orca selects concurrency mode and derives request rate. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
+Traffic: `max_concurrent_streaming` is the planner-facing service cap. Client submission rates may be fixed in `input_source`; they remain excluded from the Orca payload so Orca stays in concurrency mode. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
 
 Input modes: every online job uses `api_load_generator` to ping an OpenAI-compatible endpoint under its concurrency profile. Every batch campaign uses a finite `dataset` partitioned into required shards.
 
 Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 
-Exact manifest counts: **14 online jobs**, **6 batch campaigns**, **204 expanded shards**.
+Exact manifest counts: **14 online jobs**, **5 batch campaigns**, **132 expanded shards**.
 
 ## Real-Run Capacity Gate
 
@@ -273,19 +273,20 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                   }
                  },
                  {
-                     "user_id":  "tenant_embeddings",
+                     "user_id":  "tenant_small_model",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "intfloat/multilingual-e5-large",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
+                                       "precision":  "fp16",
                                        "job_features":  {
-                                                            "isl_token_avg":  384,
-                                                            "isl_token_min":  96,
-                                                            "isl_token_max":  1024,
+                                                            "isl_token_avg":  256,
+                                                            "isl_token_min":  64,
+                                                            "isl_token_max":  512,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
+                                                            "osl_token_avg":  64,
+                                                            "osl_token_min":  16,
+                                                            "osl_token_max":  128,
+                                                            "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Constant",
                                                             "peak_to_mean_ratio":  1,
                                                             "workload_prefix_concentration":  0,
@@ -293,18 +294,19 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  12000,
-                                                            "target_p99_ttft_ms":  120,
-                                                            "target_p99_tpot_ms":  1
+                                                            "max_concurrent_streaming":  8,
+                                                            "target_p99_ttft_ms":  300,
+                                                            "target_p99_tpot_ms":  40
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
-                                          "endpoint":  "/v1/embeddings",
-                                          "prompt_dataset_id":  "real_3h_embeddings",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "small_model_chat",
                                           "request_arrival_pattern":  "Constant",
-                                          "max_concurrent_streaming":  12000,
+                                          "request_rate_per_second":  2,
+                                          "max_concurrent_streaming":  8,
                                           "seed":  105
                                       },
                      "output_target":  {
@@ -530,53 +532,6 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
                                       "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-25-1",
                                       "shard_count":  32,
                                       "requests_per_shard":  200,
-                                      "expansion_policy":  "required",
-                                      "checkpointable":  true
-                                  }
-                 },
-                 {
-                     "user_id":  "tenant_embeddings",
-                     "kind":  "batch",
-                     "spec_json":  {
-                                       "model_id":  "intfloat/multilingual-e5-large",
-                                       "job_features":  {
-                                                            "isl_token_avg":  384,
-                                                            "isl_token_min":  96,
-                                                            "isl_token_max":  1024,
-                                                            "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
-                                                            "request_arrival_pattern":  "Constant",
-                                                            "peak_to_mean_ratio":  1,
-                                                            "workload_prefix_concentration":  0,
-                                                            "multi_turn_ratio":  0,
-                                                            "shared_prefix_length_avg":  1,
-                                                            "is_session_affinity":  false,
-                                                            "total_token_budget":  277200000,
-                                                            "priority_class":  "LOW",
-                                                            "deadline_hrs":  2.5833,
-                                                            "target_p99_ttft_ms":  1000
-                                                        }
-                                   },
-                     "input_source":  {
-                                          "type":  "dataset",
-                                          "dataset_id":  "real_3h_embedding_backfill",
-                                          "partitioning":  "fixed_shards",
-                                          "shard_count":  72,
-                                          "requests_per_shard":  10000
-                                      },
-                     "output_target":  {
-                                           "sink":  "vector_store"
-                                       },
-                     "job_id":  "job-benchmark_timing_real_3hr_192gpu-25-2",
-                     "schedule":  {
-                                      "release_at_offset_minutes":  25,
-                                      "deadline_at_offset_minutes":  180,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_192gpu-25-2",
-                                      "shard_count":  72,
-                                      "requests_per_shard":  10000,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }

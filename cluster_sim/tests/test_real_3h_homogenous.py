@@ -44,7 +44,7 @@ class RealThreeHourHomogenousTest(unittest.TestCase):
         self.assertEqual(self.manifest["environment"], "real_hardware")
         self.assertEqual(self.manifest["status"], "executable")
         self.assertEqual(len(scenario.online_jobs), 18)
-        self.assertEqual(len(scenario.batch_jobs), 8)
+        self.assertEqual(len(scenario.batch_jobs), 7)
         self.assertTrue(
             all(
                 "benchmark_timing_real_3hr_homogenous" in job_id for job_id in self.jobs
@@ -61,7 +61,7 @@ class RealThreeHourHomogenousTest(unittest.TestCase):
         self.assertEqual(resource["markets"], {"on_demand": 128})
         self.assertEqual(resource["regions"], {"us-east": 128})
 
-    def test_fixed_placements_are_supported_and_peak_at_123_gpus(self) -> None:
+    def test_fixed_placements_are_supported_and_peak_at_119_gpus(self) -> None:
         """Fit every preferred placement inside the homogeneous fleet."""
         mappings = BEST_FIT_CONFIGURATIONS["real_3h_homogenous"]
         self.assertEqual(set(mappings), set(self.jobs))
@@ -105,7 +105,7 @@ class RealThreeHourHomogenousTest(unittest.TestCase):
                     active += footprints[job_id]
             peak = max(peak, active)
 
-        self.assertEqual(peak, 123)
+        self.assertEqual(peak, 119)
         self.assertLessEqual(peak, self.resources[0]["total_devices"])
 
 

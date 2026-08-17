@@ -27,13 +27,13 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         self.assertEqual(
             {name: len(jobs) for name, jobs in BEST_FIT_CONFIGURATIONS.items()},
             {
-                "real_life_12h": 33,
-                "real_life_24h": 42,
-                "real_life_3h": 20,
-                "real_3h_homogenous": 26,
-                "simulation_12h": 38,
-                "simulation_24h": 49,
-                "simulation_3h": 26,
+                "real_life_12h": 32,
+                "real_life_24h": 41,
+                "real_life_3h": 19,
+                "real_3h_homogenous": 25,
+                "simulation_12h": 37,
+                "simulation_24h": 48,
+                "simulation_3h": 25,
             },
         )
         for jobs in BEST_FIT_CONFIGURATIONS.values():

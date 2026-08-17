@@ -55,7 +55,6 @@ benchmark-specific Python.
 | Chat Premium | [`job-benchmark_timing_3hr-0-2`](../../benchmarks/simulation_3h/jobs/chat-premium-core.yaml) | 0–180 | Diurnal | `BURST`, GPT-4 conversation filter | Exact class | [`Analysis ready`](traces/chat_premium_analysis.json) |
 | Code Autocomplete | [`job-benchmark_timing_3hr-0-3`](../../benchmarks/simulation_3h/jobs/code-autocomplete-core.yaml) | 0–180 | Bursty | `BAIL-CODER` | Exact class | [`Analysis ready`](traces/code_autocomplete_analysis.json) |
 | Safety Moderation | [`job-benchmark_timing_3hr-0-4`](../../benchmarks/simulation_3h/jobs/safety-moderation-core.yaml) | 0–180 | Bursty | `BURST`, short API filter | Traffic proxy | [`Analysis ready`](traces/safety_moderation_analysis.json) |
-| Embeddings | [`job-benchmark_timing_3hr-0-5`](../../benchmarks/simulation_3h/jobs/embeddings-core.yaml) | 0–180 | Constant | `RAG`, query-embedding stage | Stage proxy | [`Analysis ready`](traces/embeddings_analysis.json) |
 | Search RAG | [`job-benchmark_timing_3hr-7-1`](../../benchmarks/simulation_3h/jobs/search-rag.yaml) | 7–180 | Poisson | `RAG` | Exact class | [`Analysis ready`](traces/search_rag_analysis.json) |
 | Search Rerank | [`job-benchmark_timing_3hr-7-2`](../../benchmarks/simulation_3h/jobs/search-rerank.yaml) | 7–180 | Bursty | `RAG`, reranking stage | Stage proxy | [`Analysis ready`](traces/search_rerank_analysis.json) |
 | Support Assistant | [`job-benchmark_timing_3hr-7-3`](../../benchmarks/simulation_3h/jobs/support-assistant.yaml) | 7–180 | Bursty | `RAG` | Exact class | [`Analysis ready`](traces/support_assistant_analysis.json) |
@@ -85,7 +84,6 @@ benchmark-specific Python.
 | [`traces/chat_premium_analysis.json`](traces/chat_premium_analysis.json) | `BURST` | GPT-4 conversation; `26637060`–`26647860` seconds; 122 requests | Chat Premium |
 | [`traces/code_autocomplete_analysis.json`](traces/code_autocomplete_analysis.json) | `BAIL-CODER` | No filter; `0`–`7200` seconds; 43,011 requests | Code Autocomplete |
 | [`traces/safety_moderation_analysis.json`](traces/safety_moderation_analysis.json) | `BURST` | API, input ≤512, output ≤32; `21456180`–`21466980` seconds; 35,485 requests | Safety Moderation |
-| [`traces/embeddings_analysis.json`](traces/embeddings_analysis.json) | `RAG` | Query-embedding stage; `12000`–`22800` seconds; 272 requests | Embeddings |
 | [`traces/search_rag_analysis.json`](traces/search_rag_analysis.json) | `RAG` | Generation stage; `440700`–`451080` seconds; 206 requests | Search RAG |
 | [`traces/search_rerank_analysis.json`](traces/search_rerank_analysis.json) | `RAG` | Query plus passages; `215700`–`226080` seconds; 96 requests | Search Rerank |
 | [`traces/support_assistant_analysis.json`](traces/support_assistant_analysis.json) | `RAG` | Generation stage; `414900`–`425280` seconds; 96 requests | Support Assistant |

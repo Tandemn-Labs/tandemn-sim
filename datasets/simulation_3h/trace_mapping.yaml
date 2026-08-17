@@ -44,9 +44,6 @@ jobs:
   - {slug: safety_moderation, job_id: job-benchmark_timing_3hr-0-4,
      pattern: Bursty, duration_minutes: 180, source: BURST, variant: short_api,
      filter_description: "Log Type=API log; input<=512; output<=32"}
-  - {slug: embeddings, job_id: job-benchmark_timing_3hr-0-5,
-     pattern: Constant, duration_minutes: 180, source: RAG, variant: embedding,
-     filter_description: "query-embedding stage; output=0"}
   - {slug: search_rag, job_id: job-benchmark_timing_3hr-7-1, pattern: Poisson,
      duration_minutes: 173, source: RAG, variant: generation}
   - {slug: search_rerank, job_id: job-benchmark_timing_3hr-7-2,

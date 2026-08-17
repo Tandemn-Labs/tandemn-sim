@@ -32,11 +32,11 @@ Maximum provisioned capacity: **128 on-demand L40S GPUs**. The complete fleet is
 
 All nodes are in `us-east` and use 100 Gbps RoCE. There is no reserved capacity, heterogeneous fallback, or inter-region placement.
 
-The inherited fixed-placement envelope peaks at **123 GPUs**, leaving five devices of cluster headroom. This intentionally keeps the run capacity-bound while allowing scheduler fragmentation and short-lived overlap to surface.
+The fixed-placement envelope peaks at **119 GPUs**, leaving nine devices of cluster headroom. This intentionally keeps the run capacity-bound while allowing scheduler fragmentation and short-lived overlap to surface.
 
 ## Workload Compatibility
 
-The workload is the same 18 online services and 8 batch campaigns used by `simulation_3h`. Benchmark-specific job, service, campaign, and event IDs prevent cross-run collisions while unchanged seeds and phase definitions preserve comparison fidelity.
+The workload is the same 18 online services and 7 batch campaigns used by `simulation_3h`. Benchmark-specific job, service, campaign, and event IDs prevent cross-run collisions while unchanged seeds and phase definitions preserve comparison fidelity.
 
 The L40S policy covers every model in the inherited workload. Large frontier models may span multiple eight-GPU nodes; no job may fall back to another accelerator type or market.
 
@@ -60,7 +60,7 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 
-Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded shards**.
+Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded shards**.
 
 ## T+00:00 - Warm persistent core APIs
 
@@ -262,20 +262,20 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                                   }
                  },
                  {
-                     "user_id":  "tenant_embeddings",
+                     "user_id":  "tenant_small_model",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "intfloat/multilingual-e5-large",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "precision":  "fp16",
                                        "job_features":  {
-                                                            "isl_token_avg":  384,
-                                                            "isl_token_min":  96,
-                                                            "isl_token_max":  1024,
+                                                            "isl_token_avg":  256,
+                                                            "isl_token_min":  64,
+                                                            "isl_token_max":  512,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
+                                                            "osl_token_avg":  64,
+                                                            "osl_token_min":  16,
+                                                            "osl_token_max":  128,
+                                                            "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Constant",
                                                             "peak_to_mean_ratio":  1,
                                                             "workload_prefix_concentration":  0,
@@ -283,18 +283,19 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                             "max_concurrent_streaming":  32,
-                                                            "target_p99_ttft_ms":  120,
-                                                            "target_p99_tpot_ms":  1
+                                                             "max_concurrent_streaming":  8,
+                                                            "target_p99_ttft_ms":  300,
+                                                            "target_p99_tpot_ms":  40
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
-                                          "endpoint":  "/v1/embeddings",
-                                          "prompt_dataset_id":  "embedding_api",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "small_model_chat",
                                           "request_arrival_pattern":  "Constant",
-                                           "max_concurrent_streaming":  32,
+                                           "request_rate_per_second":  2,
+                                           "max_concurrent_streaming":  8,
                                           "seed":  105
                                       },
                      "output_target":  {
@@ -477,7 +478,7 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
 ```json
 {
     "submit_at_offset_minutes":  15,
-    "description":  "small eval, embedding backfill, and quant profiling campaigns",
+    "description":  "small eval and quant profiling campaigns",
     "jobs":  [
                  {
                      "user_id":  "tenant_eval_platform",
@@ -525,55 +526,6 @@ Exact manifest counts: **18 online jobs**, **8 batch campaigns**, **460 expanded
                                       "campaign_id":  "campaign-benchmark_timing_real_3hr_homogenous-15-1",
                                       "shard_count":  72,
                                       "requests_per_shard":  200,
-                                      "expansion_policy":  "required",
-                                      "checkpointable":  true
-                                  }
-                 },
-                 {
-                     "user_id":  "tenant_embeddings",
-                     "kind":  "batch",
-                     "spec_json":  {
-                                       "model_id":  "intfloat/multilingual-e5-large",
-                                       "precision":  "fp16",
-                                       "job_features":  {
-                                                            "isl_token_avg":  384,
-                                                            "isl_token_min":  96,
-                                                            "isl_token_max":  1024,
-                                                            "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
-                                                            "request_arrival_pattern":  "Constant",
-                                                            "peak_to_mean_ratio":  1,
-                                                            "workload_prefix_concentration":  0,
-                                                            "multi_turn_ratio":  0,
-                                                            "shared_prefix_length_avg":  1,
-                                                            "is_session_affinity":  false,
-                                                            "total_token_budget":  492800000,
-                                                            "priority_class":  "LOW",
-                                                            "deadline_hrs":  2.75,
-                                                            "target_p99_ttft_ms":  1000
-                                                        }
-                                   },
-                     "input_source":  {
-                                          "type":  "dataset",
-                                          "dataset_id":  "embedding_backfill_sample",
-                                          "partitioning":  "fixed_shards",
-                                          "shard_count":  128,
-                                           "requests_per_shard":  10000,
-                                           "max_in_flight_requests":  128
-                                       },
-                                       "output_target":  {
-                                           "sink":  "vector_store"
-                                       },
-                     "job_id":  "job-benchmark_timing_real_3hr_homogenous-15-2",
-                     "schedule":  {
-                                      "release_at_offset_minutes":  15,
-                                      "deadline_at_offset_minutes":  180,
-                                      "campaign_id":  "campaign-benchmark_timing_real_3hr_homogenous-15-2",
-                                      "shard_count":  128,
-                                      "requests_per_shard":  10000,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
                                   }
