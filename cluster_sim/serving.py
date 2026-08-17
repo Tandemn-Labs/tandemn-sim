@@ -173,6 +173,44 @@ def _serving_dtype(shape: Mapping[str, object]) -> str:
     return "float16" if dtype in {"fp16", "float16"} else "bfloat16"
 
 
+def profile_coverage_error(
+    deployment: RankDeployment,
+    hardware: Mapping[str, object],
+    llmservingsim_root: Path,
+) -> str | None:
+    """Return the runtime profile lookup failure before launching ServingSim."""
+    model_path = Path(deployment.model_name)
+    if model_path.is_absolute() or ".." in model_path.parts:
+        return f"PROFILE_UNAVAILABLE: invalid model path={deployment.model_name!r}"
+    profile = str(hardware["profile"])
+    variant = _serving_precision(deployment.shape)
+    root = llmservingsim_root / "profiler" / "perf" / profile / model_path
+    variant_root = root / variant
+    if not variant_root.is_dir():
+        variants = sorted(path.name for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
+        return (
+            f"PROFILE_UNAVAILABLE: hardware={profile} model={deployment.model_name} "
+            f"variant={variant} available_variants={variants}"
+        )
+    if not (variant_root / "meta.yaml").is_file():
+        return f"PROFILE_UNAVAILABLE: meta.yaml missing at {variant_root}"
+    try:
+        tp = int(deployment.shape.get("tp", 1))
+    except (TypeError, ValueError):
+        return f"PROFILE_UNAVAILABLE: invalid tp={deployment.shape.get('tp')!r}"
+    if not (variant_root / f"tp{tp}").is_dir():
+        available_tp = sorted(
+            int(path.name[2:])
+            for path in variant_root.iterdir()
+            if path.is_dir() and path.name.startswith("tp") and path.name[2:].isdigit()
+        )
+        return (
+            f"PROFILE_UNAVAILABLE: hardware={profile} model={deployment.model_name} "
+            f"variant={variant} tp={tp} available_tp={available_tp}"
+        )
+    return None
+
+
 def resolve_rank_hardware(
     deployment: RankDeployment,
     catalog: Mapping[str, object],

@@ -586,7 +586,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 return SimpleNamespace(scheduling_summary=lambda: {})
 
         def prepare(running, *args):
-            return rank_runs[running.job.job_id]
+            return rank_runs[running.job.job_id], ()
 
         def run(runs, max_parallel, deadline_epoch_seconds, progress=None):
             launched.append((runs, max_parallel, deadline_epoch_seconds))
@@ -750,7 +750,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch.object(
                     simulator,
                     "_prepare_job_runs",
-                    return_value=(oom_rank_run, healthy_rank_run),
+                    return_value=((oom_rank_run, healthy_rank_run), ()),
                 ),
                 patch("runner.run_ranks", return_value=(oom_result, healthy_result)),
                 patch("runner.collect_rank_telemetry", return_value=([], {})),
@@ -881,11 +881,14 @@ class RunnerDataPlaneTest(unittest.TestCase):
         def prepare(running, job_name, tick_requests, *args):
             attempts.append(tick_requests)
             return (
-                SimpleNamespace(
-                    deployment="deployment",
-                    requests=tick_requests,
-                    request_count=len(tick_requests),
+                (
+                    SimpleNamespace(
+                        deployment="deployment",
+                        requests=tick_requests,
+                        request_count=len(tick_requests),
+                    ),
                 ),
+                (),
             )
 
         def run(rank_runs, max_parallel, deadline_epoch_seconds, progress=None):
@@ -1043,7 +1046,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ),
             patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
             patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
-            patch.object(simulator, "_prepare_job_runs", side_effect=lambda *args: next(rank_runs)),
+            patch.object(
+                simulator,
+                "_prepare_job_runs",
+                side_effect=lambda *args: (next(rank_runs), ()),
+            ),
             patch("runner.build_batch_probe", return_value=(batch_request,)),
             patch("runner.run_ranks", return_value=results),
             patch("runner.gpu_metrics_from_results", return_value=[object()]),
@@ -1231,6 +1238,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
                 patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
                 patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
+                patch("runner.profile_coverage_error", return_value=None),
                 patch("runner.prepare_rank_run", prepare),
                 patch("runner.run_ranks", run),
                 patch("runner.time", return_value=1_000),
