@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from bestfit import BEST_FIT_CONFIGURATIONS, BestFitPlannerDriver, StoreSnapshot
 from models import OnlineJob, Scenario
-from policy import load_config_policy
+from policy import VALID_TP_DEGREES, load_config_policy
 
 
 class BestFitPlannerDriverTest(unittest.TestCase):
@@ -42,6 +42,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 configuration = placement["configuration"]
                 self.assertEqual(set(configuration), {"tp", "pp", "dp"})
                 self.assertTrue(all(value > 0 for value in configuration.values()))
+                self.assertIn(configuration["tp"], VALID_TP_DEGREES)
 
     def test_simulation_3h_mapping_obeys_policy_and_resource_map(self) -> None:
         """Fit every scheduled shape within policy, market, and region limits."""

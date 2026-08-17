@@ -111,6 +111,8 @@ RTXPRO6000-RUNPOD:
 _POLICY_ENTRY = re.compile(
     r"^- (?P<model>.+) → (?P<precision>\S+) TP: (?P<tp>\d+(?:, \d+)*)$"
 )
+VALID_TP_DEGREES = frozenset({1, 2, 4, 6, 8})
+MODEL_MAX_TP = {"microsoft/phi-4": 2}
 _HARDWARE_ALIASES = {
     "a100": "a100-80gb",
     "a100-pcie": "a100-40gb",
@@ -170,12 +172,25 @@ def load_config_policy() -> ConfigPolicy:
         if match is None:
             raise ValueError(f"invalid config policy at line {line_number}: {line!r}")
 
+        model_id = match.group("model")
         allowed_tp = tuple(int(value) for value in match.group("tp").split(", "))
         if any(tp < 1 for tp in allowed_tp):
             raise ValueError(f"TP values must be positive at policy line {line_number}")
+        invalid_tp = tuple(tp for tp in allowed_tp if tp not in VALID_TP_DEGREES)
+        if invalid_tp:
+            raise ValueError(
+                f"unsupported TP values {invalid_tp} at policy line {line_number}; "
+                f"expected values from {sorted(VALID_TP_DEGREES)}"
+            )
         if len(set(allowed_tp)) != len(allowed_tp):
             raise ValueError(f"duplicate TP value at policy line {line_number}")
-        key = (hardware, match.group("model"))
+        max_tp = MODEL_MAX_TP.get(model_id)
+        if max_tp is not None and any(tp > max_tp for tp in allowed_tp):
+            raise ValueError(
+                f"{model_id} TP values must not exceed {max_tp} "
+                f"at policy line {line_number}"
+            )
+        key = (hardware, model_id)
         if key in rules:
             raise ValueError(f"duplicate config policy entry at line {line_number}")
         rules[key] = ConfigPolicyRule(
