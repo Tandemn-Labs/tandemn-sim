@@ -41,7 +41,7 @@ def run_started(
     """Build the immutable first event for one experiment trace."""
     return {
         "kind": "run_started",
-        "trace_version": 3,
+        "trace_version": 4,
         "run_id": run_id,
         "scenario": scenario,
         "benchmark": benchmark,
@@ -86,6 +86,7 @@ def placement_observed(
         "job_id": job_id,
         "rank_id": rank_id,
         "n_replicas": n_replicas,
+        "allocated_gpu_count": shape.get("count"),
         "shape": shape,
     }
 
@@ -97,10 +98,19 @@ def planner_finished(
     decision_time_ms: float | None,
     plans: list[dict[str, object]],
     planned_job_ids: tuple[str, ...],
-    timed_out: bool | None,
+    timed_out: bool,
     error: str | None,
 ) -> dict[str, object]:
     """Build one planner outcome event for a completed control tick."""
+    suggested_action_count = 0
+    for plan in plans:
+        actions = plan.get("actions")
+        if isinstance(actions, list):
+            suggested_action_count += sum(
+                action.get("type") in {"place", "swap"}
+                for action in actions
+                if isinstance(action, dict)
+            )
     return {
         "kind": "planner_finished",
         "tick": tick,
@@ -110,7 +120,24 @@ def planner_finished(
         "plans": plans,
         "planned_job_ids": list(planned_job_ids),
         "timed_out": timed_out,
+        "suggested_action_count": suggested_action_count,
         "error": error,
+    }
+
+
+def plan_validation(
+    tick: int,
+    plan_id: str,
+    applied_action_count: int,
+    selected_plan_valid: bool | None,
+) -> dict[str, object]:
+    """Build one post-apply plan outcome after rank simulation."""
+    return {
+        "kind": "plan_validation",
+        "tick": tick,
+        "plan_id": plan_id,
+        "applied_action_count": applied_action_count,
+        "selected_plan_valid": selected_plan_valid,
     }
 
 
@@ -330,6 +357,8 @@ def cluster_window(
     rolling_admission_time_ms: float | None = None,
 ) -> dict[str, object]:
     """Build aggregate GPU-hour and cost facts across every physical pool."""
+    capacity_gpu_seconds = capacity_gpu_hours * 3_600
+    allocated_gpu_seconds = allocated_gpu_hours * 3_600
     return {
         "kind": "cluster_window",
         "tick": tick,
@@ -337,6 +366,9 @@ def cluster_window(
         "window_end": window_end,
         "capacity_gpu_hours": capacity_gpu_hours,
         "allocated_gpu_hours": allocated_gpu_hours,
+        "capacity_gpu_seconds": capacity_gpu_seconds,
+        "allocated_gpu_seconds": allocated_gpu_seconds,
+        "busy_gpu_seconds": allocated_gpu_seconds,
         "capacity_cost": capacity_cost,
         "allocated_cost": allocated_cost,
         "jobs_admitted_in_tick": jobs_admitted_in_tick,
@@ -374,6 +406,16 @@ def job_finished(
     finish_reason: str | None,
     deadline_slo_met: bool | None,
     unserved_request_count: int = 0,
+    *,
+    deadline_outcome: str | None = None,
+    offered_request_count: int = 0,
+    completed_request_count: int = 0,
+    unfinished_request_count: int = 0,
+    ttft_pass_count: int | None = None,
+    tpot_pass_count: int | None = None,
+    slo_pass_count: int | None = None,
+    qualified_output_tokens: int | None = None,
+    slo_count_scope: str = "all_offered_requests",
 ) -> dict[str, object]:
     """Build one terminal job fact for JCT and batch deadline derivation."""
     return {
@@ -383,7 +425,16 @@ def job_finished(
         "completed_successfully": completed_successfully,
         "finish_reason": finish_reason,
         "deadline_slo_met": deadline_slo_met,
+        "deadline_outcome": deadline_outcome,
         "unserved_request_count": unserved_request_count,
+        "offered_request_count": offered_request_count,
+        "completed_request_count": completed_request_count,
+        "unfinished_request_count": unfinished_request_count,
+        "ttft_pass_count": ttft_pass_count,
+        "tpot_pass_count": tpot_pass_count,
+        "slo_pass_count": slo_pass_count,
+        "qualified_output_tokens": qualified_output_tokens,
+        "slo_count_scope": slo_count_scope,
     }
 
 
@@ -391,11 +442,13 @@ def run_finished(
     finished_at: str,
     termination_reason: str | None = None,
     truncated: bool = False,
+    status: str = "completed",
 ) -> dict[str, object]:
     """Build the terminal event for one completed experiment trace."""
     return {
         "kind": "run_finished",
         "finished_at": finished_at,
+        "status": status,
         "termination_reason": termination_reason,
         "truncated": truncated,
     }

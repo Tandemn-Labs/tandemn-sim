@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
@@ -20,12 +19,13 @@ from trace import (
     job_state_changed,
     job_submitted,
     job_window,
-    planner_finished,
     placement_observed,
+    plan_validation,
+    planner_finished,
     pool_window,
-    read_events,
     rank_failed,
     rank_window,
+    read_events,
     resource_snapshot,
     run_finished,
     run_started,
@@ -68,12 +68,13 @@ class TracePathTest(unittest.TestCase):
 
     def test_run_finished_records_terminal_time(self) -> None:
         """Preserve the experiment completion timestamp without aggregation."""
-        event = run_finished("2026-01-01T03:00:00+00:00")
+        event = run_finished("2026-01-01T03:00:00+00:00", status="completed")
 
         self.assertEqual(event["kind"], "run_finished")
         self.assertEqual(event["finished_at"], "2026-01-01T03:00:00+00:00")
         self.assertFalse(event["truncated"])
         self.assertIsNone(event["termination_reason"])
+        self.assertEqual(event["status"], "completed")
 
     def test_run_started_keeps_trace_identity(self) -> None:
         """Record the immutable context needed to interpret every later event."""
@@ -86,7 +87,7 @@ class TracePathTest(unittest.TestCase):
             300,
         )
 
-        self.assertEqual(event["trace_version"], 3)
+        self.assertEqual(event["trace_version"], 4)
         self.assertEqual(event["admission_definition"], "first_place_plan_created")
         self.assertEqual(event["method"], "koi")
 
@@ -121,7 +122,17 @@ class TracePathTest(unittest.TestCase):
             "2026-01-01T00:20:00+00:00",
             "2026-01-01T00:20:14+00:00",
             14_000,
-            [{"plan_id": "plan-4", "actions": [{"job_id": "job-a", "type": "place"}]}],
+            [
+                {
+                    "plan_id": "plan-4",
+                    "actions": [
+                        {"job_id": "job-a", "type": "place"},
+                        {"job_id": "job-b", "type": "swap"},
+                        {"job_id": "job-c", "type": "defer"},
+                        {"job_id": "job-d", "type": "keep"},
+                    ],
+                }
+            ],
             ("job-a", "job-b"),
             False,
             None,
@@ -130,6 +141,14 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["decision_time_ms"], 14_000)
         self.assertEqual(event["plans"][0]["plan_id"], "plan-4")
         self.assertFalse(event["timed_out"])
+        self.assertEqual(event["suggested_action_count"], 2)
+
+    def test_plan_validation_preserves_post_apply_proof(self) -> None:
+        event = plan_validation(4, "plan-4", 2, True)
+
+        self.assertEqual(event["kind"], "plan_validation")
+        self.assertEqual(event["applied_action_count"], 2)
+        self.assertTrue(event["selected_plan_valid"])
 
     def test_job_admitted_uses_first_place_time(self) -> None:
         """Preserve the scheduler admission timestamps for JQT derivation."""
@@ -270,6 +289,9 @@ class TracePathTest(unittest.TestCase):
         )
 
         self.assertEqual(event["capacity_gpu_hours"], 5.3333)
+        self.assertEqual(event["capacity_gpu_seconds"], 5.3333 * 3600)
+        self.assertEqual(event["allocated_gpu_seconds"], 2.3333 * 3600)
+        self.assertEqual(event["busy_gpu_seconds"], 2.3333 * 3600)
         self.assertEqual(event["allocated_cost"], 28.677)
         self.assertEqual(event["jobs_admitted_in_tick"], 2)
         self.assertEqual(event["admission_count_so_far"], 8)
@@ -300,12 +322,30 @@ class TracePathTest(unittest.TestCase):
             None,
             True,
             0,
+            deadline_outcome="met",
+            offered_request_count=100,
+            completed_request_count=92,
+            unfinished_request_count=8,
+            ttft_pass_count=88,
+            tpot_pass_count=85,
+            slo_pass_count=80,
+            qualified_output_tokens=120_000,
+            slo_count_scope="all_offered_requests",
         )
 
         self.assertTrue(event["completed_successfully"])
         self.assertTrue(event["deadline_slo_met"])
         self.assertIsNone(event["finish_reason"])
         self.assertEqual(event["unserved_request_count"], 0)
+        self.assertEqual(event["deadline_outcome"], "met")
+        self.assertEqual(event["offered_request_count"], 100)
+        self.assertEqual(event["completed_request_count"], 92)
+        self.assertEqual(event["unfinished_request_count"], 8)
+        self.assertEqual(event["ttft_pass_count"], 88)
+        self.assertEqual(event["tpot_pass_count"], 85)
+        self.assertEqual(event["slo_pass_count"], 80)
+        self.assertEqual(event["qualified_output_tokens"], 120_000)
+        self.assertEqual(event["slo_count_scope"], "all_offered_requests")
 
     def test_job_state_changed_preserves_queue_transition(self) -> None:
         event = job_state_changed(

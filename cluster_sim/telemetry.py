@@ -284,12 +284,15 @@ def cluster_accounting(
         allocated_gpu_count = int(pool["allocated_gpu_count"])
         gpus_per_instance = int(pool["gpus_per_instance"])
         price_per_instance_hour = pool["price_per_instance_hour"]
+        pool_allocated_gpu_hours = float(
+            pool.get("allocated_gpu_hours", allocated_gpu_count * duration_hours)
+        )
         capacity_gpu_hours += gpu_count * duration_hours
-        allocated_gpu_hours += allocated_gpu_count * duration_hours
+        allocated_gpu_hours += pool_allocated_gpu_hours
         if price_per_instance_hour is not None:
             price = float(price_per_instance_hour)
             capacity_cost += int(pool["total_instances"]) * price * duration_hours
-            allocated_cost += allocated_gpu_count / gpus_per_instance * price * duration_hours
+            allocated_cost += pool_allocated_gpu_hours / gpus_per_instance * price
     return {
         "capacity_gpu_hours": capacity_gpu_hours,
         "allocated_gpu_hours": allocated_gpu_hours,

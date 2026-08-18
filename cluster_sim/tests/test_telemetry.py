@@ -9,14 +9,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from telemetry import (
+    RankTrajectory,
     _metric_value,
     _policy,
-    RankTrajectory,
     aggregate_job_metrics,
     aggregate_rank_trajectories,
     cluster_accounting,
@@ -228,6 +227,25 @@ class MetricValueTest(unittest.TestCase):
         self.assertEqual(accounting["allocated_gpu_hours"], 1.5)
         self.assertEqual(accounting["capacity_cost"], 5.0)
         self.assertEqual(accounting["allocated_cost"], 1.875)
+
+    def test_uses_time_weighted_allocation_for_mid_window_completion(self) -> None:
+        accounting = cluster_accounting(
+            (
+                {
+                    "total": 8,
+                    "allocated_gpu_count": 4,
+                    "allocated_gpu_hours": 0.25,
+                    "gpus_per_instance": 8,
+                    "total_instances": 1,
+                    "price_per_instance_hour": 16.0,
+                },
+            ),
+            0.5,
+        )
+
+        self.assertEqual(accounting["capacity_gpu_hours"], 4.0)
+        self.assertEqual(accounting["allocated_gpu_hours"], 0.25)
+        self.assertEqual(accounting["allocated_cost"], 0.5)
 
 
 def _row(
