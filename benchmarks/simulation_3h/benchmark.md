@@ -20,7 +20,7 @@ Regions: `us-east`, `eu-west`, `apac`
 
 Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`
 
-Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-reranker-v2-m3`
+Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`
 
 Model precision: workload-defined `fp16`, `bf16`, or `bf16-fp8` according to the profiled variant.
 
@@ -342,15 +342,15 @@ Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded
 }
 ```
 
-## T+00:07 - Search and support APIs
+## T+00:07 - Chat and support APIs
 
 ```json
 {
     "submit_at_offset_minutes":  7,
-    "description":  "search, reranking, support, and translation come online",
+    "description":  "Phi-4 long-context chat, small-model chat, support, and translation come online",
     "jobs":  [
                  {
-                     "user_id":  "tenant_search_rag",
+                     "user_id":  "tenant_phi4_long_context_chat",
                      "kind":  "online",
                      "spec_json":  {
                                        "model_id":  "microsoft/phi-4",
@@ -358,7 +358,7 @@ Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded
                                        "job_features":  {
                                                             "isl_token_avg":  9000,
                                                             "isl_token_min":  2250,
-                                                            "isl_token_max":  32000,
+                                                            "isl_token_max":  15684,
                                                             "isl_distribution_type":  "LogNormal",
                                                             "osl_token_avg":  220,
                                                             "osl_token_min":  55,
@@ -380,7 +380,7 @@ Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
-                                          "prompt_dataset_id":  "rag_long_input",
+                                          "prompt_dataset_id":  "phi4_long_context_chat",
                                           "request_arrival_pattern":  "Poisson",
                                            "max_concurrent_streaming":  24,
                                           "seed":  101
@@ -398,39 +398,39 @@ Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded
                                   }
                  },
                  {
-                     "user_id":  "tenant_search_rerank",
+                     "user_id":  "tenant_small_model",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-reranker-v2-m3",
+                                       "model_id":  "meta-llama/Llama-3.2-1B-Instruct",
                                        "precision":  "fp16",
                                        "job_features":  {
-                                                            "isl_token_avg":  512,
-                                                            "isl_token_min":  128,
-                                                            "isl_token_max":  2048,
+                                                            "isl_token_avg":  256,
+                                                            "isl_token_min":  64,
+                                                            "isl_token_max":  512,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
-                                                            "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3.5,
+                                                            "osl_token_avg":  64,
+                                                            "osl_token_min":  16,
+                                                            "osl_token_max":  128,
+                                                            "osl_distribution_type":  "LogNormal",
+                                                            "request_arrival_pattern":  "Constant",
+                                                            "peak_to_mean_ratio":  1,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                             "max_concurrent_streaming":  32,
-                                                            "target_p99_ttft_ms":  160,
-                                                            "target_p99_tpot_ms":  1
+                                                             "max_concurrent_streaming":  8,
+                                                            "target_p99_ttft_ms":  300,
+                                                            "target_p99_tpot_ms":  40
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
-                                          "endpoint":  "/v1/rerank",
-                                          "prompt_dataset_id":  "reranker_api",
-                                          "request_arrival_pattern":  "Bursty",
-                                           "max_concurrent_streaming":  32,
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "small_model_chat",
+                                          "request_arrival_pattern":  "Constant",
+                                           "max_concurrent_streaming":  8,
                                           "seed":  102
                                       },
                      "output_target":  {
