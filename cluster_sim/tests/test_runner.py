@@ -27,7 +27,13 @@ from models import (
     Scenario,
 )
 from routing import StickyRoundRobinRouter
-from runner import ClusterSimulator, LogicalClock, advance_batch_progress, submit_waiting_job
+from runner import (
+    ClusterSimulator,
+    LogicalClock,
+    _batch_request_rate_per_second,
+    advance_batch_progress,
+    submit_waiting_job,
+)
 from scenario import load_scenario
 from serving import (
     BatchProbeMeasurement,
@@ -71,6 +77,41 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertEqual([item.tick_number for item in result], [0, 1])
         hard_stop.assert_called_once_with("SIMULATION_TICK_LIMIT")
+
+    def test_prices_keep_region_specific_instance_rates(self) -> None:
+        resource_map = SimpleNamespace(
+            scheduling_summary=lambda: {
+                "reserved|aws|us-east-1|zone-a|H100": {
+                    "pools": [
+                        {
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "price_per_instance_hour": 55.04,
+                        }
+                    ]
+                },
+                "reserved|aws|ap-northeast-1|zone-a|H100": {
+                    "pools": [
+                        {
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "price_per_instance_hour": 68.8,
+                        }
+                    ]
+                },
+            }
+        )
+
+        prices = ClusterSimulator._prices(resource_map)
+
+        self.assertEqual(
+            prices[("reserved|aws|us-east-1|zone-a|H100", "p5.48xlarge")],
+            (55.04, 8),
+        )
+        self.assertEqual(
+            prices[("reserved|aws|ap-northeast-1|zone-a|H100", "p5.48xlarge")],
+            (68.8, 8),
+        )
 
     def test_trace_configuration_writes_run_metadata(self) -> None:
         """Start one trace before the first simulation tick."""
@@ -1426,6 +1467,21 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertEqual(completed, 500)
         self.assertEqual(progress.completed_requests, 10_000)
+
+    def test_batch_rate_is_unavailable_without_measurements(self) -> None:
+        progress = BatchProgress(total_requests=10)
+
+        completed = advance_batch_progress(
+            progress,
+            (),
+            300_000_000_000,
+            attempted_requests=2,
+        )
+
+        self.assertIsNone(_batch_request_rate_per_second(()))
+        self.assertEqual(completed, 0)
+        self.assertEqual(progress.completed_requests, 0)
+        self.assertEqual(progress.next_request_number, 2)
 
     def test_batch_probe_telemetry_matches_campaign_rate(self) -> None:
         deployment = SimpleNamespace(
