@@ -466,7 +466,17 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.user_id = "user_1"
         simulator._online_jobs = {}
         simulator._online_backlog = {}
-        simulator._batch_jobs = {"job-a": object()}
+        simulator._batch_jobs = {
+            "job-a": BatchJob(
+                "batch-a",
+                "job-a",
+                "model-a",
+                0,
+                60_000_000_000,
+                180_000_000_000,
+                {"features": {}},
+            )
+        }
         simulator._batch_progress = {
             "job-a": BatchProgress(total_requests=10_000, completed_requests=3_000)
         }
@@ -478,7 +488,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
 
         self.assertFalse(event["completed_successfully"])
-        self.assertFalse(event["deadline_slo_met"])
+        self.assertIs(event["deadline_slo_met"], False)
         self.assertEqual(event["finish_reason"], "SIMULATION_HARD_STOP")
         self.assertEqual(event["unserved_request_count"], 7_000)
 
@@ -497,7 +507,17 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.user_id = "user_1"
         simulator._online_jobs = {}
         simulator._online_backlog = {}
-        simulator._batch_jobs = {"job-a": object()}
+        simulator._batch_jobs = {
+            "job-a": BatchJob(
+                "batch-a",
+                "job-a",
+                "model-a",
+                0,
+                60_000_000_000,
+                180_000_000_000,
+                {"features": {}},
+            )
+        }
         simulator._batch_progress = {
             "job-a": BatchProgress(total_requests=10_000, completed_requests=3_000)
         }
@@ -511,6 +531,46 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertIsNone(event["deadline_slo_met"])
         self.assertEqual(event["finish_reason"], "SIMULATION_TICK_LIMIT")
+
+    def test_tick_limit_marks_past_batch_deadline_as_failed(self) -> None:
+        simulator = object.__new__(ClusterSimulator)
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.clock.advance(timedelta(minutes=2))
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a"),
+            ranks=(SimpleNamespace(rank_id="rank-1"),),
+        )
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args: None,
+            transition=lambda *args, **kwargs: None,
+        )
+        simulator.user_id = "user_1"
+        simulator._online_jobs = {}
+        simulator._online_backlog = {}
+        simulator._batch_jobs = {
+            "job-a": BatchJob(
+                "batch-a",
+                "job-a",
+                "model-a",
+                0,
+                60_000_000_000,
+                180_000_000_000,
+                {"features": {}},
+            )
+        }
+        simulator._batch_progress = {
+            "job-a": BatchProgress(total_requests=10_000, completed_requests=3_000)
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            simulator._hard_stop("SIMULATION_TICK_LIMIT")
+            event = json.loads(
+                simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1]
+            )
+
+        self.assertIs(event["deadline_slo_met"], False)
 
     def test_hard_stop_trace_counts_online_backlog(self) -> None:
         """Report every online request still waiting at the hard stop."""

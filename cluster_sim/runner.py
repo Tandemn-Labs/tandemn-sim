@@ -1141,7 +1141,6 @@ class ClusterSimulator:
                 finish_reason=reason,
             )
             if trace_file is not None:
-                is_batch = job_id in self._batch_jobs
                 self._trace_job_state(
                     job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
@@ -1151,7 +1150,7 @@ class ClusterSimulator:
                         self.clock.now().isoformat(),
                         False,
                         reason,
-                        False if is_batch and not tick_limited else None,
+                        self._hard_stop_deadline_slo(job_id, tick_limited),
                         unserved_request_count,
                     ),
                 )
@@ -1182,10 +1181,26 @@ class ClusterSimulator:
                         self.clock.now().isoformat(),
                         False,
                         reason,
-                        False if job_id in self._batch_jobs and not tick_limited else None,
+                        self._hard_stop_deadline_slo(job_id, tick_limited),
                         unserved_request_count,
                     ),
                 )
+
+    def _hard_stop_deadline_slo(
+        self,
+        job_id: str,
+        tick_limited: bool,
+    ) -> bool | None:
+        """Return the known batch deadline result at simulation termination."""
+        batch_job = self._batch_jobs.get(job_id)
+        if batch_job is None:
+            return None
+        if not tick_limited:
+            return False
+        deadline_at = self.clock.start + timedelta(
+            microseconds=batch_job.deadline_at_ns // 1_000
+        )
+        return False if self.clock.now() >= deadline_at else None
 
     def _trace_job_state(self, job_id, to_status, at, reason) -> None:
         """Append one deduplicated logical lifecycle transition."""
