@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from math import ceil
 from pathlib import Path
 from time import perf_counter, time
+from typing import TypedDict
 
 from koi_trace import compile_koi_events
 from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Request, Scenario
@@ -38,15 +40,16 @@ from telemetry import (
 from trace import (
     append_event,
     cluster_window,
+    gpu_sample,
     job_admitted,
     job_finished,
     job_state_changed,
     job_submitted,
     job_window,
-    gpu_sample,
+    placement_observed,
+    plan_validation,
     planner_finished,
     pool_window,
-    placement_observed,
     rank_failed,
     rank_window,
     resource_snapshot,
@@ -71,6 +74,27 @@ class _RankFailure:
     rank_id: str
     reason_code: str
     error_detail: str
+
+
+@dataclass
+class _RequestOutcome:
+    offered: int = 0
+    completed: float = 0
+    ttft_passed: float | None = 0
+    tpot_passed: float | None = 0
+    slo_passed: float | None = 0
+    qualified_output_tokens: float | None = 0
+
+
+class _TerminalRequestOutcome(TypedDict):
+    offered_request_count: int
+    completed_request_count: int
+    unfinished_request_count: int
+    ttft_pass_count: int | None
+    tpot_pass_count: int | None
+    slo_pass_count: int | None
+    qualified_output_tokens: int | None
+    slo_count_scope: str
 
 
 class LogicalClock:
@@ -163,6 +187,12 @@ class ClusterSimulator:
             job.store_job_id: BatchProgress(total_requests=int(job.workload["record_count"]))
             for job in scenario.batch_jobs
         }
+        self._request_outcomes = {
+            job.store_job_id: _RequestOutcome(
+                offered=int(job.workload["record_count"])
+            )
+            for job in scenario.batch_jobs
+        }
         self._router = StickyRoundRobinRouter()
 
     def run(self, max_ticks: int | None = None) -> tuple[PlannerResult, ...]:
@@ -171,17 +201,32 @@ class ClusterSimulator:
             raise ValueError("max ticks must be positive")
         results = []
         tick_number = 0
-        while (
-            self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns
-            and (max_ticks is None or tick_number < max_ticks)
-        ):
-            results.append(self.run_tick(tick_number))
-            tick_number += 1
-        reached_drain = self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns
-        termination_reason = (
-            "SIMULATION_HARD_STOP" if reached_drain else "SIMULATION_TICK_LIMIT"
-        )
-        self._hard_stop(termination_reason)
+        try:
+            while (
+                self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns
+                and (max_ticks is None or tick_number < max_ticks)
+            ):
+                results.append(self.run_tick(tick_number))
+                tick_number += 1
+            reached_drain = (
+                self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns
+            )
+            termination_reason = (
+                "SIMULATION_HARD_STOP" if reached_drain else "SIMULATION_TICK_LIMIT"
+            )
+            self._hard_stop(termination_reason)
+        except Exception as error:
+            trace_file = getattr(self, "trace_file", None)
+            if trace_file is not None:
+                append_event(
+                    trace_file,
+                    run_finished(
+                        self.clock.now().isoformat(),
+                        f"{type(error).__name__}: {error}",
+                        status="failed",
+                    ),
+                )
+            raise
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
             append_event(
@@ -190,6 +235,7 @@ class ClusterSimulator:
                     self.clock.now().isoformat(),
                     termination_reason,
                     termination_reason == "SIMULATION_TICK_LIMIT",
+                    "completed" if reached_drain else "stopped",
                 ),
             )
         return tuple(results)
@@ -203,6 +249,7 @@ class ClusterSimulator:
         start_offset_ns = self._offset_ns(start)
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
         trace_file = getattr(self, "trace_file", None)
+        plans = []
         if trace_file is not None:
             append_event(trace_file, tick_started(tick_number, start.isoformat()))
             from tandemn_system_data.clients import ResourceMapStore
@@ -239,9 +286,9 @@ class ClusterSimulator:
                 self._koi_event_count = len(compiled_koi_events)
             from tandemn_system_data.clients import PlanStore
 
-            plans = []
+            plan_store = PlanStore(self.postgres)
             for created in result.plans:
-                plan = PlanStore(self.postgres).get(created.plan_id)
+                plan = plan_store.get(created.plan_id)
                 if plan is None:
                     continue
                 plans.append(
@@ -267,7 +314,7 @@ class ClusterSimulator:
                     decision_time_ms,
                     plans,
                     planned_job_ids,
-                    None,
+                    False,
                     result.error,
                 ),
             )
@@ -295,6 +342,13 @@ class ClusterSimulator:
                     )
                     self._admissions_in_tick += 1
         apply_pending_plans(self.user_id, self.postgres)
+        applied_plans = []
+        if trace_file is not None:
+            for plan in plans:
+                stored = plan_store.get(plan["plan_id"])
+                applied_plans.append(
+                    {**plan, "status": stored.status if stored is not None else "missing"}
+                )
         if trace_file is not None:
             for running in self.jobs.running_jobs(self.user_id):
                 self._trace_job_state(
@@ -312,7 +366,18 @@ class ClusterSimulator:
                         ),
                     )
         print(f"[tick {tick_number}] Preparing ServingSim inputs", flush=True)
-        self._simulate_tick(tick_number, start_offset_ns, end_offset_ns)
+        try:
+            self._simulate_tick(tick_number, start_offset_ns, end_offset_ns)
+        except Exception:
+            self._trace_plan_validations(
+                tick_number,
+                applied_plans,
+                selected_plan_error=getattr(
+                    self, "_tick_selected_plan_error", False
+                ),
+            )
+            raise
+        self._trace_plan_validations(tick_number, applied_plans)
         self._submit_jobs_before(end_offset_ns)
         self.clock.advance(timedelta(microseconds=self.scenario.tick_duration_ns // 1_000))
         return result
@@ -409,7 +474,12 @@ class ClusterSimulator:
         tick_start = self.clock.now()
         prepared_jobs: list[_PreparedJob] = []
         finished_online = []
-        failed_rank_ids = set()
+        failed_rank_ids: set[str] = set()
+        self._tick_failed_rank_ids = set()
+        self._tick_telemetry_rank_ids = set()
+        self._tick_selected_plan_error = False
+        outcome_updates = []
+        active_ns_by_job = {}
 
         running_jobs = self.jobs.running_jobs(self.user_id)
         for running in running_jobs:
@@ -418,6 +488,7 @@ class ClusterSimulator:
             job = self._online_jobs.get(running.job.job_id)
             if job is None:
                 continue
+            active_ns_by_job[running.job.job_id] = self.scenario.tick_duration_ns
             traffic_start = self._traffic_starts.setdefault(running.job.job_id, start_offset_ns)
             duration = job.stops_at_ns - job.starts_at_ns
             relative_start = start_offset_ns - traffic_start
@@ -427,6 +498,7 @@ class ClusterSimulator:
             )
             if relative_start >= duration:
                 if not backlog:
+                    active_ns_by_job[running.job.job_id] = 0
                     finished_online.append((running, tick_start))
                     continue
                 fresh_requests = ()
@@ -473,6 +545,7 @@ class ClusterSimulator:
             job = self._batch_jobs.get(running.job.job_id)
             if job is None:
                 continue
+            active_ns_by_job[running.job.job_id] = self.scenario.tick_duration_ns
             progress = self._batch_progress[job.store_job_id]
             probe = tuple(
                 replace(request, arrives_at_ns=start_offset_ns)
@@ -504,20 +577,25 @@ class ClusterSimulator:
         deadline_epoch_seconds = time() + SERVING_WINDOW_SECONDS
         if rank_runs:
             print(f"[tick {tick_number}] ServingSim ranks: 0/{len(rank_runs)} complete", flush=True)
-        results = (
-            run_ranks(
-                rank_runs,
-                self.parallel_simulators,
-                deadline_epoch_seconds,
-                progress=lambda completed, total, rank_run: print(
-                    f"[tick {tick_number}] ServingSim ranks: {completed}/{total} complete "
-                    f"({rank_run.deployment.rank_name})",
-                    flush=True,
-                ),
+        try:
+            results = (
+                run_ranks(
+                    rank_runs,
+                    self.parallel_simulators,
+                    deadline_epoch_seconds,
+                    progress=lambda completed, total, rank_run: print(
+                        f"[tick {tick_number}] ServingSim ranks: "
+                        f"{completed}/{total} complete "
+                        f"({rank_run.deployment.rank_name})",
+                        flush=True,
+                    ),
+                )
+                if rank_runs
+                else ()
             )
-            if rank_runs
-            else ()
-        )
+        except Exception:
+            self._tick_selected_plan_error = True
+            raise
         metrics = []
         result_offset = 0
         backlog_updates = {}
@@ -613,6 +691,14 @@ class ClusterSimulator:
                     if request.request_name not in completed_names
                 )
                 backlog_updates[job_id] = unfinished
+                outcome_updates.append(
+                    (
+                        job_id,
+                        int(request_summaries[job_id]["offered_request_count"] or 0),
+                        completed_request_count,
+                        request_summary,
+                    )
+                )
                 if prepared.source_exhausted and not unfinished:
                     finished_online.append(
                         (
@@ -631,6 +717,13 @@ class ClusterSimulator:
                 continue
             staged_progress = replace(progress)
             measurements = batch_probe_measurements(active_results)
+            outcome_rates = _batch_outcome_rates(
+                active_results,
+                measurements,
+                features.get("target_p99_ttft_ms"),
+                features.get("target_p99_tpot_ms"),
+                job.workload.get("task", "generate"),
+            )
             projected_completed = advance_batch_progress(
                 staged_progress,
                 measurements,
@@ -647,6 +740,7 @@ class ClusterSimulator:
             active_ns = self.scenario.tick_duration_ns
             if staged_progress.completed_at_ns is not None:
                 active_ns = max(0, staged_progress.completed_at_ns - start_offset_ns)
+            active_ns_by_job[job_id] = active_ns
             metrics.extend(
                 gpu_metrics_from_results(
                     prepared.running.job,
@@ -678,6 +772,9 @@ class ClusterSimulator:
                 campaign_request_per_sec=request_rate,
             )
             batch_progress_updates[job_id] = staged_progress
+            outcome_updates.append(
+                (job_id, 0, projected_completed, outcome_rates)
+            )
             if staged_progress.completed_requests == staged_progress.total_requests:
                 finished_batch.append(
                     (
@@ -694,14 +791,22 @@ class ClusterSimulator:
             metric_store = GpuMetricStore(self.postgres)
             commit_tick_metrics(metric_store, metrics)
 
+        for job_id, offered, completed, summary in outcome_updates:
+            self._record_request_outcome(
+                job_id,
+                offered_request_count=offered,
+                projected_completed_request_count=completed,
+                request_summary=summary,
+            )
         self._online_backlog.update(backlog_updates)
         self._batch_progress.update(batch_progress_updates)
+        self._tick_failed_rank_ids = failed_rank_ids
         for running, finished_at in finished_online:
             self._finish(running, finished_at)
         for running, finished_at in finished_batch:
             self._finish(running, finished_at)
 
-        if metrics:
+        if metrics or getattr(self, "trace_file", None) is not None:
             trace_file = getattr(self, "trace_file", None)
             if trace_file is not None:
                 from tandemn_system_data.models.gpu_metric import gpu_metric_to_metrics
@@ -709,13 +814,20 @@ class ClusterSimulator:
                 window_end = tick_start + timedelta(
                     microseconds=self.scenario.tick_duration_ns // 1_000
                 )
-                rows, trajectories = collect_rank_telemetry(
-                    metric_store,
-                    self.user_id,
-                    (metric.job_id for metric in metrics if metric.job_id is not None),
-                    tick_start,
-                    window_end,
+                rows, trajectories = (
+                    collect_rank_telemetry(
+                        metric_store,
+                        self.user_id,
+                        (metric.job_id for metric in metrics if metric.job_id is not None),
+                        tick_start,
+                        window_end,
+                    )
+                    if metric_store is not None
+                    else ([], {})
                 )
+                self._tick_telemetry_rank_ids = {
+                    row.rank_id for row in rows if row.rank_id is not None
+                }
                 for metric in rows:
                     append_event(
                         trace_file,
@@ -870,6 +982,7 @@ class ClusterSimulator:
                         ),
                     )
                 allocated_by_pool = {}
+                allocated_gpu_hours_by_pool = {}
                 pool_by_rank = {}
                 for running in running_jobs:
                     for rank in running.ranks:
@@ -884,6 +997,14 @@ class ClusterSimulator:
                         # Store count is the total rank footprint; replicas are chains.
                         allocated_by_pool[key] = allocated_by_pool.get(key, 0) + (
                             int(shape["count"])
+                        )
+                        allocated_gpu_hours_by_pool[key] = (
+                            allocated_gpu_hours_by_pool.get(key, 0.0)
+                            + int(shape["count"])
+                            * active_ns_by_job.get(
+                                running.job.job_id, self.scenario.tick_duration_ns
+                            )
+                            / 3_600_000_000_000
                         )
                 pool_facts = []
                 for env_key, summary in resource_map.scheduling_summary().items():
@@ -911,7 +1032,15 @@ class ClusterSimulator:
                             ),
                         )
                         pool_facts.append(
-                            {**pool, "allocated_gpu_count": observation["allocated_gpu_count"]}
+                            {
+                                **pool,
+                                "allocated_gpu_count": observation[
+                                    "allocated_gpu_count"
+                                ],
+                                "allocated_gpu_hours": allocated_gpu_hours_by_pool.get(
+                                    (env_key, instance_type), 0.0
+                                ),
+                            }
                         )
                 accounting = cluster_accounting(
                     pool_facts,
@@ -1035,6 +1164,169 @@ class ClusterSimulator:
                     )
         return prices
 
+    def _record_request_outcome(
+        self,
+        job_id: str,
+        *,
+        offered_request_count: int,
+        projected_completed_request_count: int,
+        request_summary: Mapping[str, int | float | None],
+    ) -> None:
+        """Accumulate one job's unique lifetime request outcomes."""
+        outcomes = getattr(self, "_request_outcomes", None)
+        if outcomes is None:
+            outcomes = self._request_outcomes = {}
+        outcome = outcomes.setdefault(job_id, _RequestOutcome())
+        outcome.offered += offered_request_count
+        observed_completed = float(request_summary["completed_request_count"] or 0)
+        outcome.completed += projected_completed_request_count
+        scale = (
+            projected_completed_request_count / observed_completed
+            if observed_completed
+            else 0
+        )
+        for source, target in (
+            ("ttft_pass_count", "ttft_passed"),
+            ("tpot_pass_count", "tpot_passed"),
+            ("slo_pass_count", "slo_passed"),
+            ("qualified_output_tokens", "qualified_output_tokens"),
+        ):
+            value = request_summary.get(source)
+            current = getattr(outcome, target)
+            if value is None:
+                setattr(outcome, target, None)
+            elif current is not None:
+                setattr(outcome, target, current + float(value) * scale)
+
+    def _terminal_request_outcome(self, job_id: str) -> _TerminalRequestOutcome:
+        """Return one integer lifetime summary for a terminal job."""
+        outcomes = getattr(self, "_request_outcomes", None)
+        if outcomes is None:
+            outcomes = self._request_outcomes = {}
+        outcome = outcomes.get(job_id)
+        if outcome is None:
+            batch_job = getattr(self, "_batch_jobs", {}).get(job_id)
+            progress = getattr(self, "_batch_progress", {}).get(job_id)
+            workload = getattr(batch_job, "workload", {})
+            offered = (
+                int(
+                    workload.get(
+                        "record_count", getattr(progress, "total_requests", 0)
+                    )
+                )
+                if batch_job
+                else 0
+            )
+            outcome = outcomes.setdefault(
+                job_id,
+                _RequestOutcome(
+                    offered=offered,
+                    completed=float(getattr(progress, "completed_requests", 0)),
+                ),
+            )
+
+        completed = min(outcome.offered, max(0, round(outcome.completed)))
+
+        def pass_count(value: float | None) -> int | None:
+            return None if value is None else min(completed, max(0, round(value)))
+
+        return {
+            "offered_request_count": outcome.offered,
+            "completed_request_count": completed,
+            "unfinished_request_count": outcome.offered - completed,
+            "ttft_pass_count": pass_count(outcome.ttft_passed),
+            "tpot_pass_count": pass_count(outcome.tpot_passed),
+            "slo_pass_count": pass_count(outcome.slo_passed),
+            "qualified_output_tokens": (
+                None
+                if outcome.qualified_output_tokens is None
+                else max(0, round(outcome.qualified_output_tokens))
+            ),
+            "slo_count_scope": "all_offered_requests",
+        }
+
+    def _ensure_offered_request_count(self, job_id: str, minimum: int) -> None:
+        """Cover terminal jobs that never reached the serving loop."""
+        self._terminal_request_outcome(job_id)
+        self._request_outcomes[job_id].offered = max(
+            self._request_outcomes[job_id].offered, minimum
+        )
+
+    def _ensure_online_offers_through(self, job_id: str, timestamp: datetime) -> None:
+        """Count source offers even while an online job has no active rank."""
+        if job_id not in getattr(self, "_online_jobs", {}):
+            return
+        requests = getattr(self, "_requests", {}).get(job_id)
+        if requests is None:
+            return
+        terminal_offset_ns = self._offset_ns(timestamp)
+        self._ensure_offered_request_count(
+            job_id,
+            sum(request.arrives_at_ns < terminal_offset_ns for request in requests),
+        )
+
+    @staticmethod
+    def _plan_validation_facts(
+        plan: dict[str, object],
+        telemetry_rank_ids: set[str],
+        failed_rank_ids: set[str],
+    ) -> tuple[int, bool | None]:
+        """Return applied selected-action count and telemetry-backed validity."""
+        raw_actions = plan.get("actions")
+        actions = [
+            action
+            for action in (raw_actions if isinstance(raw_actions, list) else [])
+            if isinstance(action, dict) and action.get("type") in {"place", "swap"}
+        ]
+        if plan.get("status") != "applied":
+            return 0, False
+        selected_rank_ids = set()
+        for action in actions:
+            ladder = action.get("ladder")
+            if not isinstance(ladder, list):
+                continue
+            selected_rank_ids.update(
+                rank["rank_id"]
+                for rank in ladder
+                if isinstance(rank, dict) and isinstance(rank.get("rank_id"), str)
+            )
+        if selected_rank_ids & failed_rank_ids:
+            return len(actions), False
+        if selected_rank_ids and selected_rank_ids <= telemetry_rank_ids:
+            return len(actions), True
+        return len(actions), None
+
+    def _trace_plan_validations(
+        self,
+        tick_number: int,
+        plans: list[dict[str, object]],
+        *,
+        selected_plan_error: bool = False,
+    ) -> None:
+        """Write post-apply validation once simulation establishes the outcome."""
+        trace_file = getattr(self, "trace_file", None)
+        if trace_file is None:
+            return
+        telemetry_rank_ids: set[str] = getattr(
+            self, "_tick_telemetry_rank_ids", set()
+        )
+        failed_rank_ids: set[str] = getattr(self, "_tick_failed_rank_ids", set())
+        for plan in plans:
+            applied_action_count, selected_plan_valid = self._plan_validation_facts(
+                plan, telemetry_rank_ids, failed_rank_ids
+            )
+            if selected_plan_error and applied_action_count:
+                selected_plan_valid = False
+            append_event(
+                trace_file,
+                plan_validation(
+                    tick_number,
+                    str(plan["plan_id"]),
+                    applied_action_count,
+                    selected_plan_valid,
+                ),
+            )
+
     def _finish(self, running, finished_at: datetime | None = None) -> None:
         """Stop active chains and finish a job after simulated work is complete."""
         from tandemn_system_data.models.enums import JobStatus, RankStatus
@@ -1057,6 +1349,8 @@ class ClusterSimulator:
                     microseconds=batch_job.deadline_at_ns // 1_000
                 )
                 deadline_slo_met = finished_at <= deadline_at
+            self._ensure_online_offers_through(running.job.job_id, finished_at)
+            request_outcome = self._terminal_request_outcome(running.job.job_id)
             append_event(
                 trace_file,
                 job_finished(
@@ -1065,6 +1359,12 @@ class ClusterSimulator:
                     True,
                     None,
                     deadline_slo_met,
+                    request_outcome["unfinished_request_count"],
+                    deadline_outcome=(
+                        "met" if deadline_slo_met is True else "missed"
+                        if deadline_slo_met is False else None
+                    ),
+                    **request_outcome,
                 ),
             )
 
@@ -1135,6 +1435,13 @@ class ClusterSimulator:
                 )
             else:
                 unserved_request_count = 0
+            self._ensure_online_offers_through(job_id, self.clock.now())
+            existing_outcome = self._terminal_request_outcome(job_id)
+            self._ensure_offered_request_count(
+                job_id,
+                int(existing_outcome["completed_request_count"])
+                + unserved_request_count,
+            )
             for rank in running.ranks:
                 self.jobs.set_rank_status(
                     rank.rank_id,
@@ -1148,6 +1455,8 @@ class ClusterSimulator:
                 finish_reason=reason,
             )
             if trace_file is not None:
+                deadline_slo_met = self._hard_stop_deadline_slo(job_id, tick_limited)
+                request_outcome = self._terminal_request_outcome(job_id)
                 self._trace_job_state(
                     job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
@@ -1157,12 +1466,30 @@ class ClusterSimulator:
                         self.clock.now().isoformat(),
                         False,
                         reason,
-                        self._hard_stop_deadline_slo(job_id, tick_limited),
-                        unserved_request_count,
+                        deadline_slo_met,
+                        request_outcome["unfinished_request_count"],
+                        deadline_outcome=(
+                            None
+                            if job_id not in self._batch_jobs
+                            else "censored"
+                            if deadline_slo_met is None
+                            else "met"
+                            if deadline_slo_met
+                            else "missed"
+                        ),
+                        **request_outcome,
                     ),
                 )
-        for waiting in getattr(self.jobs, "waiting_jobs", lambda _: ()) (self.user_id):
-            job_id = waiting.job_id
+        terminal_jobs = [
+            (job, JobStatus.WAITING)
+            for job in getattr(self.jobs, "waiting_jobs", lambda _: ()) (self.user_id)
+        ]
+        terminal_jobs.extend(
+            (job, JobStatus.PAUSED)
+            for job in getattr(self.jobs, "paused_jobs", lambda _: ()) (self.user_id)
+        )
+        for terminal_job, previous_status in terminal_jobs:
+            job_id = terminal_job.job_id
             if job_id in self._online_jobs:
                 unserved_request_count = sum(
                     request.arrives_at_ns < self._offset_ns(self.clock.now())
@@ -1172,13 +1499,17 @@ class ClusterSimulator:
                 unserved_request_count = self._batch_progress[job_id].total_requests
             else:
                 unserved_request_count = 0
+            self._ensure_online_offers_through(job_id, self.clock.now())
+            self._ensure_offered_request_count(job_id, unserved_request_count)
             self.jobs.transition(
                 job_id,
                 JobStatus.FINISHED,
-                [JobStatus.WAITING],
+                [previous_status],
                 finish_reason=reason,
             )
             if trace_file is not None:
+                deadline_slo_met = self._hard_stop_deadline_slo(job_id, tick_limited)
+                request_outcome = self._terminal_request_outcome(job_id)
                 self._trace_job_state(
                     job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
@@ -1188,8 +1519,18 @@ class ClusterSimulator:
                         self.clock.now().isoformat(),
                         False,
                         reason,
-                        self._hard_stop_deadline_slo(job_id, tick_limited),
-                        unserved_request_count,
+                        deadline_slo_met,
+                        request_outcome["unfinished_request_count"],
+                        deadline_outcome=(
+                            None
+                            if job_id not in self._batch_jobs
+                            else "censored"
+                            if deadline_slo_met is None
+                            else "met"
+                            if deadline_slo_met
+                            else "missed"
+                        ),
+                        **request_outcome,
                     ),
                 )
 
@@ -1324,6 +1665,42 @@ def _batch_request_rate_per_second(
         / measurement.horizon_ns
         for measurement in measurements
     )
+
+
+def _batch_outcome_rates(
+    results: tuple[object, ...],
+    measurements: tuple[BatchProbeMeasurement, ...],
+    target_ttft_ms: float | None,
+    target_tpot_ms: float | None,
+    task: object,
+) -> dict[str, int | float | None]:
+    """Return per-second batch outcomes weighted by each rank's probe horizon."""
+    results_by_rank = {
+        result.deployment.rank_name: result
+        for result in results
+    }
+    rates: dict[str, int | float | None] = {
+        "completed_request_count": 0.0,
+        "ttft_pass_count": 0.0,
+        "tpot_pass_count": 0.0,
+        "slo_pass_count": 0.0,
+        "qualified_output_tokens": 0.0,
+    }
+    for measurement in measurements:
+        result = results_by_rank.get(measurement.deployment.rank_name)
+        if result is None:
+            continue
+        summary = completed_request_summary(
+            (result,), target_ttft_ms, target_tpot_ms, task
+        )
+        per_second = 1_000_000_000 / measurement.horizon_ns
+        for field in rates:
+            value = summary[field]
+            if value is None:
+                rates[field] = None
+            elif rates[field] is not None:
+                rates[field] = float(rates[field]) + float(value) * per_second
+    return rates
 
 
 def _mean_or_none(values: list[float]) -> float | None:
