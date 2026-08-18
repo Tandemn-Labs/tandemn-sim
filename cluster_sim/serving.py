@@ -699,7 +699,7 @@ def gpu_metrics_from_results(
     results: Sequence[RankResult],
     tick_start: datetime,
     tick_duration_ns: int,
-    price_by_instance_type: Mapping[str, float],
+    prices_by_pool: Mapping[tuple[str, str], tuple[float, int]],
     *,
     batch_measurements: Mapping[str, BatchProbeMeasurement] | None = None,
     batch_active_ns: int | None = None,
@@ -722,15 +722,13 @@ def gpu_metrics_from_results(
                         measurement,
                         tick_start,
                         tick_duration_ns,
-                        price_by_instance_type,
+                        prices_by_pool,
                         batch_active_ns,
                     )
                 )
             continue
         shape = deployment.shape
-        instance_type = str(shape["instance_type"])
         target_ttft = float(shape.get("target_p99_ttft_ms", 0))
-        price_per_hour = price_by_instance_type.get(instance_type)
         prefix_cache_enabled = bool(shape.get("prefix_cache_enabled", False))
         samples = _latest_samples_per_bucket(result.metric_samples, tick_duration_ns)
 
@@ -747,7 +745,7 @@ def gpu_metrics_from_results(
                     _completed_in_sample(rows, sample),
                     sample.sample_interval_ns,
                     target_ttft,
-                    price_per_hour,
+                    _chain_price_per_hour(deployment, binding, prices_by_pool),
                     shape.get("task"),
                 )
                 values = {
@@ -771,7 +769,7 @@ def gpu_metrics_from_results(
                             chain_index=binding.chain_index,
                             local_rank=str(local_rank),
                             role="aggregate",
-                            instance_type=instance_type,
+                            instance_type=str(shape["instance_type"]),
                             model_name=deployment.model_name,
                             **values,
                         )
@@ -786,19 +784,18 @@ def _project_batch_probe_metrics(
     measurement: BatchProbeMeasurement,
     tick_start: datetime,
     tick_duration_ns: int,
-    price_by_instance_type: Mapping[str, float],
+    prices_by_pool: Mapping[tuple[str, str], tuple[float, int]],
     active_ns: int | None,
 ) -> list[object]:
     """Keep observed probe buckets, then project until the batch stops."""
     from tandemn_system_data.models import GpuMetric
 
     instance_type = str(deployment.shape["instance_type"])
-    price_per_hour = price_by_instance_type.get(instance_type)
-    observed = _batch_probe_bucket_metrics(result, price_per_hour)
+    observed = _batch_probe_bucket_metrics(result, prices_by_pool)
     chain_metrics = batch_probe_chain_metrics(
         result,
         measurement,
-        price_per_hour,
+        prices_by_pool,
     )
     active_ns = tick_duration_ns if active_ns is None else min(tick_duration_ns, active_ns)
     metrics = []
@@ -835,13 +832,20 @@ def _project_batch_probe_metrics(
 
 def _batch_probe_bucket_metrics(
     result: RankResult,
-    price_per_hour: float | None,
+    prices_by_pool: Mapping[tuple[str, str], tuple[float, int]],
 ) -> dict[int, dict[int, dict[str, float | None]]]:
     """Return measured chain metrics in canonical probe-time buckets."""
     from tandemn_system_data.models import GpuMetric
 
     selected = {}
+    periodic_instances = {
+        sample.instance_id
+        for sample in result.metric_samples
+        if sample.sample_kind == "periodic"
+    }
     for sample in result.metric_samples:
+        if sample.sample_kind == "final" and sample.instance_id in periodic_instances:
+            continue
         bucket_start_ns = max(
             0,
             ((sample.sim_time_ns - 1) // SAMPLE_BUCKET_NS) * SAMPLE_BUCKET_NS,
@@ -878,7 +882,11 @@ def _batch_probe_bucket_metrics(
                 rows,
                 sample.sample_interval_ns,
                 target_ttft,
-                price_per_hour,
+                _chain_price_per_hour(
+                    result.deployment,
+                    result.deployment.chains[instance_id],
+                    prices_by_pool,
+                ),
                 result.deployment.shape.get("task"),
             ),
             "kvcache_hit_rate": (
@@ -896,7 +904,7 @@ def _probe_sample_priority(sample: RankMetricSample) -> tuple[bool, int]:
 def batch_probe_chain_metrics(
     result: RankResult,
     measurement: BatchProbeMeasurement,
-    price_per_hour: float | None,
+    prices_by_pool: Mapping[tuple[str, str], tuple[float, int]],
 ) -> dict[int, dict[str, float | None]]:
     """Build one stationary metric set for each chain in a batch probe."""
     from tandemn_system_data.models import GpuMetric
@@ -923,12 +931,34 @@ def batch_probe_chain_metrics(
                 rows,
                 measurement.horizon_ns,
                 target_ttft,
-                price_per_hour,
+                _chain_price_per_hour(
+                    result.deployment,
+                    result.deployment.chains[instance_id],
+                    prices_by_pool,
+                ),
                 shape.get("task"),
             ),
             "kvcache_hit_rate": _kvcache_hit_rate(rows) if prefix_cache_enabled else None,
         }
     return metrics
+
+
+def _chain_price_per_hour(
+    deployment: RankDeployment,
+    binding: ChainBinding,
+    prices_by_pool: Mapping[tuple[str, str], tuple[float, int]],
+) -> float | None:
+    """Return the full instance cost of one chain's allocated nodes."""
+    environment = deployment.shape.get("env")
+    if not isinstance(environment, list):
+        return None
+    pool = prices_by_pool.get(
+        ("|".join(str(value) for value in environment), deployment.shape["instance_type"])
+    )
+    if pool is None:
+        return None
+    price_per_instance, gpus_per_instance = pool
+    return price_per_instance * math.ceil(binding.gpu_count / gpus_per_instance)
 
 
 def _stationary_probe_sample(
