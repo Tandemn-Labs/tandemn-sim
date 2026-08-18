@@ -18,7 +18,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from models import RankMetricSample, Request
+from models import ChainBinding, RankDeployment, RankMetricSample, Request
 from serving import (
     BatchProbeMeasurement,
     CSV_HEADER,
@@ -165,7 +165,7 @@ class BatchProbeMetricTest(unittest.TestCase):
         )
         measurement = BatchProbeMeasurement(deployment, 20_000_000_000, 2, 30)
 
-        metrics = batch_probe_chain_metrics(result, measurement, 36.0)
+        metrics = batch_probe_chain_metrics(result, measurement, {})
 
         self.assertEqual(metrics[0]["kv_cache_util"], 0.6)
         self.assertEqual(metrics[0]["throughput_token_per_sec"], 1.5)
@@ -202,7 +202,7 @@ class BatchProbeMetricTest(unittest.TestCase):
         )
         measurement = BatchProbeMeasurement(deployment, 5_000_000_000, 1, 10)
 
-        metrics = batch_probe_chain_metrics(result, measurement, None)
+        metrics = batch_probe_chain_metrics(result, measurement, {})
 
         self.assertEqual(metrics[0]["kv_cache_util"], 0.8)
 
@@ -244,7 +244,7 @@ class BatchProbeMetricTest(unittest.TestCase):
             (result,),
             start,
             300_000_000_000,
-            {"sim": 36.0},
+            {},
             batch_measurements={
                 "rank_a": BatchProbeMeasurement(deployment, 1_000_000_000, 1, 10),
             },
@@ -328,6 +328,66 @@ class BatchProbeMetricTest(unittest.TestCase):
             [5, 15, 25],
         )
 
+    def test_ignores_final_sample_after_periodic_probe_metrics(self) -> None:
+        deployment = SimpleNamespace(
+            rank_name="rank_a",
+            model_name="model",
+            chains=(SimpleNamespace(rank_id="rank_a", chain_index=0, gpu_count=1),),
+            shape={"instance_type": "sim", "target_p99_ttft_ms": 100},
+        )
+        result = RankResult(
+            deployment,
+            (
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+            ),
+            (
+                RankMetricSample(
+                    10_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.2},
+                ),
+                RankMetricSample(
+                    15_000_000_000,
+                    15_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.9},
+                    "final",
+                ),
+            ),
+            "",
+            "",
+        )
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            30_000_000_000,
+            {},
+            batch_measurements={
+                "rank_a": BatchProbeMeasurement(
+                    deployment,
+                    10_000_000_000,
+                    1,
+                    10,
+                )
+            },
+        )
+
+        self.assertEqual(
+            [metric.kv_cache_util for metric in metrics],
+            [0.2, 0.2, 0.2],
+        )
+
     def test_stops_projecting_when_the_batch_finishes(self) -> None:
         deployment = SimpleNamespace(
             rank_name="rank_a",
@@ -394,6 +454,71 @@ class BatchProbeMetricTest(unittest.TestCase):
         )
 
         self.assertEqual(metrics, [])
+
+    def test_chain_cost_uses_region_price_and_whole_instances(self) -> None:
+        deployment = RankDeployment(
+            "job_a",
+            "rank_a",
+            "model",
+            {
+                "env": ["reserved", "aws", "us-east-1", "zone-a", "H100"],
+                "instance_type": "p5.48xlarge",
+                "target_p99_ttft_ms": 100,
+            },
+            (
+                ChainBinding("rank_a", 0, 2),
+                ChainBinding("rank_a", 1, 16),
+            ),
+        )
+        result = RankResult(
+            deployment,
+            (
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+                {
+                    "instance id": 1,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+            ),
+            (
+                RankMetricSample(10_000_000_000, 10_000_000_000, 0, {}),
+                RankMetricSample(10_000_000_000, 10_000_000_000, 1, {}),
+            ),
+            "",
+            "",
+        )
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            300_000_000_000,
+            {
+                (
+                    "reserved|aws|us-east-1|zone-a|H100",
+                    "p5.48xlarge",
+                ): (55.04, 8),
+                (
+                    "reserved|aws|ap-northeast-1|zone-a|H100",
+                    "p5.48xlarge",
+                ): (68.8, 8),
+            },
+        )
+
+        costs = {metric.chain_index: metric.cost_per_token for metric in metrics}
+        self.assertEqual(costs[0], 55.04 / 3600)
+        self.assertEqual(costs[1], 110.08 / 3600)
 
 
 class ServingInputTest(unittest.TestCase):
@@ -1033,7 +1158,12 @@ class ServingInputTest(unittest.TestCase):
             (result,),
             datetime(2026, 1, 1, tzinfo=UTC),
             300_000_000_000,
-            {"sim.h100.8gpu": 10.0},
+            {
+                (
+                    "reserved|sim|region-1|zone-1|H100-SXM-80GB",
+                    "sim.h100.8gpu",
+                ): (10.0, 8),
+            },
         )
 
         periodic = [metric for metric in metrics if metric.ts == datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)]
