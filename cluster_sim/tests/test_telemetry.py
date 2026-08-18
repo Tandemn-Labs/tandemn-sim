@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 from telemetry import (
     _metric_value,
     _policy,
+    RankTrajectory,
     aggregate_job_metrics,
     aggregate_rank_trajectories,
     cluster_accounting,
@@ -67,10 +68,44 @@ class MetricValueTest(unittest.TestCase):
         )
 
         rank = trajectories[("job-a", "rank-0")]
-        self.assertEqual(rank["throughput_token_per_sec"], [30.0, 40.0])
-        self.assertEqual(rank["p99_ttft_ms"], [120.0, 110.0])
-        self.assertEqual(rank["cost_per_token"], [0.5, 0.55])
-        self.assertEqual(rank["kv_cache_util"], [0.65, 0.6])
+        self.assertEqual(rank.metrics["throughput_token_per_sec"], [30.0, 40.0])
+        self.assertEqual(rank.metrics["p99_ttft_ms"], [120.0, 110.0])
+        self.assertEqual(rank.metrics["cost_per_token"], [0.5, 0.55])
+        self.assertEqual(rank.metrics["kv_cache_util"], [0.65, 0.6])
+
+    def test_keeps_sparse_metrics_aligned_to_bucket_starts(self) -> None:
+        started_at = datetime(2026, 1, 1, tzinfo=UTC)
+        rows = (
+            SimpleNamespace(
+                ts=started_at,
+                job_id="job-a",
+                rank_id="rank-0",
+                chain_index=0,
+                throughput_token_per_sec=10.0,
+                p99_ttft_ms=None,
+            ),
+            SimpleNamespace(
+                ts=started_at + timedelta(seconds=10),
+                job_id="job-a",
+                rank_id="rank-0",
+                chain_index=0,
+                throughput_token_per_sec=20.0,
+                p99_ttft_ms=120.0,
+            ),
+        )
+
+        trajectory = aggregate_rank_trajectories(
+            rows,
+            {"throughput_token_per_sec", "p99_ttft_ms"},
+        )[("job-a", "rank-0")]
+
+        self.assertEqual(
+            trajectory.bucket_starts,
+            (started_at, started_at + timedelta(seconds=10)),
+        )
+        self.assertEqual(
+            trajectory.metrics["throughput_token_per_sec"], [10.0, 20.0])
+        self.assertEqual(trajectory.metrics["p99_ttft_ms"], [None, 120.0])
 
     def test_collects_rows_through_koi_store_api(self) -> None:
         """Use the same per-job Store window query as Koi."""
@@ -93,22 +128,31 @@ class MetricValueTest(unittest.TestCase):
 
         self.assertEqual([call[1] for call in calls], ["job-a", "job-b"])
         self.assertEqual(observed, rows)
-        self.assertEqual(trajectories[("job-a", "rank-0")]["p99_ttft_ms"], [80.0])
+        self.assertEqual(
+            trajectories[("job-a", "rank-0")].metrics["p99_ttft_ms"],
+            [80.0],
+        )
 
     def test_aggregates_latest_rank_values_per_job(self) -> None:
         """Use Koi's sum, max, and weighted-cost rules across job ranks."""
         metrics = aggregate_job_metrics(
             {
-                ("job-a", "rank-0"): {
-                    "throughput_token_per_sec": [10.0, 15.0],
-                    "p99_ttft_ms": [80.0, 90.0],
-                    "cost_per_token": [0.2, 0.3],
-                },
-                ("job-a", "rank-1"): {
-                    "throughput_token_per_sec": [20.0, 25.0],
-                    "p99_ttft_ms": [120.0, 110.0],
-                    "cost_per_token": [0.65, 0.7],
-                },
+                ("job-a", "rank-0"): RankTrajectory(
+                    (),
+                    {
+                        "throughput_token_per_sec": [10.0, 15.0],
+                        "p99_ttft_ms": [80.0, 90.0],
+                        "cost_per_token": [0.2, 0.3],
+                    },
+                ),
+                ("job-a", "rank-1"): RankTrajectory(
+                    (),
+                    {
+                        "throughput_token_per_sec": [20.0, 25.0],
+                        "p99_ttft_ms": [120.0, 110.0],
+                        "cost_per_token": [0.65, 0.7],
+                    },
+                ),
             }
         )
 

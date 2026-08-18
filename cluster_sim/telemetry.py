@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any, Mapping
@@ -48,6 +49,14 @@ OUTCOME_METRICS = frozenset(
         "slo_margin",
     }
 )
+
+
+@dataclass(frozen=True)
+class RankTrajectory:
+    """One rank's aligned telemetry values and their bucket starts."""
+
+    bucket_starts: tuple[datetime, ...]
+    metrics: dict[str, list[float | None]]
 
 
 def _metric_value(row: Any, metric: str) -> float | None:
@@ -145,7 +154,7 @@ def aggregate_rank_trajectories(
     rows: Iterable[Any],
     metric_names: set[str],
     sample_bucket_sec: int = DEFAULT_SAMPLE_BUCKET_SEC,
-) -> dict[tuple[str, str], dict[str, list[float]]]:
+) -> dict[tuple[str, str], RankTrajectory]:
     """Aggregate raw active-chain Store rows into rank metric trajectories."""
     rows_by_rank: dict[tuple[str, str], dict[int, dict[str, list[Any]]]] = {}
     for row in rows:
@@ -163,12 +172,19 @@ def aggregate_rank_trajectories(
 
     trajectories_by_rank = {}
     for rank, bucket_rows in rows_by_rank.items():
-        trajectories: dict[str, list[float]] = defaultdict(list)
-        for bucket in sorted(bucket_rows):
+        buckets = tuple(sorted(bucket_rows))
+        metrics: dict[str, list[float | None]] = {}
+        for index, bucket in enumerate(buckets):
             sample = _rank_sample(bucket_rows[bucket], metric_names)
             for metric, value in sample.items():
-                trajectories[metric].append(value)
-        trajectories_by_rank[rank] = dict(trajectories)
+                metrics.setdefault(metric, [None] * len(buckets))[index] = value
+        trajectories_by_rank[rank] = RankTrajectory(
+            tuple(
+                datetime.fromtimestamp(bucket * sample_bucket_sec, UTC)
+                for bucket in buckets
+            ),
+            metrics,
+        )
     return trajectories_by_rank
 
 
@@ -178,7 +194,7 @@ def collect_rank_telemetry(
     job_ids: Iterable[str],
     start: datetime,
     end: datetime,
-) -> tuple[list[Any], dict[tuple[str, str], dict[str, list[float]]]]:
+) -> tuple[list[Any], dict[tuple[str, str], RankTrajectory]]:
     """Read Store telemetry and aggregate it into Koi-compatible rank trajectories."""
     rows = [
         row
@@ -189,13 +205,15 @@ def collect_rank_telemetry(
 
 
 def aggregate_job_metrics(
-    trajectories: dict[tuple[str, str], dict[str, list[float]]]
+    trajectories: dict[tuple[str, str], RankTrajectory]
 ) -> dict[str, dict[str, float]]:
     """Aggregate each job's latest rank values with Koi metric policies."""
     values_by_job: dict[str, dict[str, dict[str, float]]] = {}
     for (job_id, rank_id), trajectory in trajectories.items():
         values_by_job.setdefault(job_id, {})[rank_id] = {
-            metric: values[-1] for metric, values in trajectory.items() if values
+            metric: value
+            for metric, values in trajectory.metrics.items()
+            if values and (value := values[-1]) is not None
         }
 
     metrics_by_job = {}
