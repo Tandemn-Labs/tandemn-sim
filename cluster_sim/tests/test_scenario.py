@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -89,6 +90,27 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual(len(probe), job.workload["requests_per_shard"])
         self.assertGreater(len({request.input_tokens for request in probe}), 1)
         self.assertGreater(len({request.output_tokens for request in probe}), 1)
+
+    def test_benchmark_azure_pools_use_cataloged_regions(self) -> None:
+        """Keep Azure benchmark capacity aligned with the seeded catalog offerings."""
+        resource_map = json.loads(
+            (ROOT / "benchmarks/resource_map_benchmarking.jsonl").read_text()
+        )["resource_map"]
+        regions = resource_map["clouds"]["azure"]["regions"]
+
+        self.assertNotIn("eastus", regions)
+        self.assertIn(
+            "Standard_ND96amsr_A100_v4",
+            regions["westus2"]["zones"]["1"]["network_fabrics"]["infiniband"][
+                "machine_pools"
+            ],
+        )
+        self.assertIn(
+            "Standard_NC96ads_A100_v4",
+            regions["WestUS3"]["zones"]["1"]["network_fabrics"]["default"][
+                "machine_pools"
+            ],
+        )
 
     def test_linear_ramp_uses_integrated_rate(self) -> None:
         """Treat rateRamp as a continuous increase, not a repeated tick pattern."""
