@@ -1222,6 +1222,105 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(pool_event["allocated_gpu_count"], 2)
         self.assertEqual(cluster_event["allocated_gpu_hours"], 2 * 300 / 3600)
 
+    def test_process_crash_requeues_all_dead_job(self) -> None:
+        """Return a crashed single-rank job to the next planner tick."""
+        job = OnlineJob(
+            "online", "job-a", "model", 0, 300_000_000_000, {"features": {}}
+        )
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a", spec_json={"model_id": "model"}),
+            ranks=(
+                SimpleNamespace(
+                    rank_id="rank-crashed",
+                    shape_json={
+                        "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
+                        "instance_type": "g6e.48xlarge",
+                        "count": 1,
+                        "gpu_count": 1,
+                    },
+                ),
+            ),
+        )
+        rank_calls = []
+        transitions = []
+
+        def transition(*args, **kwargs):
+            transitions.append((args, kwargs))
+            return True
+
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "process-crash",
+            300_000_000_000,
+            300_000_000_000,
+            (job,),
+            (),
+        )
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args, **kwargs: rank_calls.append((args, kwargs)),
+            transition=transition,
+        )
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 1
+        simulator._router = StickyRoundRobinRouter()
+        simulator._traffic_starts = {}
+        simulator._requests = {
+            "job-a": (Request("request-a", "session", 0, 0, 1, 1, None),)
+        }
+        simulator._online_jobs = {"job-a": job}
+        simulator._online_backlog = {"job-a": ()}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+        simulator._request_outcomes = {}
+        simulator.trace_file = None
+
+        rank_run = SimpleNamespace(
+            deployment=SimpleNamespace(rank_name="rank-crashed"),
+            request_count=1,
+        )
+        crashed = SimpleNamespace(
+            status="process_crash",
+            deployment=rank_run.deployment,
+            request_rows=(),
+            completed_requests=(),
+            stdout="",
+            stderr="ASTRA-Sim exited unexpectedly with code -6",
+        )
+        catalog = {"regions": [{"cloud": "aws", "region": "test", "instance_types": []}]}
+
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                return_value=SimpleNamespace(
+                    get=lambda: SimpleNamespace(catalog=catalog)
+                ),
+            ),
+            patch(
+                "tandemn_system_data.clients.ResourceMapStore",
+                return_value=SimpleNamespace(
+                    get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                ),
+            ),
+            patch.object(
+                simulator, "_prepare_job_runs", return_value=((rank_run,), ())
+            ),
+            patch("runner.run_ranks", return_value=(crashed,)),
+            patch("runner.gpu_metrics_from_results", return_value=[]),
+        ):
+            simulator._simulate_tick(0, 0, 300_000_000_000)
+
+        self.assertEqual(rank_calls[0][0][0], "rank-crashed")
+        self.assertEqual(rank_calls[0][1]["reason_code"], "PROCESS_CRASH")
+        self.assertEqual(transitions[0][0], ("job-a", "waiting", ["running"]))
+        self.assertEqual(
+            [request.request_name for request in simulator._online_backlog["job-a"]],
+            ["request-a"],
+        )
+
     def test_rankless_running_job_is_skipped(self) -> None:
         """Wait for a planner replacement instead of routing into no ranks."""
         job = OnlineJob("online", "job-a", "model", 0, 300_000_000_000, {"features": {}})

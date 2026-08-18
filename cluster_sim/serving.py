@@ -38,6 +38,8 @@ CSV_HEADER = [
 SECOND = 1_000_000_000
 SAMPLE_BUCKET_NS = 10 * SECOND
 SERVING_WINDOW_SECONDS = 300
+# ponytail: fixed retry cap prevents flaky ASTRA exits from stalling a benchmark.
+ASTRA_CRASH_RETRIES = 2
 PROFILE_ALIASES = {
     "H100": "H100",
     "H100-SXM-80GB": "H100",
@@ -459,18 +461,6 @@ def _run_rank(
     rank_run: RankRun, deadline_epoch_seconds: float | None = None
 ) -> RankResult:
     """Run and parse one rank simulation command."""
-    if deadline_epoch_seconds is not None and time() >= deadline_epoch_seconds:
-        if rank_run.cleanup_dir is not None:
-            shutil.rmtree(rank_run.cleanup_dir)
-        return RankResult(
-            rank_run.deployment,
-            (),
-            (),
-            "",
-            "",
-            "wall_time_limit",
-            (),
-        )
     command = rank_run.command
     if deadline_epoch_seconds is not None:
         command = (
@@ -479,17 +469,47 @@ def _run_rank(
             str(deadline_epoch_seconds),
         )
     try:
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=rank_run.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"{rank_run.deployment.rank_name} simulation timed out") from error
-        return parse_rank_result(rank_run, completed)
+        for attempt in range(ASTRA_CRASH_RETRIES + 1):
+            if deadline_epoch_seconds is not None and time() >= deadline_epoch_seconds:
+                return RankResult(
+                    rank_run.deployment,
+                    (),
+                    (),
+                    "",
+                    "",
+                    "wall_time_limit",
+                    (),
+                )
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=rank_run.timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(
+                    f"{rank_run.deployment.rank_name} simulation timed out"
+                ) from error
+            output = f"{completed.stdout}\n{completed.stderr}"
+            if completed.returncode and "ASTRA-Sim exited unexpectedly" in output:
+                print(
+                    f"{rank_run.deployment.rank_name} ASTRA crash "
+                    f"({attempt + 1}/{ASTRA_CRASH_RETRIES + 1}): {output[-1_000:]}",
+                    flush=True,
+                )
+                if attempt < ASTRA_CRASH_RETRIES:
+                    continue
+                return RankResult(
+                    rank_run.deployment,
+                    (),
+                    (),
+                    completed.stdout,
+                    completed.stderr,
+                    "process_crash",
+                )
+            return parse_rank_result(rank_run, completed)
     finally:
         if rank_run.cleanup_dir is not None and rank_run.cleanup_dir.exists():
             shutil.rmtree(rank_run.cleanup_dir)
