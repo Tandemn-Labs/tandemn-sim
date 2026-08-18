@@ -41,7 +41,7 @@ def run_started(
     """Build the immutable first event for one experiment trace."""
     return {
         "kind": "run_started",
-        "trace_version": 2,
+        "trace_version": 3,
         "run_id": run_id,
         "scenario": scenario,
         "benchmark": benchmark,
@@ -185,6 +185,7 @@ def rank_window(
     y_hat: dict[str, object] | None = None,
     telemetry_scope: str = "observed_tick",
     projection_method: str | None = None,
+    sample_bucket_starts: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Build one per-rank telemetry trajectory for a completed tick window."""
     return {
@@ -201,7 +202,8 @@ def rank_window(
         "y_actual": y_actual,
         "telemetry_scope": telemetry_scope,
         "projection_method": projection_method,
-        "aggregation_policy_version": 1,
+        "sample_bucket_starts": list(sample_bucket_starts),
+        "aggregation_policy_version": 2,
     }
 
 
