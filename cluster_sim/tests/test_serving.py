@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from models import ChainBinding, RankDeployment, RankMetricSample, Request
 from serving import (
+    ASTRA_CRASH_RETRIES,
     BatchProbeMeasurement,
     CSV_HEADER,
     RankRun,
@@ -755,6 +756,55 @@ class ServingInputTest(unittest.TestCase):
             run.call_args.args[0][-2:],
             ("--wall-deadline-epoch-seconds", "1300"),
         )
+
+    def test_rank_retries_astra_crash_before_succeeding(self) -> None:
+        """Retry the known ASTRA crash without failing the tick."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        crashed = subprocess.CompletedProcess(
+            (), 1, "", "ASTRA-Sim exited unexpectedly with code -6"
+        )
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        parsed = SimpleNamespace()
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch(
+                "serving.subprocess.run", side_effect=(crashed, crashed, completed)
+            ) as run,
+            patch("serving.parse_rank_result", return_value=parsed) as parse,
+            patch("builtins.print") as printed,
+        ):
+            result = _run_rank(rank_run, 1_300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(run.call_count, 3)
+        parse.assert_called_once_with(rank_run, completed)
+        self.assertEqual(printed.call_count, 2)
+
+    def test_rank_marks_astra_crash_after_retry_cap(self) -> None:
+        """Return a rank-local failure after every immediate retry crashes."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        crashed = subprocess.CompletedProcess(
+            (), 1, "", "ASTRA-Sim exited unexpectedly with code -6"
+        )
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=crashed) as run,
+            patch("builtins.print") as printed,
+        ):
+            result = _run_rank(rank_run, 1_300)
+
+        self.assertEqual(run.call_count, ASTRA_CRASH_RETRIES + 1)
+        self.assertEqual(printed.call_count, ASTRA_CRASH_RETRIES + 1)
+        self.assertEqual(result.status, "process_crash")
+        self.assertEqual(result.stderr, crashed.stderr)
 
     def test_rank_queued_past_shared_deadline_is_not_started(self) -> None:
         """Return an unfinished result without launching a late simulator."""

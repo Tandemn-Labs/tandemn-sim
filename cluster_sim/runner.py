@@ -462,6 +462,7 @@ class ClusterSimulator:
             HardwareCatalogStore,
             ResourceMapStore,
         )
+        from tandemn_system_data.models.enums import JobStatus, ReasonCode
 
         catalog_store = HardwareCatalogStore(self.postgres)
         all_catalogs = getattr(catalog_store, "all", lambda: None)()
@@ -475,6 +476,7 @@ class ClusterSimulator:
         prepared_jobs: list[_PreparedJob] = []
         finished_online = []
         failed_rank_ids: set[str] = set()
+        requeue_after_crash = []
         self._tick_failed_rank_ids = set()
         self._tick_telemetry_rank_ids = set()
         self._tick_selected_plan_error = False
@@ -620,10 +622,30 @@ class ClusterSimulator:
                     if getattr(result, "status", "completed") == "oom"
                 )
                 self._fail_oom(prepared.running, job.name, job_results)
+            crash_failures = tuple(
+                _RankFailure(
+                    result.deployment.rank_name,
+                    ReasonCode.PROCESS_CRASH,
+                    result.stderr or result.stdout or "LLMServingSim ASTRA crash",
+                )
+                for _, result in result_pairs
+                if getattr(result, "status", "completed") == "process_crash"
+            )
+            if crash_failures:
+                failed_rank_ids.update(
+                    failure.rank_id for failure in crash_failures
+                )
+                self._fail_ranks(prepared.running, job.name, crash_failures)
+                if all(
+                    rank.rank_id in failed_rank_ids
+                    for rank in prepared.running.ranks
+                ):
+                    requeue_after_crash.append(prepared.running)
             active_pairs = tuple(
                 (rank_run, result)
                 for rank_run, result in result_pairs
-                if getattr(result, "status", "completed") != "oom"
+                if getattr(result, "status", "completed")
+                not in {"oom", "process_crash"}
             )
             active_rank_runs = tuple(rank_run for rank_run, _ in active_pairs)
             active_results = tuple(result for _, result in active_pairs)
@@ -800,6 +822,18 @@ class ClusterSimulator:
             )
         self._online_backlog.update(backlog_updates)
         self._batch_progress.update(batch_progress_updates)
+        for running in requeue_after_crash:
+            if self.jobs.transition(
+                running.job.job_id,
+                JobStatus.WAITING,
+                [JobStatus.RUNNING],
+            ):
+                self._trace_job_state(
+                    running.job.job_id,
+                    "WAITING",
+                    tick_start,
+                    "process_crash_requeue",
+                )
         self._tick_failed_rank_ids = failed_rank_ids
         for running, finished_at in finished_online:
             self._finish(running, finished_at)
