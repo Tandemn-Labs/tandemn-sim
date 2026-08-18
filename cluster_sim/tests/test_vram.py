@@ -15,9 +15,11 @@ from models import OnlineJob, Scenario
 from policy import load_config_policy
 from vram import (
     MODEL_ARCHITECTURES,
+    ModelArchitecture,
     VRAM_REQUIREMENTS_GIB,
     StoreSnapshot,
     VramPlannerDriver,
+    calculate_max_vram_gib,
     generate_vram_requirements,
     model_architecture_from_huggingface,
 )
@@ -55,41 +57,53 @@ class VramPlannerDriverTest(unittest.TestCase):
         for jobs in VRAM_REQUIREMENTS_GIB.values():
             self.assertTrue(all(required_gib > 0 for required_gib in jobs.values()))
 
-    def test_simulation_3h_keeps_checked_in_vram_baseline(self) -> None:
-        """Keep the approved VRAM baseline independent from benchmark drift."""
-        requirements = VRAM_REQUIREMENTS_GIB["simulation_3h"]
-        expected = {
-            "job-benchmark_timing_3hr-0-1": 1064.314,
-            "job-benchmark_timing_3hr-0-2": 1640.938,
-            "job-benchmark_timing_3hr-0-3": 6591.789,
-            "job-benchmark_timing_3hr-0-4": 807.966,
-            "job-benchmark_timing_3hr-7-1": 16243.584,
-            "job-benchmark_timing_3hr-7-3": 3932.206,
-            "job-benchmark_timing_3hr-32-1": 19992.668,
-            "job-benchmark_timing_3hr-32-2": 2071.983,
-            "job-benchmark_timing_3hr-49-1": 11219.803,
-            "job-benchmark_timing_3hr-49-2": 1935.896,
-            "job-benchmark_timing_3hr-67-1": 2206.908,
-            "job-benchmark_timing_3hr-67-2": 995.407,
-            "job-benchmark_timing_3hr-67-3": 331.271,
-            "job-benchmark_timing_3hr-100-2": 1743.919,
-            "job-benchmark_timing_3hr-125-1": 702.026,
-            "job-benchmark_timing_3hr-145-1": 1171.456,
-        }
-
-        self.assertEqual({key: requirements[key] for key in expected}, expected)
+    def test_checked_in_vram_map_matches_benchmarks(self) -> None:
+        """Keep the checked-in artifact derived from executable benchmark YAML."""
+        self.assertEqual(
+            generate_vram_requirements(ROOT / "benchmarks"),
+            VRAM_REQUIREMENTS_GIB,
+        )
 
     def test_known_vram_results_match_benchmark_inputs(self) -> None:
         """Preserve generated encoder and frontier-model VRAM outcomes."""
         mappings = VRAM_REQUIREMENTS_GIB["simulation_3h"]
-        encoder = mappings["job-benchmark_timing_3hr-0-5"]
+        small_model = mappings["job-benchmark_timing_3hr-0-5"]
         kimi = mappings["job-benchmark_timing_3hr-67-1"]
+        deepseek = mappings["job-benchmark_timing_3hr-145-2"]
 
-        self.assertEqual(encoder, 1.053)
-        self.assertEqual(kimi, 1928.689)
+        self.assertEqual(small_model, 2.458)
+        self.assertEqual(kimi, 972.772)
+        self.assertEqual(deepseek, 794.59)
         self.assertEqual(
             MODEL_ARCHITECTURES["moonshotai/Kimi-K2-Instruct"].mla_cache_elements, 576
         )
+
+    def test_fp8_weights_keep_runtime_memory_at_bf16(self) -> None:
+        architecture = ModelArchitecture(
+            parameter_count=2**30,
+            hidden_size=4,
+            intermediate_size=8,
+            attention_layers=1,
+            kv_heads=1,
+            head_dim=1,
+        )
+        job = {
+            "kind": "batch",
+            "input_source": {"requests_per_shard": 2},
+            "spec_json": {
+                "job_features": {"isl_token_max": 3, "osl_token_max": 5},
+                "precision": "bf16",
+            },
+        }
+        fp8_job = {
+            **job,
+            "spec_json": {**job["spec_json"], "precision": "bf16-fp8"},
+        }
+
+        bf16 = calculate_max_vram_gib(architecture, job)
+        fp8 = calculate_max_vram_gib(architecture, fp8_job)
+
+        self.assertEqual(bf16 - fp8, 1.0)
 
     def test_huggingface_mla_config_derives_cache_shape(self) -> None:
         """Derive DeepSeek-style MLA cache elements from public config fields."""
