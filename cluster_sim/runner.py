@@ -744,12 +744,12 @@ class ClusterSimulator:
                 for rank, actual in trajectories.items():
                     v_actual = {
                         name: values
-                        for name, values in actual.items()
+                        for name, values in actual.metrics.items()
                         if name not in OUTCOME_METRICS
                     }
                     y_actual = {
                         name: values
-                        for name, values in actual.items()
+                        for name, values in actual.metrics.items()
                         if name in OUTCOME_METRICS
                     }
                     append_event(
@@ -772,6 +772,10 @@ class ClusterSimulator:
                                 "stationary_after_probe"
                                 if rank[0] in self._batch_jobs
                                 else None
+                            ),
+                            sample_bucket_starts=tuple(
+                                bucket_start.isoformat()
+                                for bucket_start in actual.bucket_starts
                             ),
                         ),
                     )
@@ -1019,13 +1023,16 @@ class ClusterSimulator:
         return tuple(rank_runs), tuple(failures)
 
     @staticmethod
-    def _prices(resource_map) -> dict[str, float]:
-        """Index seeded ResourceMap instance prices for cost-per-token telemetry."""
+    def _prices(resource_map) -> dict[tuple[str, str], tuple[float, int]]:
+        """Index exact ResourceMap pools for cost-per-token telemetry."""
         prices = {}
-        for summary in resource_map.scheduling_summary().values():
+        for environment, summary in resource_map.scheduling_summary().items():
             for pool in summary["pools"]:
                 if pool["price_per_instance_hour"] is not None:
-                    prices[pool["instance_type"]] = pool["price_per_instance_hour"]
+                    prices[(environment, pool["instance_type"])] = (
+                        float(pool["price_per_instance_hour"]),
+                        int(pool["gpus_per_instance"]),
+                    )
         return prices
 
     def _finish(self, running, finished_at: datetime | None = None) -> None:
@@ -1289,6 +1296,8 @@ def advance_batch_progress(
     progress.next_request_number += attempted_requests
 
     request_rate = _batch_request_rate_per_second(measurements)
+    if request_rate is None:
+        return 0
     projected_capacity = int(request_rate * tick_duration_ns / 1_000_000_000)
     if projected_capacity == 0:
         return 0
@@ -1305,8 +1314,10 @@ def advance_batch_progress(
 
 def _batch_request_rate_per_second(
     measurements: tuple[BatchProbeMeasurement, ...],
-) -> float:
+) -> float | None:
     """Return the combined completed-request rate across batch rank probes."""
+    if not measurements:
+        return None
     return sum(
         measurement.completed_request_count
         * 1_000_000_000
