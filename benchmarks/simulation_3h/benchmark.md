@@ -56,7 +56,7 @@ Online concurrency is an in-flight request ceiling, not a user-population count.
 
 For every non-ramped AIPerf phase, `rate * (p99_ttft + (osl_avg - 1) * p99_tpot)` is at most 70% of `max_concurrent_streaming`; this reserves 30% of each service cap for tail latency and gamma/Poisson variation. The planner receives the same cap through `spec.features`, while AIPerf receives it through the phase `concurrency` field.
 
-Batch `requests_per_shard` remains the campaign partition size. `max_in_flight_requests` is the smaller simulator dispatch batch used for VRAM sizing and ServingSim probes, so a large dataset shard is not incorrectly treated as thousands of simultaneous generations.
+Batch `record_count` is the campaign size and `requests_per_shard` is the representative saturation probe. ServingSim's placement-level `max_num_seq` controls engine residency; the simulator does not use `max_in_flight_requests` as a job-level throttle. It projects the measured probe rate across the logical tick. Probe telemetry remains measured while the probe runs, then the latest periodic operating point is projected only until the campaign completes or the tick ends.
 
 Inactive in this manifest: Inferentia2 and Trainium2. They require separate backend/compatibility experiments.
 
@@ -72,7 +72,7 @@ Dispatch: releases occur at their exact offset. A job arrival triggers the admis
 
 Online lifecycle: `active_start_at_offset_minutes` and `active_end_at_offset_minutes` define a half-open traffic window. `duration_minutes` is retained only as a consistency check. At the end offset the load generator stops new requests, drains in-flight requests, and the executor records `terminal_at`.
 
-Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size and `max_in_flight_requests` bounds each simulator dispatch batch. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
+Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `record_count` fixes campaign size; shard metadata is not independently scheduled by the simulator. `requests_per_shard` fixes the representative saturation probe. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
 
 Overlap: `base_service` remains active, `additive_stream` adds demand to an existing service, and `replace_service` identifies a model/service replacement. Overlap is intentional and additive unless explicitly marked as replacement.
 
@@ -84,7 +84,7 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Encoder convention: reranking workloads remain online requests. Their end-to-end request latency is evaluated as TTFT; TPOT is not applicable and is excluded from TPOT attainment denominators.
 
-Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
+Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss. A `--ticks` preview is not a drain result: it terminates with `SIMULATION_TICK_LIMIT` and leaves `deadline_slo_met` null.
 
 Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded shards**.
 
