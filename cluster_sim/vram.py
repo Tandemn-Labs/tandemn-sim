@@ -22,7 +22,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_homogenous-0-2": 171.67,
         "job-benchmark_timing_real_3hr_homogenous-0-3": 102.824,
         "job-benchmark_timing_real_3hr_homogenous-0-4": 6.427,
-        "job-benchmark_timing_real_3hr_homogenous-0-5": 1.053,
+        "job-benchmark_timing_real_3hr_homogenous-0-5": 2.458,
         "job-benchmark_timing_real_3hr_homogenous-7-1": 176.994,
         "job-benchmark_timing_real_3hr_homogenous-7-2": 1.077,
         "job-benchmark_timing_real_3hr_homogenous-7-3": 141.678,
@@ -32,7 +32,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_homogenous-32-2": 57.976,
         "job-benchmark_timing_real_3hr_homogenous-49-1": 109.256,
         "job-benchmark_timing_real_3hr_homogenous-49-2": 6.427,
-        "job-benchmark_timing_real_3hr_homogenous-67-1": 1928.689,
+        "job-benchmark_timing_real_3hr_homogenous-67-1": 972.772,
         "job-benchmark_timing_real_3hr_homogenous-67-2": 247.878,
         "job-benchmark_timing_real_3hr_homogenous-67-3": 154.676,
         "job-benchmark_timing_real_3hr_homogenous-85-1": 570.518,
@@ -41,7 +41,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_homogenous-125-1": 175.948,
         "job-benchmark_timing_real_3hr_homogenous-125-2": 313.143,
         "job-benchmark_timing_real_3hr_homogenous-145-1": 200.752,
-        "job-benchmark_timing_real_3hr_homogenous-145-2": 1432.109,
+        "job-benchmark_timing_real_3hr_homogenous-145-2": 794.59,
         "job-benchmark_timing_real_3hr_homogenous-160-1": 251.363,
     },
     "real_life_12h": {
@@ -50,7 +50,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_12hr_192gpu-0-3": 500.411,
         "job-benchmark_timing_real_12hr_192gpu-0-4": 1497.795,
         "job-benchmark_timing_real_12hr_192gpu-0-5": 356.794,
-        "job-benchmark_timing_real_12hr_192gpu-0-6": 1.053,
+        "job-benchmark_timing_real_12hr_192gpu-0-6": 2.458,
         "job-benchmark_timing_real_12hr_192gpu-10-1": 741.768,
         "job-benchmark_timing_real_12hr_192gpu-10-2": 204.726,
         "job-benchmark_timing_real_12hr_192gpu-45-1": 5328.781,
@@ -85,7 +85,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_24hr_192gpu-0-4": 533.956,
         "job-benchmark_timing_real_24hr_192gpu-0-5": 1628.41,
         "job-benchmark_timing_real_24hr_192gpu-0-6": 389.021,
-        "job-benchmark_timing_real_24hr_192gpu-0-7": 1.053,
+        "job-benchmark_timing_real_24hr_192gpu-0-7": 2.458,
         "job-benchmark_timing_real_24hr_192gpu-10-1": 741.768,
         "job-benchmark_timing_real_24hr_192gpu-10-2": 204.726,
         "job-benchmark_timing_real_24hr_192gpu-10-3": 1647.942,
@@ -126,7 +126,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_3hr_192gpu-0-2": 433.321,
         "job-benchmark_timing_real_3hr_192gpu-0-3": 1236.565,
         "job-benchmark_timing_real_3hr_192gpu-0-4": 292.341,
-        "job-benchmark_timing_real_3hr_192gpu-0-5": 1.053,
+        "job-benchmark_timing_real_3hr_192gpu-0-5": 2.458,
         "job-benchmark_timing_real_3hr_192gpu-12-1": 4393.226,
         "job-benchmark_timing_real_3hr_192gpu-12-2": 1.077,
         "job-benchmark_timing_real_3hr_192gpu-12-3": 856.034,
@@ -148,7 +148,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_12hr-0-3": 2144.112,
         "job-benchmark_timing_12hr-0-4": 7897.942,
         "job-benchmark_timing_12hr-0-5": 1130.232,
-        "job-benchmark_timing_12hr-0-6": 1.053,
+        "job-benchmark_timing_12hr-0-6": 2.458,
         "job-benchmark_timing_12hr-10-1": 741.768,
         "job-benchmark_timing_12hr-10-2": 204.726,
         "job-benchmark_timing_12hr-10-3": 656.349,
@@ -188,7 +188,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_24hr-0-4": 2311.836,
         "job-benchmark_timing_24hr-0-5": 7897.942,
         "job-benchmark_timing_24hr-0-6": 1162.458,
-        "job-benchmark_timing_24hr-0-7": 1.053,
+        "job-benchmark_timing_24hr-0-7": 2.458,
         "job-benchmark_timing_24hr-0-8": 1.077,
         "job-benchmark_timing_24hr-10-1": 741.768,
         "job-benchmark_timing_24hr-10-2": 204.726,
@@ -236,8 +236,8 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_3hr-0-2": 171.67,
         "job-benchmark_timing_3hr-0-3": 102.824,
         "job-benchmark_timing_3hr-0-4": 6.427,
-        "job-benchmark_timing_3hr-0-5": 1.053,
-        "job-benchmark_timing_3hr-7-1": 176.994,
+        "job-benchmark_timing_3hr-0-5": 2.458,
+        "job-benchmark_timing_3hr-7-1": 105.501,
         "job-benchmark_timing_3hr-7-2": 1.077,
         "job-benchmark_timing_3hr-7-3": 141.678,
         "job-benchmark_timing_3hr-15-1": 741.768,
@@ -246,7 +246,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_3hr-32-2": 57.976,
         "job-benchmark_timing_3hr-49-1": 109.256,
         "job-benchmark_timing_3hr-49-2": 6.427,
-        "job-benchmark_timing_3hr-67-1": 1928.689,
+        "job-benchmark_timing_3hr-67-1": 972.772,
         "job-benchmark_timing_3hr-67-2": 247.878,
         "job-benchmark_timing_3hr-67-3": 154.676,
         "job-benchmark_timing_3hr-85-1": 570.518,
@@ -255,7 +255,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_3hr-125-1": 175.948,
         "job-benchmark_timing_3hr-125-2": 313.143,
         "job-benchmark_timing_3hr-145-1": 200.752,
-        "job-benchmark_timing_3hr-145-2": 1432.109,
+        "job-benchmark_timing_3hr-145-2": 794.59,
         "job-benchmark_timing_3hr-160-1": 251.363,
     },
 }
@@ -286,10 +286,11 @@ _HARDWARE_MEMORY_GIB = {
     "mi300x-192gb": 192,
 }
 
-_PRECISION_BYTES = {
-    "bf16": 2,
-    "fp16": 2,
-    "fp32": 4,
+_PRECISION_STORAGE_BYTES = {
+    "bf16": (2, 2),
+    "fp16": (2, 2),
+    "fp32": (4, 4),
+    "bf16-fp8": (1, 2),
 }
 
 
@@ -504,29 +505,29 @@ def calculate_max_vram_gib(
     features = _mapping(spec.get("job_features"), "job features")
     precision = str(spec.get("precision") or "fp16").lower()
     try:
-        bytes_per_element = _PRECISION_BYTES[precision]
+        weight_bytes, runtime_bytes = _PRECISION_STORAGE_BYTES[precision]
     except KeyError as error:
         raise ValueError(f"unsupported model precision {precision!r}") from error
 
     input_tokens = _positive_int(features.get("isl_token_max"), "isl_token_max")
     output_tokens = _positive_int(features.get("osl_token_max"), "osl_token_max")
     sequence_tokens = input_tokens + output_tokens
-    total_bytes = architecture.parameter_count * bytes_per_element
+    total_bytes = architecture.parameter_count * weight_bytes
 
     if architecture.causal:
         active_sequences = _active_sequences(job, features)
         cache_elements = _cache_elements_per_token(architecture)
         total_bytes += active_sequences * (
-            sequence_tokens * cache_elements * bytes_per_element
+            sequence_tokens * cache_elements * runtime_bytes
             + architecture.linear_attention_layers
             * architecture.linear_cache_elements
-            * bytes_per_element
+            * runtime_bytes
         )
     else:
         total_bytes += (
             sequence_tokens
             * (architecture.hidden_size + architecture.intermediate_size)
-            * bytes_per_element
+            * runtime_bytes
         )
     return round(total_bytes / 2**30, 3)
 
