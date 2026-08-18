@@ -86,7 +86,7 @@ class TracePathTest(unittest.TestCase):
             300,
         )
 
-        self.assertEqual(event["trace_version"], 2)
+        self.assertEqual(event["trace_version"], 3)
         self.assertEqual(event["admission_definition"], "first_place_plan_created")
         self.assertEqual(event["method"], "koi")
 
@@ -156,6 +156,10 @@ class TracePathTest(unittest.TestCase):
             "2026-01-01T00:25:00+00:00",
             {"kv_cache_util": [0.72, 0.74]},
             {"p99_ttft_ms": [840, 860]},
+            sample_bucket_starts=(
+                "2026-01-01T00:20:00+00:00",
+                "2026-01-01T00:20:10+00:00",
+            ),
         )
 
         self.assertIsNone(event["v_hat"])
@@ -163,6 +167,11 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["chain_indices"], [0])
         self.assertEqual(event["telemetry_scope"], "observed_tick")
         self.assertIsNone(event["projection_method"])
+        self.assertEqual(
+            event["sample_bucket_starts"],
+            ["2026-01-01T00:20:00+00:00", "2026-01-01T00:20:10+00:00"],
+        )
+        self.assertEqual(event["aggregation_policy_version"], 2)
 
     def test_job_window_keeps_raw_values_and_slo_flags(self) -> None:
         """Store per-window facts without deriving an experiment-wide rate."""

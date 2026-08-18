@@ -18,6 +18,10 @@ import policy
 class ConfigPolicyTest(unittest.TestCase):
     """Keep tensor-parallel degrees within global and model constraints."""
 
+    def setUp(self) -> None:
+        """Start each policy test without a prior suite's cached policy."""
+        policy.load_config_policy.cache_clear()
+
     def tearDown(self) -> None:
         """Clear policy instances built from patched policy text."""
         policy.load_config_policy.cache_clear()
@@ -39,9 +43,10 @@ class ConfigPolicyTest(unittest.TestCase):
         policy_text = """\
 H100:
 - example/model → fp16 TP: 1, 2, 4, 6, 8
-"""
+        """
 
         with patch.object(policy, "_POLICY_TEXT", policy_text):
+            policy.load_config_policy.cache_clear()
             rule = policy.load_config_policy().rule_for("H100", "example/model")
 
         self.assertIsNotNone(rule)
@@ -55,6 +60,7 @@ H100:
                 policy.load_config_policy.cache_clear()
                 policy_text = f"H100:\n- example/model → fp16 TP: {tp}\n"
                 with patch.object(policy, "_POLICY_TEXT", policy_text):
+                    policy.load_config_policy.cache_clear()
                     with self.assertRaisesRegex(ValueError, "unsupported TP values"):
                         policy.load_config_policy()
 
@@ -66,6 +72,7 @@ H100:
 """
 
         with patch.object(policy, "_POLICY_TEXT", policy_text):
+            policy.load_config_policy.cache_clear()
             with self.assertRaisesRegex(
                 ValueError,
                 "microsoft/phi-4 TP values must not exceed 2",
