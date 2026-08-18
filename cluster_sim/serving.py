@@ -85,7 +85,7 @@ class RankResult:
 
 @dataclass(frozen=True)
 class BatchProbeMeasurement:
-    """Completed work and elapsed simulation time from one batch rank probe."""
+    """Elapsed simulation time and completed work from one batch rank probe."""
 
     deployment: RankDeployment
     horizon_ns: int
@@ -99,13 +99,12 @@ def batch_probe_measurements(
     """Return completed work and elapsed simulation time for each batch probe."""
     measurements = []
     for result in results:
-        if not result.request_rows:
+        if result.status == "wall_time_limit":
+            horizon_ns = result.sim_time_ns
+        elif result.request_rows:
+            horizon_ns = max(row["end_time"] for row in result.request_rows)
+        else:
             continue
-        horizon_ns = (
-            result.sim_time_ns
-            if result.status == "wall_time_limit"
-            else max(row["end_time"] for row in result.request_rows)
-        )
         if horizon_ns <= 0:
             continue
         measurements.append(
@@ -701,6 +700,9 @@ def gpu_metrics_from_results(
     tick_start: datetime,
     tick_duration_ns: int,
     price_by_instance_type: Mapping[str, float],
+    *,
+    batch_measurements: Mapping[str, BatchProbeMeasurement] | None = None,
+    batch_active_ns: int | None = None,
 ) -> list[object]:
     """Derive per-chain and per-GPU Store telemetry from rank results."""
     from tandemn_system_data.models import GpuMetric
@@ -709,6 +711,22 @@ def gpu_metrics_from_results(
     metrics = []
     for deployment in deployments:
         result = results_by_rank[deployment.rank_name]
+        if batch_measurements is not None:
+            measurement = batch_measurements.get(deployment.rank_name)
+            if measurement is not None:
+                metrics.extend(
+                    _project_batch_probe_metrics(
+                        job,
+                        deployment,
+                        result,
+                        measurement,
+                        tick_start,
+                        tick_duration_ns,
+                        price_by_instance_type,
+                        batch_active_ns,
+                    )
+                )
+            continue
         shape = deployment.shape
         instance_type = str(shape["instance_type"])
         target_ttft = float(shape.get("target_p99_ttft_ms", 0))
@@ -759,6 +777,120 @@ def gpu_metrics_from_results(
                         )
                     )
     return metrics
+
+
+def _project_batch_probe_metrics(
+    job: object,
+    deployment: RankDeployment,
+    result: RankResult,
+    measurement: BatchProbeMeasurement,
+    tick_start: datetime,
+    tick_duration_ns: int,
+    price_by_instance_type: Mapping[str, float],
+    active_ns: int | None,
+) -> list[object]:
+    """Keep observed probe buckets, then project until the batch stops."""
+    from tandemn_system_data.models import GpuMetric
+
+    instance_type = str(deployment.shape["instance_type"])
+    price_per_hour = price_by_instance_type.get(instance_type)
+    observed = _batch_probe_bucket_metrics(result, price_per_hour)
+    chain_metrics = batch_probe_chain_metrics(
+        result,
+        measurement,
+        price_per_hour,
+    )
+    active_ns = tick_duration_ns if active_ns is None else min(tick_duration_ns, active_ns)
+    metrics = []
+    for bucket_start_ns in range(0, active_ns, SAMPLE_BUCKET_NS):
+        timestamp = _logical_sample_time(
+            tick_start,
+            bucket_start_ns + SAMPLE_BUCKET_NS // 2,
+        )
+        for instance_id, binding in enumerate(deployment.chains):
+            values = observed.get(instance_id, {}).get(bucket_start_ns)
+            if values is None:
+                if bucket_start_ns < measurement.horizon_ns:
+                    continue
+                values = chain_metrics[instance_id]
+            for local_rank in range(binding.gpu_count):
+                metrics.append(
+                    GpuMetric(
+                        ts=timestamp,
+                        job_id=job.job_id,
+                        gpu_uuid=(
+                            f"sim:{binding.rank_id}:{binding.chain_index}:{local_rank}"
+                        ),
+                        rank_id=binding.rank_id,
+                        chain_index=binding.chain_index,
+                        local_rank=str(local_rank),
+                        role="aggregate",
+                        instance_type=instance_type,
+                        model_name=deployment.model_name,
+                        **values,
+                    )
+                )
+    return metrics
+
+
+def _batch_probe_bucket_metrics(
+    result: RankResult,
+    price_per_hour: float | None,
+) -> dict[int, dict[int, dict[str, float | None]]]:
+    """Return measured chain metrics in canonical probe-time buckets."""
+    from tandemn_system_data.models import GpuMetric
+
+    selected = {}
+    for sample in result.metric_samples:
+        bucket_start_ns = max(
+            0,
+            ((sample.sim_time_ns - 1) // SAMPLE_BUCKET_NS) * SAMPLE_BUCKET_NS,
+        )
+        key = (sample.instance_id, bucket_start_ns)
+        previous = selected.get(key)
+        if previous is None or _probe_sample_priority(sample) > _probe_sample_priority(
+            previous
+        ):
+            selected[key] = sample
+
+    target_ttft = float(result.deployment.shape.get("target_p99_ttft_ms", 0))
+    prefix_cache_enabled = bool(
+        result.deployment.shape.get("prefix_cache_enabled", False)
+    )
+    metrics: dict[int, dict[int, dict[str, float | None]]] = {}
+    for (instance_id, bucket_start_ns), sample in selected.items():
+        rows = _completed_in_sample(
+            tuple(
+                row
+                for row in result.request_rows
+                if int(row["instance id"]) == instance_id
+            ),
+            sample,
+        )
+        direct = {
+            name: value
+            for name, value in sample.metrics.items()
+            if name in GpuMetric.model_fields and name != "kvcache_hit_rate"
+        }
+        metrics.setdefault(instance_id, {})[bucket_start_ns] = {
+            **direct,
+            **_observed_y(
+                rows,
+                sample.sample_interval_ns,
+                target_ttft,
+                price_per_hour,
+                result.deployment.shape.get("task"),
+            ),
+            "kvcache_hit_rate": (
+                _kvcache_hit_rate(rows) if prefix_cache_enabled else None
+            ),
+        }
+    return metrics
+
+
+def _probe_sample_priority(sample: RankMetricSample) -> tuple[bool, int]:
+    """Prefer interval telemetry over a terminal snapshot in the same bucket."""
+    return sample.sample_kind == "periodic", sample.sim_time_ns
 
 
 def batch_probe_chain_metrics(

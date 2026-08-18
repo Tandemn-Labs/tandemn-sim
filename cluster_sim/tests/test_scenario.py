@@ -32,7 +32,7 @@ class ScenarioTest(unittest.TestCase):
     def test_loads_all_jobs(self) -> None:
         """Load the benchmark's complete online and batch workload set."""
         self.assertEqual(len(self.scenario.online_jobs), 18)
-        self.assertEqual(len(self.scenario.batch_jobs), 8)
+        self.assertEqual(len(self.scenario.batch_jobs), 7)
         self.assertEqual(self.scenario.tick_duration_ns, 300_000_000_000)
 
     def test_online_trace_is_deterministic_and_tick_partitioned(self) -> None:

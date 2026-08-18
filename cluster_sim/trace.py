@@ -41,7 +41,7 @@ def run_started(
     """Build the immutable first event for one experiment trace."""
     return {
         "kind": "run_started",
-        "trace_version": 1,
+        "trace_version": 2,
         "run_id": run_id,
         "scenario": scenario,
         "benchmark": benchmark,
@@ -183,6 +183,8 @@ def rank_window(
     y_actual: dict[str, list[float | None]],
     v_hat: dict[str, object] | None = None,
     y_hat: dict[str, object] | None = None,
+    telemetry_scope: str = "observed_tick",
+    projection_method: str | None = None,
 ) -> dict[str, object]:
     """Build one per-rank telemetry trajectory for a completed tick window."""
     return {
@@ -197,6 +199,8 @@ def rank_window(
         "y_hat": y_hat,
         "v_actual": v_actual,
         "y_actual": y_actual,
+        "telemetry_scope": telemetry_scope,
+        "projection_method": projection_method,
         "aggregation_policy_version": 1,
     }
 
@@ -230,6 +234,16 @@ def job_window(
     offered_request_count: int | None = None,
     admitted_request_count: int | None = None,
     qualified_output_tokens: int | None = None,
+    request_count_scope: str = "tick_requests",
+    batch_latency_diagnostic: bool = False,
+    probe_attempted_request_count: int | None = None,
+    probe_completed_request_count: int | None = None,
+    probe_unfinished_request_count: int | None = None,
+    campaign_total_request_count: int | None = None,
+    campaign_completed_in_window: int | None = None,
+    campaign_completed_request_count: int | None = None,
+    campaign_remaining_request_count: int | None = None,
+    campaign_request_per_sec: float | None = None,
 ) -> dict[str, object]:
     """Build one job-performance observation, derived from its rank telemetry."""
     return {
@@ -262,6 +276,16 @@ def job_window(
         "offered_request_count": offered_request_count,
         "admitted_request_count": admitted_request_count,
         "qualified_output_tokens": qualified_output_tokens,
+        "request_count_scope": request_count_scope,
+        "batch_latency_diagnostic": batch_latency_diagnostic,
+        "probe_attempted_request_count": probe_attempted_request_count,
+        "probe_completed_request_count": probe_completed_request_count,
+        "probe_unfinished_request_count": probe_unfinished_request_count,
+        "campaign_total_request_count": campaign_total_request_count,
+        "campaign_completed_in_window": campaign_completed_in_window,
+        "campaign_completed_request_count": campaign_completed_request_count,
+        "campaign_remaining_request_count": campaign_remaining_request_count,
+        "campaign_request_per_sec": campaign_request_per_sec,
     }
 
 
@@ -361,11 +385,17 @@ def job_finished(
     }
 
 
-def run_finished(finished_at: str) -> dict[str, object]:
+def run_finished(
+    finished_at: str,
+    termination_reason: str | None = None,
+    truncated: bool = False,
+) -> dict[str, object]:
     """Build the terminal event for one completed experiment trace."""
     return {
         "kind": "run_finished",
         "finished_at": finished_at,
+        "termination_reason": termination_reason,
+        "truncated": truncated,
     }
 
 

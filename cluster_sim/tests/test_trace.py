@@ -72,6 +72,8 @@ class TracePathTest(unittest.TestCase):
 
         self.assertEqual(event["kind"], "run_finished")
         self.assertEqual(event["finished_at"], "2026-01-01T03:00:00+00:00")
+        self.assertFalse(event["truncated"])
+        self.assertIsNone(event["termination_reason"])
 
     def test_run_started_keeps_trace_identity(self) -> None:
         """Record the immutable context needed to interpret every later event."""
@@ -84,7 +86,7 @@ class TracePathTest(unittest.TestCase):
             300,
         )
 
-        self.assertEqual(event["trace_version"], 1)
+        self.assertEqual(event["trace_version"], 2)
         self.assertEqual(event["admission_definition"], "first_place_plan_created")
         self.assertEqual(event["method"], "koi")
 
@@ -159,6 +161,8 @@ class TracePathTest(unittest.TestCase):
         self.assertIsNone(event["v_hat"])
         self.assertEqual(event["y_actual"], {"p99_ttft_ms": [840, 860]})
         self.assertEqual(event["chain_indices"], [0])
+        self.assertEqual(event["telemetry_scope"], "observed_tick")
+        self.assertIsNone(event["projection_method"])
 
     def test_job_window_keeps_raw_values_and_slo_flags(self) -> None:
         """Store per-window facts without deriving an experiment-wide rate."""
@@ -199,6 +203,39 @@ class TracePathTest(unittest.TestCase):
         self.assertEqual(event["offered_request_count"], 100)
         self.assertIsNone(event["admitted_request_count"])
         self.assertIsNone(event["qualified_output_tokens"])
+        self.assertEqual(event["request_count_scope"], "tick_requests")
+
+    def test_batch_window_separates_probe_and_campaign_counts(self) -> None:
+        event = job_window(
+            4,
+            "batch-a",
+            "batch",
+            "2026-01-01T00:20:00+00:00",
+            "2026-01-01T00:25:00+00:00",
+            840,
+            42,
+            1550,
+            0.000012,
+            1000,
+            50,
+            None,
+            None,
+            request_count_scope="batch_probe",
+            batch_latency_diagnostic=True,
+            probe_attempted_request_count=100,
+            probe_completed_request_count=80,
+            probe_unfinished_request_count=20,
+            campaign_total_request_count=10_000,
+            campaign_completed_in_window=3_000,
+            campaign_completed_request_count=5_000,
+            campaign_remaining_request_count=5_000,
+            campaign_request_per_sec=10,
+        )
+
+        self.assertEqual(event["request_count_scope"], "batch_probe")
+        self.assertTrue(event["batch_latency_diagnostic"])
+        self.assertEqual(event["probe_completed_request_count"], 80)
+        self.assertEqual(event["campaign_completed_request_count"], 5_000)
 
     def test_pool_window_exposes_zero_filled_capacity(self) -> None:
         """Keep missing telemetry distinct from measured zero utilization."""

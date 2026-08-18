@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -83,7 +83,7 @@ class BatchProbeMeasurementTest(unittest.TestCase):
 
         self.assertEqual(measurements[0].horizon_ns, 10_000_000_000)
 
-    def test_ignores_probe_without_completed_work(self) -> None:
+    def test_keeps_wall_limited_probe_without_completed_work(self) -> None:
         result = RankResult(
             deployment=SimpleNamespace(),
             request_rows=(),
@@ -92,6 +92,20 @@ class BatchProbeMeasurementTest(unittest.TestCase):
             stderr="",
             status="wall_time_limit",
             sim_time_ns=10_000_000_000,
+        )
+
+        self.assertEqual(
+            batch_probe_measurements((result,)),
+            (BatchProbeMeasurement(result.deployment, 10_000_000_000, 0, 0),),
+        )
+
+    def test_ignores_completed_probe_without_work(self) -> None:
+        result = RankResult(
+            deployment=SimpleNamespace(),
+            request_rows=(),
+            metric_samples=(),
+            stdout="",
+            stderr="",
         )
 
         self.assertEqual(batch_probe_measurements((result,)), ())
@@ -191,6 +205,195 @@ class BatchProbeMetricTest(unittest.TestCase):
         metrics = batch_probe_chain_metrics(result, measurement, None)
 
         self.assertEqual(metrics[0]["kv_cache_util"], 0.8)
+
+    def test_tiles_batch_metrics_across_the_logical_tick(self) -> None:
+        deployment = SimpleNamespace(
+            rank_name="rank_a",
+            model_name="model",
+            chains=(SimpleNamespace(rank_id="rank_a", chain_index=0, gpu_count=2),),
+            shape={"instance_type": "sim", "target_p99_ttft_ms": 100},
+        )
+        result = RankResult(
+            deployment=deployment,
+            request_rows=(
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 1_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+            ),
+            metric_samples=(
+                RankMetricSample(
+                    1_000_000_000,
+                    1_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.5},
+                ),
+            ),
+            stdout="",
+            stderr="",
+        )
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            start,
+            300_000_000_000,
+            {"sim": 36.0},
+            batch_measurements={
+                "rank_a": BatchProbeMeasurement(deployment, 1_000_000_000, 1, 10),
+            },
+        )
+
+        self.assertEqual(len(metrics), 60)
+        self.assertEqual(metrics[0].ts, start + timedelta(seconds=5))
+        self.assertEqual(metrics[-1].ts, start + timedelta(seconds=295))
+        self.assertTrue(all(metric.kv_cache_util == 0.5 for metric in metrics))
+        self.assertTrue(all(metric.throughput_token_per_sec == 10 for metric in metrics))
+
+    def test_keeps_probe_buckets_then_projects_after_the_probe(self) -> None:
+        deployment = SimpleNamespace(
+            rank_name="rank_a",
+            model_name="model",
+            chains=(SimpleNamespace(rank_id="rank_a", chain_index=0, gpu_count=1),),
+            shape={"instance_type": "sim", "target_p99_ttft_ms": 100},
+        )
+        rows = (
+            {
+                "instance id": 0,
+                "input": 100,
+                "output": 10,
+                "end_time": 10_000_000_000,
+                "TTFT": 10_000_000,
+                "TPOT": 1_000_000,
+            },
+            {
+                "instance id": 0,
+                "input": 100,
+                "output": 20,
+                "end_time": 20_000_000_000,
+                "TTFT": 20_000_000,
+                "TPOT": 2_000_000,
+            },
+        )
+        result = RankResult(
+            deployment,
+            rows,
+            (
+                RankMetricSample(
+                    10_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.2},
+                ),
+                RankMetricSample(
+                    20_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.6},
+                ),
+            ),
+            "",
+            "",
+        )
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            300_000_000_000,
+            {},
+            batch_measurements={
+                "rank_a": BatchProbeMeasurement(
+                    deployment,
+                    20_000_000_000,
+                    2,
+                    30,
+                ),
+            },
+        )
+
+        self.assertEqual(
+            [metric.kv_cache_util for metric in metrics[:3]],
+            [0.2, 0.6, 0.6],
+        )
+        self.assertEqual(
+            [metric.ts.second for metric in metrics[:3]],
+            [5, 15, 25],
+        )
+
+    def test_stops_projecting_when_the_batch_finishes(self) -> None:
+        deployment = SimpleNamespace(
+            rank_name="rank_a",
+            model_name="model",
+            chains=(SimpleNamespace(rank_id="rank_a", chain_index=0, gpu_count=1),),
+            shape={"instance_type": "sim", "target_p99_ttft_ms": 100},
+        )
+        result = RankResult(
+            deployment,
+            (
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+            ),
+            (
+                RankMetricSample(
+                    10_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.5},
+                ),
+            ),
+            "",
+            "",
+        )
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            300_000_000_000,
+            {},
+            batch_measurements={
+                "rank_a": BatchProbeMeasurement(
+                    deployment,
+                    10_000_000_000,
+                    1,
+                    10,
+                ),
+            },
+            batch_active_ns=20_000_000_000,
+        )
+
+        self.assertEqual([metric.ts.second for metric in metrics], [5, 15])
+
+    def test_empty_batch_measurements_emit_no_metrics(self) -> None:
+        deployment = SimpleNamespace(rank_name="rank_a")
+        result = RankResult(deployment, (), (), "", "")
+
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            300_000_000_000,
+            {},
+            batch_measurements={},
+        )
+
+        self.assertEqual(metrics, [])
 
 
 class ServingInputTest(unittest.TestCase):

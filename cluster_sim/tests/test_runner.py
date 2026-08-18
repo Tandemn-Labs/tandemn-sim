@@ -29,7 +29,12 @@ from models import (
 from routing import StickyRoundRobinRouter
 from runner import ClusterSimulator, LogicalClock, advance_batch_progress, submit_waiting_job
 from scenario import load_scenario
-from serving import RankResult
+from serving import (
+    BatchProbeMeasurement,
+    RankResult,
+    batch_probe_measurements,
+    gpu_metrics_from_results,
+)
 
 
 class RunnerDataPlaneTest(unittest.TestCase):
@@ -48,9 +53,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
             event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[0])
 
-        hard_stop.assert_called_once_with()
+        hard_stop.assert_called_once_with("SIMULATION_HARD_STOP")
         self.assertEqual(result, ())
         self.assertEqual(event["kind"], "run_finished")
+        self.assertEqual(event["termination_reason"], "SIMULATION_HARD_STOP")
+        self.assertFalse(event["truncated"])
 
     def test_run_honors_tick_limit_before_drain(self) -> None:
         """Hard-stop after the requested benchmark tick count."""
@@ -59,10 +66,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
         simulator.run_tick = lambda tick: SimpleNamespace(tick_number=tick)
 
-        with patch.object(simulator, "_hard_stop"):
+        with patch.object(simulator, "_hard_stop") as hard_stop:
             result = simulator.run(2)
 
         self.assertEqual([item.tick_number for item in result], [0, 1])
+        hard_stop.assert_called_once_with("SIMULATION_TICK_LIMIT")
 
     def test_trace_configuration_writes_run_metadata(self) -> None:
         """Start one trace before the first simulation tick."""
@@ -473,6 +481,36 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertFalse(event["deadline_slo_met"])
         self.assertEqual(event["finish_reason"], "SIMULATION_HARD_STOP")
         self.assertEqual(event["unserved_request_count"], 7_000)
+
+    def test_tick_limit_censors_future_batch_deadline(self) -> None:
+        simulator = object.__new__(ClusterSimulator)
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a"),
+            ranks=(SimpleNamespace(rank_id="rank-1"),),
+        )
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args: None,
+            transition=lambda *args, **kwargs: None,
+        )
+        simulator.user_id = "user_1"
+        simulator._online_jobs = {}
+        simulator._online_backlog = {}
+        simulator._batch_jobs = {"job-a": object()}
+        simulator._batch_progress = {
+            "job-a": BatchProgress(total_requests=10_000, completed_requests=3_000)
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            simulator._hard_stop("SIMULATION_TICK_LIMIT")
+            event = json.loads(
+                simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1]
+            )
+
+        self.assertIsNone(event["deadline_slo_met"])
+        self.assertEqual(event["finish_reason"], "SIMULATION_TICK_LIMIT")
 
     def test_hard_stop_trace_counts_online_backlog(self) -> None:
         """Report every online request still waiting at the hard stop."""
@@ -987,16 +1025,18 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator._batch_progress = {"batch-job": original_progress}
         simulator.trace_file = None
 
+        online_deployment = SimpleNamespace(rank_name="online-rank")
+        batch_deployment = SimpleNamespace(rank_name="batch-rank")
         rank_runs = iter(
             (
                 (
                     SimpleNamespace(
-                        deployment="online-deployment", request_count=2
+                        deployment=online_deployment, request_count=2
                     ),
                 ),
                 (
                     SimpleNamespace(
-                        deployment="batch-deployment", request_count=1
+                        deployment=batch_deployment, request_count=1
                     ),
                 ),
             )
@@ -1004,16 +1044,19 @@ class RunnerDataPlaneTest(unittest.TestCase):
         result_row = {
             "TTFT": 1_000_000,
             "TPOT": 100_000,
+            "output": 10,
             "end_time": 1_000_000_000,
         }
         results = (
             SimpleNamespace(
+                deployment=online_deployment,
                 completed_requests=(online_request,),
                 request_rows=(result_row,),
                 status="completed",
                 sim_time_ns=1_000_000_000,
             ),
             SimpleNamespace(
+                deployment=batch_deployment,
                 completed_requests=(batch_request,),
                 request_rows=(result_row,),
                 status="completed",
@@ -1053,7 +1096,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ),
             patch("runner.build_batch_probe", return_value=(batch_request,)),
             patch("runner.run_ranks", return_value=results),
-            patch("runner.gpu_metrics_from_results", return_value=[object()]),
+            patch(
+                "runner.gpu_metrics_from_results", return_value=[object()]
+            ) as gpu_metrics,
             patch("runner.commit_tick_metrics", side_effect=RuntimeError("commit failed")),
             patch.object(simulator, "_finish") as finish,
         ):
@@ -1066,6 +1111,13 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertIs(simulator._batch_progress["batch-job"], original_progress)
         self.assertEqual(original_progress.completed_requests, 0)
         self.assertEqual(original_progress.next_request_number, 0)
+        self.assertEqual(gpu_metrics.call_args_list[0].kwargs, {})
+        batch_call = gpu_metrics.call_args_list[1]
+        self.assertEqual(batch_call.kwargs["batch_active_ns"], 100_000_000_000)
+        self.assertEqual(
+            tuple(batch_call.kwargs["batch_measurements"]),
+            ("batch-rank",),
+        )
         finish.assert_not_called()
 
     def test_active_online_job_runs_rank_and_commits_tick_metrics(self) -> None:
@@ -1287,74 +1339,122 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
     def test_batch_probe_advances_full_backlog_by_observed_rate(self) -> None:
         """Scale a two-second, twenty-request probe across one five-minute tick."""
-        result = RankResult(
-            deployment=SimpleNamespace(),
-            request_rows=tuple(
-                {
-                    "instance id": 0,
-                    "input": 100,
-                    "output": 10,
-                    "end_time": 2_000_000_000,
-                    "TTFT": 1_000_000,
-                    "TPOT": 100_000,
-                }
-                for _ in range(20)
-            ),
-            metric_samples=(),
-            stdout="",
-            stderr="",
+        measurement = BatchProbeMeasurement(
+            SimpleNamespace(),
+            2_000_000_000,
+            20,
+            200,
         )
         progress = BatchProgress(total_requests=10_000)
 
-        completed = advance_batch_progress(progress, (result,), 300_000_000_000)
+        completed = advance_batch_progress(
+            progress,
+            (measurement,),
+            300_000_000_000,
+        )
 
         self.assertEqual(completed, 3_000)
         self.assertEqual(progress.completed_requests, 3_000)
         self.assertEqual(progress.next_request_number, 20)
 
         progress.completed_requests = 9_500
-        completed = advance_batch_progress(progress, (result,), 300_000_000_000)
+        completed = advance_batch_progress(
+            progress,
+            (measurement,),
+            300_000_000_000,
+        )
 
         self.assertEqual(completed, 500)
         self.assertEqual(progress.completed_requests, 10_000)
 
+    def test_batch_probe_telemetry_matches_campaign_rate(self) -> None:
+        deployment = SimpleNamespace(
+            rank_name="rank_a",
+            model_name="model",
+            chains=(SimpleNamespace(rank_id="rank_a", chain_index=0, gpu_count=1),),
+            shape={"instance_type": "sim", "target_p99_ttft_ms": 100},
+        )
+        result = RankResult(
+            deployment,
+            (
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 10,
+                    "end_time": 10_000_000_000,
+                    "TTFT": 10_000_000,
+                    "TPOT": 1_000_000,
+                },
+                {
+                    "instance id": 0,
+                    "input": 100,
+                    "output": 20,
+                    "end_time": 20_000_000_000,
+                    "TTFT": 20_000_000,
+                    "TPOT": 2_000_000,
+                },
+            ),
+            (
+                RankMetricSample(
+                    10_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.2},
+                ),
+                RankMetricSample(
+                    20_000_000_000,
+                    10_000_000_000,
+                    0,
+                    {"kv_cache_util": 0.6},
+                ),
+            ),
+            "",
+            "",
+        )
+        measurements = batch_probe_measurements((result,))
+        progress = BatchProgress(total_requests=100)
+
+        completed = advance_batch_progress(
+            progress,
+            measurements,
+            300_000_000_000,
+        )
+        start = datetime(2026, 1, 1, tzinfo=UTC)
+        metrics = gpu_metrics_from_results(
+            SimpleNamespace(job_id="job_a"),
+            (deployment,),
+            (result,),
+            start,
+            300_000_000_000,
+            {},
+            batch_measurements={"rank_a": measurements[0]},
+            batch_active_ns=300_000_000_000,
+        )
+
+        self.assertEqual(completed, 30)
+        self.assertEqual(progress.completed_requests, 30)
+        self.assertEqual(len(metrics), 30)
+        self.assertEqual(
+            [metric.throughput_token_per_sec for metric in metrics[:3]],
+            [1.0, 2.0, 1.5],
+        )
+        self.assertEqual(
+            [metric.kv_cache_util for metric in metrics[:3]],
+            [0.2, 0.6, 0.6],
+        )
+        self.assertEqual(metrics[-1].ts, start + timedelta(seconds=295))
+
     def test_batch_cutoff_scales_each_rank_by_simulated_observation_time(self) -> None:
         """Project partial rank probes using their reported simulated horizons."""
-        row = {
-            "instance id": 0,
-            "input": 100,
-            "output": 10,
-            "end_time": 1_000_000_000,
-            "TTFT": 1_000_000,
-            "TPOT": 100_000,
-        }
-        results = (
-            RankResult(
-                SimpleNamespace(),
-                tuple(dict(row) for _ in range(20)),
-                (),
-                "",
-                "",
-                "wall_time_limit",
-                (),
-                10_000_000_000,
-            ),
-            RankResult(
-                SimpleNamespace(),
-                tuple(dict(row) for _ in range(10)),
-                (),
-                "",
-                "",
-                "wall_time_limit",
-                (),
-                5_000_000_000,
-            ),
+        measurements = (
+            BatchProbeMeasurement(SimpleNamespace(), 10_000_000_000, 20, 200),
+            BatchProbeMeasurement(SimpleNamespace(), 5_000_000_000, 10, 100),
         )
         progress = BatchProgress(total_requests=100_000)
 
         completed = advance_batch_progress(
             progress,
-            results,
+            measurements,
             300_000_000_000,
             attempted_requests=200,
         )
@@ -1365,28 +1465,37 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
     def test_batch_completion_uses_observed_in_tick_time(self) -> None:
         """Record batch completion at its replay-derived time inside the tick."""
-        result = RankResult(
-            deployment=SimpleNamespace(),
-            request_rows=tuple(
-                {
-                    "instance id": 0,
-                    "input": 100,
-                    "output": 10,
-                    "end_time": 2_000_000_000,
-                    "TTFT": 1_000_000,
-                    "TPOT": 100_000,
-                }
-                for _ in range(20)
-            ),
-            metric_samples=(),
-            stdout="",
-            stderr="",
+        measurement = BatchProbeMeasurement(
+            SimpleNamespace(),
+            2_000_000_000,
+            20,
+            200,
         )
         progress = BatchProgress(total_requests=10_000, completed_requests=9_500)
 
-        advance_batch_progress(progress, (result,), 300_000_000_000, 600_000_000_000)
+        advance_batch_progress(
+            progress,
+            (measurement,),
+            300_000_000_000,
+            600_000_000_000,
+        )
 
         self.assertEqual(progress.completed_at_ns, 650_000_000_000)
+
+    def test_batch_capacity_rounds_after_combining_rank_rates(self) -> None:
+        measurements = (
+            BatchProbeMeasurement(SimpleNamespace(), 1_500_000_000, 1, 1),
+            BatchProbeMeasurement(SimpleNamespace(), 1_500_000_000, 1, 1),
+        )
+        progress = BatchProgress(total_requests=10)
+
+        completed = advance_batch_progress(
+            progress,
+            measurements,
+            1_000_000_000,
+        )
+
+        self.assertEqual(completed, 1)
 
     def test_finish_stops_ranks_before_finishing_job(self) -> None:
         """Apply terminal Store transitions after simulated work completes."""
