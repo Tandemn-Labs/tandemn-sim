@@ -84,7 +84,7 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Encoder convention: reranking workloads remain online requests. Their end-to-end request latency is evaluated as TTFT; TPOT is not applicable and is excluded from TPOT attainment denominators.
 
-Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss. A `--ticks` preview is not a drain result: it terminates with `SIMULATION_TICK_LIMIT` and leaves `deadline_slo_met` null.
+Drain: after minute 180, no new work arrives. A 30-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss. A `--ticks` preview terminates with `SIMULATION_TICK_LIMIT`; it leaves future deadlines null, but records an already-passed unfinished deadline as a miss.
 
 Exact manifest counts: **18 online jobs**, **7 batch campaigns**, **332 expanded shards**.
 
