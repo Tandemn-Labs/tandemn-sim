@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from math import ceil
 from pathlib import Path
 from time import perf_counter, time
 
@@ -13,9 +14,10 @@ from planning import PlannerDriver
 from routing import StickyRoundRobinRouter
 from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
 from serving import (
+    BatchProbeMeasurement,
     RankRun,
-    RankResult,
     SERVING_WINDOW_SECONDS,
+    batch_probe_measurements,
     build_rank_deployments,
     commit_tick_metrics,
     completed_request_summary,
@@ -175,10 +177,21 @@ class ClusterSimulator:
         ):
             results.append(self.run_tick(tick_number))
             tick_number += 1
-        self._hard_stop()
+        reached_drain = self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns
+        termination_reason = (
+            "SIMULATION_HARD_STOP" if reached_drain else "SIMULATION_TICK_LIMIT"
+        )
+        self._hard_stop(termination_reason)
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
-            append_event(trace_file, run_finished(self.clock.now().isoformat()))
+            append_event(
+                trace_file,
+                run_finished(
+                    self.clock.now().isoformat(),
+                    termination_reason,
+                    termination_reason == "SIMULATION_TICK_LIMIT",
+                ),
+            )
         return tuple(results)
 
     def run_tick(self, tick_number: int) -> PlannerResult:
@@ -555,6 +568,8 @@ class ClusterSimulator:
             request_summaries[job_id] = {
                 **request_summary,
                 "slo_count_scope": "completed_requests",
+                "request_count_scope": "tick_requests",
+                "batch_latency_diagnostic": False,
                 "offered_request_count": (
                     len(prepared.online_requests) - len(self._online_backlog[job_id])
                     if prepared.online_requests is not None else None
@@ -576,17 +591,17 @@ class ClusterSimulator:
                     else None
                 ),
             }
-            metrics.extend(
-                gpu_metrics_from_results(
-                    prepared.running.job,
-                    tuple(rank_run.deployment for rank_run in active_rank_runs),
-                    active_results,
-                    tick_start,
-                    self.scenario.tick_duration_ns,
-                    prices,
-                )
-            )
             if prepared.online_requests is not None:
+                metrics.extend(
+                    gpu_metrics_from_results(
+                        prepared.running.job,
+                        tuple(rank_run.deployment for rank_run in active_rank_runs),
+                        active_results,
+                        tick_start,
+                        self.scenario.tick_duration_ns,
+                        prices,
+                    )
+                )
                 completed_names = {
                     request.request_name
                     for result in active_results
@@ -615,29 +630,53 @@ class ClusterSimulator:
             if progress is None:
                 continue
             staged_progress = replace(progress)
+            measurements = batch_probe_measurements(active_results)
             projected_completed = advance_batch_progress(
                 staged_progress,
-                active_results,
+                measurements,
                 self.scenario.tick_duration_ns,
                 start_offset_ns,
                 attempted_requests=sum(
                     rank_run.request_count for rank_run in active_rank_runs
                 ),
             )
-            if completed_request_count:
-                for metric in ("ttft", "tpot", "slo"):
-                    passed = request_summary[f"{metric}_pass_count"]
-                    if passed is not None:
-                        estimated_pass = round(projected_completed * passed / completed_request_count)
-                        request_summaries[job_id].update({
-                            f"{metric}_pass_count": estimated_pass,
-                            f"{metric}_fail_count": projected_completed - estimated_pass,
-                        })
-                qualified_tokens = request_summary["qualified_output_tokens"]
-                if qualified_tokens is not None:
-                    request_summaries[job_id]["qualified_output_tokens"] = round(
-                        projected_completed * qualified_tokens / completed_request_count)
-            request_summaries[job_id]["slo_count_scope"] = "estimated_probe"
+            measurements_by_rank = {
+                measurement.deployment.rank_name: measurement
+                for measurement in measurements
+            }
+            active_ns = self.scenario.tick_duration_ns
+            if staged_progress.completed_at_ns is not None:
+                active_ns = max(0, staged_progress.completed_at_ns - start_offset_ns)
+            metrics.extend(
+                gpu_metrics_from_results(
+                    prepared.running.job,
+                    tuple(rank_run.deployment for rank_run in active_rank_runs),
+                    active_results,
+                    tick_start,
+                    self.scenario.tick_duration_ns,
+                    prices,
+                    batch_measurements=measurements_by_rank,
+                    batch_active_ns=active_ns,
+                )
+            )
+            request_rate = _batch_request_rate_per_second(measurements)
+            request_summaries[job_id].update(
+                request_count_scope="batch_probe",
+                batch_latency_diagnostic=True,
+                slo_count_scope="batch_probe_diagnostic",
+                probe_attempted_request_count=attempted_request_count,
+                probe_completed_request_count=completed_request_count,
+                probe_unfinished_request_count=max(
+                    0, attempted_request_count - completed_request_count
+                ),
+                campaign_total_request_count=staged_progress.total_requests,
+                campaign_completed_in_window=projected_completed,
+                campaign_completed_request_count=staged_progress.completed_requests,
+                campaign_remaining_request_count=(
+                    staged_progress.total_requests - staged_progress.completed_requests
+                ),
+                campaign_request_per_sec=request_rate,
+            )
             batch_progress_updates[job_id] = staged_progress
             if staged_progress.completed_requests == staged_progress.total_requests:
                 finished_batch.append(
@@ -724,6 +763,16 @@ class ClusterSimulator:
                             window_end.isoformat(),
                             v_actual,
                             y_actual,
+                            telemetry_scope=(
+                                "projected_batch_probe"
+                                if rank[0] in self._batch_jobs
+                                else "observed_tick"
+                            ),
+                            projection_method=(
+                                "stationary_after_probe"
+                                if rank[0] in self._batch_jobs
+                                else None
+                            ),
                         ),
                     )
                 jobs_by_id = {**self._online_jobs, **self._batch_jobs}
@@ -738,6 +787,7 @@ class ClusterSimulator:
                     target_tpot = features.get("target_p99_tpot_ms")
                     p99_ttft = request_summary["p99_ttft_ms"]
                     p99_tpot = request_summary["p99_tpot_ms"]
+                    is_batch = not isinstance(job, OnlineJob)
                     append_event(
                         trace_file,
                         job_window(
@@ -753,16 +803,26 @@ class ClusterSimulator:
                             target_ttft,
                             target_tpot,
                             p99_ttft <= target_ttft
-                            if p99_ttft is not None and target_ttft is not None
+                            if not is_batch
+                            and p99_ttft is not None
+                            and target_ttft is not None
                             else None,
                             p99_tpot <= target_tpot
-                            if p99_tpot is not None and target_tpot is not None
+                            if not is_batch
+                            and p99_tpot is not None
+                            and target_tpot is not None
                             else None,
                             int(request_summary["attempted_request_count"]),
                             int(request_summary["completed_request_count"]),
                             int(request_summary["unfinished_request_count"]),
                             request_summary["completion_ratio"],
-                            "encoder_latency_as_ttft" if job.workload.get("task") == "embeddings" else "completed_requests",
+                            (
+                                "completed_batch_probe_requests_diagnostic"
+                                if is_batch
+                                else "encoder_latency_as_ttft"
+                                if job.workload.get("task") == "embeddings"
+                                else "completed_requests"
+                            ),
                             request_summary["slo_pass_count"],
                             request_summary["slo_fail_count"],
                             request_summary["slo_count_scope"],
@@ -773,6 +833,36 @@ class ClusterSimulator:
                             request_summary["offered_request_count"],
                             request_summary["admitted_request_count"],
                             request_summary["qualified_output_tokens"],
+                            request_count_scope=request_summary[
+                                "request_count_scope"
+                            ],
+                            batch_latency_diagnostic=request_summary[
+                                "batch_latency_diagnostic"
+                            ],
+                            probe_attempted_request_count=request_summary.get(
+                                "probe_attempted_request_count"
+                            ),
+                            probe_completed_request_count=request_summary.get(
+                                "probe_completed_request_count"
+                            ),
+                            probe_unfinished_request_count=request_summary.get(
+                                "probe_unfinished_request_count"
+                            ),
+                            campaign_total_request_count=request_summary.get(
+                                "campaign_total_request_count"
+                            ),
+                            campaign_completed_in_window=request_summary.get(
+                                "campaign_completed_in_window"
+                            ),
+                            campaign_completed_request_count=request_summary.get(
+                                "campaign_completed_request_count"
+                            ),
+                            campaign_remaining_request_count=request_summary.get(
+                                "campaign_remaining_request_count"
+                            ),
+                            campaign_request_per_sec=request_summary.get(
+                                "campaign_request_per_sec"
+                            ),
                         ),
                     )
                 allocated_by_pool = {}
@@ -1021,10 +1111,11 @@ class ClusterSimulator:
             ),
         )
 
-    def _hard_stop(self) -> None:
-        """Cancel every job still running at the benchmark's logical hard stop."""
+    def _hard_stop(self, reason: str = "SIMULATION_HARD_STOP") -> None:
+        """Cancel every job still running when the simulation terminates."""
         from tandemn_system_data.models.enums import JobStatus, RankStatus
 
+        tick_limited = reason == "SIMULATION_TICK_LIMIT"
         trace_file = getattr(self, "trace_file", None)
         for running in self.jobs.running_jobs(self.user_id):
             job_id = running.job.job_id
@@ -1047,20 +1138,20 @@ class ClusterSimulator:
                 running.job.job_id,
                 JobStatus.FINISHED,
                 [JobStatus.RUNNING],
-                finish_reason="SIMULATION_HARD_STOP",
+                finish_reason=reason,
             )
             if trace_file is not None:
                 is_batch = job_id in self._batch_jobs
                 self._trace_job_state(
-                    job_id, "FINISHED", self.clock.now(), "SIMULATION_HARD_STOP")
+                    job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
                     trace_file,
                     job_finished(
                         running.job.job_id,
                         self.clock.now().isoformat(),
                         False,
-                        "SIMULATION_HARD_STOP",
-                        False if is_batch else None,
+                        reason,
+                        False if is_batch and not tick_limited else None,
                         unserved_request_count,
                     ),
                 )
@@ -1079,19 +1170,19 @@ class ClusterSimulator:
                 job_id,
                 JobStatus.FINISHED,
                 [JobStatus.WAITING],
-                finish_reason="SIMULATION_HARD_STOP",
+                finish_reason=reason,
             )
             if trace_file is not None:
                 self._trace_job_state(
-                    job_id, "FINISHED", self.clock.now(), "SIMULATION_HARD_STOP")
+                    job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
                     trace_file,
                     job_finished(
                         job_id,
                         self.clock.now().isoformat(),
                         False,
-                        "SIMULATION_HARD_STOP",
-                        False if job_id in self._batch_jobs else None,
+                        reason,
+                        False if job_id in self._batch_jobs and not tick_limited else None,
                         unserved_request_count,
                     ),
                 )
@@ -1169,7 +1260,7 @@ def active_ranks(store_job_id: str, job_store: object) -> list[object]:
 
 def advance_batch_progress(
     progress: BatchProgress,
-    results: tuple[RankResult, ...],
+    measurements: tuple[BatchProbeMeasurement, ...],
     tick_duration_ns: int,
     tick_start_ns: int = 0,
     *,
@@ -1177,21 +1268,13 @@ def advance_batch_progress(
 ) -> int:
     """Advance a full batch backlog from one tick's representative probe."""
     if attempted_requests is None:
-        attempted_requests = sum(len(result.request_rows) for result in results)
+        attempted_requests = sum(
+            measurement.completed_request_count for measurement in measurements
+        )
     progress.next_request_number += attempted_requests
 
-    projected_capacity = 0
-    for result in results:
-        completed = len(result.request_rows)
-        if result.status == "wall_time_limit":
-            horizon_ns = result.sim_time_ns
-        else:
-            horizon_ns = max(
-                (row["end_time"] for row in result.request_rows),
-                default=0,
-            )
-        if completed and horizon_ns > 0:
-            projected_capacity += completed * tick_duration_ns // horizon_ns
+    request_rate = _batch_request_rate_per_second(measurements)
+    projected_capacity = int(request_rate * tick_duration_ns / 1_000_000_000)
     if projected_capacity == 0:
         return 0
 
@@ -1199,10 +1282,22 @@ def advance_batch_progress(
     completed = min(remaining, projected_capacity)
     progress.completed_requests += completed
     if progress.completed_requests == progress.total_requests:
-        progress.completed_at_ns = tick_start_ns + (
-            remaining * tick_duration_ns + projected_capacity - 1
-        ) // projected_capacity
+        progress.completed_at_ns = tick_start_ns + ceil(
+            remaining * 1_000_000_000 / request_rate
+        )
     return completed
+
+
+def _batch_request_rate_per_second(
+    measurements: tuple[BatchProbeMeasurement, ...],
+) -> float:
+    """Return the combined completed-request rate across batch rank probes."""
+    return sum(
+        measurement.completed_request_count
+        * 1_000_000_000
+        / measurement.horizon_ns
+        for measurement in measurements
+    )
 
 
 def _mean_or_none(values: list[float]) -> float | None:
