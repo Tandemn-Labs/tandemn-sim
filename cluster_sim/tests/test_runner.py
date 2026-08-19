@@ -1091,6 +1091,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ),
         )
         rank_calls = []
+        transitions = []
         simulator = object.__new__(ClusterSimulator)
         simulator.scenario = Scenario(
             "oom",
@@ -1105,6 +1106,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.jobs = SimpleNamespace(
             running_jobs=lambda user_id: (running,),
             set_rank_status=lambda *args, **kwargs: rank_calls.append((args, kwargs)),
+            transition=lambda *args, **kwargs: transitions.append((args, kwargs)),
         )
         simulator.llmservingsim_root = Path(tempfile.gettempdir())
         simulator.parallel_simulators = 1
@@ -1221,6 +1223,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         cluster_event = next(event for event in events if event["kind"] == "cluster_window")
         self.assertEqual(pool_event["allocated_gpu_count"], 2)
         self.assertEqual(cluster_event["allocated_gpu_hours"], 2 * 300 / 3600)
+        self.assertEqual(transitions, [])
 
     def test_process_crash_requeues_all_dead_job(self) -> None:
         """Return a crashed single-rank job to the next planner tick."""
@@ -1320,6 +1323,171 @@ class RunnerDataPlaneTest(unittest.TestCase):
             [request.request_name for request in simulator._online_backlog["job-a"]],
             ["request-a"],
         )
+
+    def test_oom_requeues_batch_without_advancing_progress(self) -> None:
+        """Return an all-OOM batch to the planner without losing progress."""
+        batch = BatchJob(
+            "batch",
+            "job-a",
+            "model",
+            0,
+            300_000_000_000,
+            600_000_000_000,
+            {"record_count": 10, "features": {}},
+        )
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a"),
+            ranks=(SimpleNamespace(rank_id="rank-oom", shape_json={}),),
+        )
+        rank_calls = []
+        transitions = []
+        progress = BatchProgress(
+            total_requests=10,
+            completed_requests=3,
+            next_request_number=2,
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "oom-batch", 300_000_000_000, 600_000_000_000, (), (batch,)
+        )
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args, **kwargs: rank_calls.append((args, kwargs)),
+            transition=lambda *args, **kwargs: transitions.append((args, kwargs)) or True,
+        )
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 1
+        simulator._router = StickyRoundRobinRouter()
+        simulator._online_jobs = {}
+        simulator._online_backlog = {}
+        simulator._batch_jobs = {"job-a": batch}
+        simulator._batch_progress = {"job-a": progress}
+        simulator._request_outcomes = {}
+        simulator.trace_file = None
+
+        deployment = SimpleNamespace(rank_name="rank-oom")
+        rank_run = SimpleNamespace(deployment=deployment, request_count=1)
+        oom = SimpleNamespace(
+            status="oom",
+            deployment=deployment,
+            request_rows=(),
+            completed_requests=(),
+            stdout="",
+            stderr="[MemoryModel] exceeds total NPU memory",
+        )
+        request = Request("request-a", "session", 0, 0, 1, 1, None)
+
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                return_value=SimpleNamespace(
+                    all=lambda: [SimpleNamespace(catalog={"regions": [{}]})]
+                ),
+            ),
+            patch(
+                "tandemn_system_data.clients.ResourceMapStore",
+                return_value=SimpleNamespace(
+                    get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                ),
+            ),
+            patch.object(
+                simulator, "_prepare_job_runs", return_value=((rank_run,), ())
+            ),
+            patch("runner.build_batch_probe", return_value=(request,)),
+            patch("runner.run_ranks", return_value=(oom,)),
+            patch("runner.gpu_metrics_from_results", return_value=[]),
+        ):
+            simulator._simulate_tick(0, 0, 300_000_000_000)
+
+        self.assertEqual(rank_calls[0][1]["reason_code"], "OOM")
+        self.assertEqual(transitions[0][0], ("job-a", "waiting", ["running"]))
+        self.assertEqual(simulator._batch_progress["job-a"].completed_requests, 3)
+        self.assertEqual(simulator._batch_progress["job-a"].next_request_number, 2)
+
+    def test_profile_rejection_requeues_and_reports_unfinished_requests(self) -> None:
+        """Return a profile-rejected job to the planner with its backlog."""
+        job = OnlineJob(
+            "online", "job-a", "model", 0, 300_000_000_000, {"features": {}}
+        )
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job-a", spec_json={"model_id": "model"}),
+            ranks=(SimpleNamespace(rank_id="rank-a", shape_json={}),),
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "zero-rank-runs", 300_000_000_000, 300_000_000_000, (job,), ()
+        )
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.jobs = SimpleNamespace(
+            running_jobs=lambda user_id: (running,),
+            set_rank_status=lambda *args, **kwargs: None,
+            transition=lambda *args, **kwargs: transitions.append((args, kwargs)) or True,
+        )
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 1
+        simulator._router = StickyRoundRobinRouter()
+        simulator._traffic_starts = {}
+        simulator._requests = {
+            "job-a": tuple(
+                Request(f"request-{index}", "session", 0, 0, 1, 1, None)
+                for index in range(3)
+            )
+        }
+        simulator._online_jobs = {"job-a": job}
+        simulator._online_backlog = {"job-a": ()}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+        simulator._request_outcomes = {}
+        transitions = []
+        profile_failure = SimpleNamespace(
+            rank_id="rank-a",
+            reason_code="SOFTWARE_STACK_RANK_FAILURE",
+            error_detail="PROFILE_UNAVAILABLE",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with (
+                patch(
+                    "tandemn_system_data.clients.HardwareCatalogStore",
+                    return_value=SimpleNamespace(
+                        all=lambda: [SimpleNamespace(catalog={"regions": [{}]})]
+                    ),
+                ),
+                patch(
+                    "tandemn_system_data.clients.ResourceMapStore",
+                    return_value=SimpleNamespace(
+                        get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                    ),
+                ),
+                patch.object(
+                    simulator,
+                    "_prepare_job_runs",
+                    return_value=((), (profile_failure,)),
+                ),
+                patch("runner.run_ranks") as run,
+                patch("runner.gpu_metrics_from_results", return_value=[]),
+            ):
+                simulator._simulate_tick(0, 0, 300_000_000_000)
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+            ]
+
+        run.assert_not_called()
+        event = next(event for event in events if event["kind"] == "job_window")
+        self.assertEqual(event["offered_request_count"], 3)
+        self.assertEqual(event["attempted_request_count"], 0)
+        self.assertEqual(event["completed_request_count"], 0)
+        self.assertEqual(event["unfinished_request_count"], 3)
+        self.assertEqual(event["slo_fail_count"], 0)
+        self.assertEqual(transitions[0][0], ("job-a", "waiting", ["running"]))
+        self.assertEqual(len(simulator._online_backlog["job-a"]), 3)
 
     def test_rankless_running_job_is_skipped(self) -> None:
         """Wait for a planner replacement instead of routing into no ranks."""
@@ -1686,7 +1854,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.parallel_simulators = 1
         simulator.rank_timeout_seconds = 30
         simulator._traffic_starts = {}
-        simulator._requests = {job.store_job_id: __import__("scenario").materialize_online_requests(job)}
+        request = Request("request-0", "session", 0, 0, 100, 10, None)
+        simulator._requests = {job.store_job_id: (request,)}
         simulator._online_jobs = {job.store_job_id: job}
         simulator._online_backlog = {job.store_job_id: ()}
         simulator._batch_jobs = {}
@@ -1810,6 +1979,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                     ),
                     "",
                     "",
+                    completed_requests=(request,),
                 ),
             )
 

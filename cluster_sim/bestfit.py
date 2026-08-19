@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
+from policy import load_config_policy
 from rank_ids import rank_id
 from vram import (
     VRAM_REQUIREMENTS_GIB,
@@ -1121,7 +1122,14 @@ class BestFitPlannerDriver:
             if placement is None:
                 required_vram_gib = vram_requirements.get(benchmark_job_id)
                 if required_vram_gib is not None:
-                    placement = select_vram_placement(required_vram_gib, resources)
+                    placement = select_vram_placement(
+                        required_vram_gib,
+                        resources,
+                        model_id=_text(
+                            _known_job_fields(waiting).get("model_id"), "model_id"
+                        ),
+                        config_policy=load_config_policy(),
+                    )
                     used_vram_fallback = placement is not None
             if placement is None:
                 actions.append({"job_id": job_id, "type": "defer"})

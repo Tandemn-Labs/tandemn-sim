@@ -476,7 +476,6 @@ class ClusterSimulator:
         prepared_jobs: list[_PreparedJob] = []
         finished_online = []
         failed_rank_ids: set[str] = set()
-        requeue_after_crash = []
         self._tick_failed_rank_ids = set()
         self._tick_telemetry_rank_ids = set()
         self._tick_selected_plan_error = False
@@ -636,11 +635,6 @@ class ClusterSimulator:
                     failure.rank_id for failure in crash_failures
                 )
                 self._fail_ranks(prepared.running, job.name, crash_failures)
-                if all(
-                    rank.rank_id in failed_rank_ids
-                    for rank in prepared.running.ranks
-                ):
-                    requeue_after_crash.append(prepared.running)
             active_pairs = tuple(
                 (rank_run, result)
                 for rank_run, result in result_pairs
@@ -712,6 +706,7 @@ class ClusterSimulator:
                     for request in prepared.online_requests
                     if request.request_name not in completed_names
                 )
+                request_summaries[job_id]["unfinished_request_count"] = len(unfinished)
                 backlog_updates[job_id] = unfinished
                 outcome_updates.append(
                     (
@@ -808,6 +803,14 @@ class ClusterSimulator:
                     )
                 )
 
+        requeue_after_failure = [
+            prepared.running
+            for prepared in prepared_jobs
+            if all(
+                rank.rank_id in failed_rank_ids
+                for rank in prepared.running.ranks
+            )
+        ]
         metric_store = None
         if metrics:
             metric_store = GpuMetricStore(self.postgres)
@@ -822,7 +825,7 @@ class ClusterSimulator:
             )
         self._online_backlog.update(backlog_updates)
         self._batch_progress.update(batch_progress_updates)
-        for running in requeue_after_crash:
+        for running in requeue_after_failure:
             if self.jobs.transition(
                 running.job.job_id,
                 JobStatus.WAITING,
@@ -832,7 +835,7 @@ class ClusterSimulator:
                     running.job.job_id,
                     "WAITING",
                     tick_start,
-                    "process_crash_requeue",
+                    "all_ranks_failed_requeue",
                 )
         self._tick_failed_rank_ids = failed_rank_ids
         for running, finished_at in finished_online:

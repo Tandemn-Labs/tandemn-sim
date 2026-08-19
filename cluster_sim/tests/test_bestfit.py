@@ -150,15 +150,24 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         """Use memory best-fit until the preferred hardware becomes free."""
         driver = _driver()
         job_id = "job-benchmark_timing_real_12hr_192gpu-0-1"
-        unavailable = _snapshot(job_id, l40s_free=0, h100_free=8)
+        model_id = "meta-llama/Llama-3.2-1B-Instruct"
+        unavailable = _snapshot(
+            job_id,
+            l40s_free=0,
+            h100_free=8,
+            model_id=model_id,
+        )
 
         first_tick = driver._build_actions(unavailable)
-        second_tick = driver._build_actions(_snapshot(job_id, l40s_free=1, h100_free=8))
+        second_tick = driver._build_actions(
+            _snapshot(job_id, l40s_free=1, h100_free=8, model_id=model_id)
+        )
 
         first_config = first_tick[0]["ladder"][0]["config"]
         self.assertEqual(first_tick[0]["type"], "place")
         self.assertEqual(first_config["gpu_type"], "H100")
-        self.assertEqual(first_config["gpu_count"], 5)
+        self.assertEqual(first_config["gpu_count"], 8)
+        self.assertEqual(first_config["tp"], 8)
         self.assertEqual(second_tick[0]["type"], "place")
         self.assertEqual(
             second_tick[0]["ladder"][0]["config"]["gpu_type"],
@@ -174,13 +183,16 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             resources={
                 "reserved|aws|us-east|use1-az1|H100": {
                     "gpu_type": "H100",
-                    "total": 7,
-                    "free": 7,
+                    "total": 8,
+                    "free": 8,
                     "pools": [],
                 }
             },
             running_jobs=(),
-            waiting_jobs=(_store_job(first), _store_job(second)),
+            waiting_jobs=(
+                _store_job(first, "meta-llama/Llama-3.2-1B-Instruct"),
+                _store_job(second, "meta-llama/Llama-3.2-1B-Instruct"),
+            ),
             paused_jobs=(),
             finished_jobs=(),
         )
@@ -188,7 +200,8 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         actions = driver._build_actions(snapshot)
 
         self.assertEqual([action["type"] for action in actions], ["place", "defer"])
-        self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_count"], 5)
+        self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_count"], 8)
+        self.assertEqual(actions[0]["ladder"][0]["config"]["tp"], 8)
 
     def test_job_defers_when_primary_and_vram_fallback_do_not_fit(self) -> None:
         """Defer only after exhausting the fixed and memory-based choices."""
@@ -234,14 +247,14 @@ def _driver(jobs: tuple[OnlineJob, ...] = ()) -> BestFitPlannerDriver:
     )
 
 
-def _store_job(job_id: str) -> dict[str, object]:
+def _store_job(job_id: str, model_id: str = "model") -> dict[str, object]:
     """Create one canonical waiting Store job payload."""
     return {
         "job_id": job_id,
         "user_id": "tenant",
         "kind": "online",
         "spec_json": {
-            "model_id": "model",
+            "model_id": model_id,
             "job_features": {
                 "target_p99_ttft_ms": 700,
                 "target_p99_tpot_ms": 55,
@@ -250,7 +263,12 @@ def _store_job(job_id: str) -> dict[str, object]:
     }
 
 
-def _snapshot(job_id: str, l40s_free: int, h100_free: int) -> StoreSnapshot:
+def _snapshot(
+    job_id: str,
+    l40s_free: int,
+    h100_free: int,
+    model_id: str = "model",
+) -> StoreSnapshot:
     """Create one tick snapshot with independently controlled hardware."""
     return StoreSnapshot(
         resources={
@@ -268,7 +286,7 @@ def _snapshot(job_id: str, l40s_free: int, h100_free: int) -> StoreSnapshot:
             },
         },
         running_jobs=(),
-        waiting_jobs=(_store_job(job_id),),
+        waiting_jobs=(_store_job(job_id, model_id),),
         paused_jobs=(),
         finished_jobs=(),
     )
