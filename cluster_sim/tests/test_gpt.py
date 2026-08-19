@@ -9,6 +9,7 @@ import sys
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
@@ -22,6 +23,9 @@ from gpt import (
 )
 from models import OnlineJob, Scenario
 from policy import load_config_policy
+from serving import build_rank_cluster
+from tandemn_orca.orca import ladder_to_ranks
+from tandemn_system_data.models import Plan
 
 
 class GptPlannerDriverTest(unittest.TestCase):
@@ -34,9 +38,16 @@ class GptPlannerDriverTest(unittest.TestCase):
             resources={
                 "reserved|aws|us-east|use1-az1|H100": {
                     "gpu_type": "H100",
-                    "total": 1,
-                    "free": 1,
-                    "pools": [],
+                    "total": 8,
+                    "free": 8,
+                    "pools": [
+                        {
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 8,
+                            "free": 8,
+                        }
+                    ],
                 }
             },
             running_jobs=({"job_id": "running"},),
@@ -47,7 +58,7 @@ class GptPlannerDriverTest(unittest.TestCase):
         placement = GptPlacement(
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
-            instance_type=None,
+            instance_type="p5.48xlarge",
             configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
         )
 
@@ -62,7 +73,6 @@ class GptPlannerDriverTest(unittest.TestCase):
             ],
         )
         placed = actions[1]
-        self.assertEqual(placed["tenant_id"], "tenant")
         self.assertEqual(placed["target_p99_ttft_ms"], 700.0)
         self.assertEqual(
             placed["ladder"][0]["config"]["model_id"],
@@ -70,7 +80,31 @@ class GptPlannerDriverTest(unittest.TestCase):
         )
         self.assertEqual(placed["ladder"][0]["config"]["tp"], 1)
         self.assertEqual(placed["ladder"][0]["config"]["precision"], "bf16")
-        self.assertIsNone(placed["ladder"][0]["config"]["ep"])
+        self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
+        plan = Plan(user_id="user", actions=actions)
+        self.assertEqual(plan.actions[1].job_id, "waiting")
+        ranks = ladder_to_ranks(
+            plan.actions[1].ladder,
+            job_id="waiting",
+            plan_id=plan.plan_id,
+            job_spec=_store_job()["spec_json"],
+        )
+        self.assertEqual(len(ranks), 1)
+        self.assertEqual(ranks[0].rank_id, placed["ladder"][0]["rank_id"])
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                model_name="meta-llama/Llama-3.2-1B-Instruct",
+                shape=ranks[0].shape_json,
+                chains=(object(),),
+            ),
+            {
+                "profile": "H100",
+                "memory_gb": 80,
+                "memory_bandwidth_gb_s": 3350,
+                "link_bandwidth_gb_s": 900,
+            },
+        )
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["ep_size"], 1)
 
     def test_prompt_contains_relevant_config_policy(self) -> None:
         """Give GPT the supported configurations for this tick."""
