@@ -576,9 +576,9 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["instances"][0]["fp"], "fp16")
         self.assertEqual(cluster["nodes"][0]["instances"][0]["dtype"], "float16")
 
-    def test_rank_deployment_uses_per_replica_gpu_count(self) -> None:
-        """Keep total DP footprint separate from one simulated replica's GPU count."""
-        shape = {**self.ranks[0].shape_json, "count": 8, "tp": 2, "pp": 1, "dp": 4}
+    def test_rank_deployment_uses_canonical_per_replica_gpu_count(self) -> None:
+        """Use Koi/Orca's stored count for every simulated replica."""
+        shape = {**self.ranks[0].shape_json, "count": 2, "tp": 2, "pp": 1, "dp": 4}
         rank = SimpleNamespace(rank_id="rank_a", n_replicas=4, shape_json=shape)
 
         deployment = build_rank_deployments(self.job, (rank,))[0]

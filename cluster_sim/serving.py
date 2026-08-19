@@ -127,10 +127,8 @@ def build_rank_deployments(job: object, active_ranks: Sequence[object]) -> tuple
         rank_id = str(rank.rank_id)
         shape = dict(rank.shape_json)
         shape["rank_id"] = rank_id
-        # Orca stores the total DP footprint in count/gpu_count. Each
-        # LLMServingSim chain represents one DP replica, so it needs TP * PP.
-        count = int(shape.get("tp", 1)) * int(shape.get("pp", 1))
-        shape["count"] = count
+        # Koi/Orca store count as the GPU footprint of one replica.
+        count = int(shape["count"])
         bindings = tuple(
             ChainBinding(rank_id, chain_index, count)
             for chain_index in range(int(rank.n_replicas))

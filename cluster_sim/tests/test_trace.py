@@ -115,6 +115,7 @@ class TracePathTest(unittest.TestCase):
 
         self.assertEqual(event["rank_id"], "rank-a")
         self.assertEqual(event["n_replicas"], 2)
+        self.assertEqual(event["allocated_gpu_count"], 2)
         self.assertEqual(event["shape"], shape)
 
     def test_planner_finished_preserves_outcome_facts(self) -> None:

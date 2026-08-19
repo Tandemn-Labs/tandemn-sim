@@ -86,7 +86,7 @@ def placement_observed(
         "job_id": job_id,
         "rank_id": rank_id,
         "n_replicas": n_replicas,
-        "allocated_gpu_count": shape.get("count"),
+        "allocated_gpu_count": n_replicas * int(shape["count"]),
         "shape": shape,
     }
 
