@@ -1041,13 +1041,14 @@ class ClusterSimulator:
                             continue
                         key = ("|".join(env), shape.get("instance_type"))
                         pool_by_rank[rank.rank_id] = key
-                        # Store count is the total rank footprint; replicas are chains.
+                        # Koi/Orca count is per replica; the simulator runs every chain.
                         allocated_by_pool[key] = allocated_by_pool.get(key, 0) + (
-                            int(shape["count"])
+                            int(rank.n_replicas) * int(shape["count"])
                         )
                         allocated_gpu_hours_by_pool[key] = (
                             allocated_gpu_hours_by_pool.get(key, 0.0)
-                            + int(shape["count"])
+                            + int(rank.n_replicas)
+                            * int(shape["count"])
                             * active_ns_by_job.get(
                                 running.job.job_id, self.scenario.tick_duration_ns
                             )
@@ -1434,7 +1435,13 @@ class ClusterSimulator:
             self._router.remove_rank(job_name, rank.rank_id)
             if trace_file is not None:
                 shape = getattr(rank, "shape_json", {})
-                gpu_count = shape.get("gpu_count", shape.get("count")) if isinstance(shape, dict) else None
+                gpu_count = (
+                    int(rank.n_replicas) * int(shape["count"])
+                    if isinstance(shape, dict)
+                    and type(shape.get("count")) is int
+                    and type(getattr(rank, "n_replicas", None)) is int
+                    else None
+                )
                 append_event(
                     trace_file,
                     rank_failed(

@@ -20,6 +20,7 @@ from gpt import (
     GptPlannerDriver,
     StoreSnapshot,
     _build_user_prompt,
+    _resources_with_free_capacity,
 )
 from models import OnlineJob, Scenario
 from policy import load_config_policy
@@ -215,6 +216,84 @@ class GptPlannerDriverTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "tp=3 is not allowed"):
             driver._build_actions(snapshot, (placement,))
+
+    def test_gpt_ladder_uses_per_replica_gpu_count(self) -> None:
+        """Serialize GPT DP width as canonical Koi/Orca replicas."""
+        driver = _driver()
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        snapshot = StoreSnapshot(
+            resources={
+                environment: {
+                    "gpu_type": "H100",
+                    "total": 24,
+                    "free": 24,
+                    "pools": [
+                        {
+                            "allocation_kind": "gpu",
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 24,
+                            "free": 24,
+                        }
+                    ],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+        placement = GptPlacement(
+            decision="place",
+            environment=environment,
+            instance_type="p5.48xlarge",
+            configuration={"replicas_needed": 2, "tp": 2, "pp": 1, "dp": 3},
+        )
+
+        ladder = driver._build_actions(snapshot, (placement,))[0]["ladder"]
+        rank = ladder_to_ranks(ladder, job_id="waiting", plan_id="plan-1")[0]
+
+        self.assertEqual(ladder[0]["config"]["count"], 2)
+        self.assertEqual(ladder[0]["config"]["gpu_count"], 2)
+        self.assertEqual(ladder[0]["n_replicas"], 6)
+        self.assertEqual(rank.shape_json["count"], 2)
+        self.assertEqual(rank.n_replicas, 6)
+
+    def test_active_replicas_reduce_gpt_gpu_pool_capacity(self) -> None:
+        """Subtract every active Koi/Orca replica from GPT's free GPU pool."""
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        resource_map = SimpleNamespace(
+            market="reserved",
+            scheduling_summary=lambda: {
+                environment: {
+                    "total": 24,
+                    "pools": [
+                        {
+                            "allocation_kind": "gpu",
+                            "instance_type": "p5.48xlarge",
+                            "total": 24,
+                        }
+                    ],
+                }
+            },
+        )
+        running = {
+            "ranks": [
+                {
+                    "n_replicas": 3,
+                    "shape_json": {
+                        "env": environment.split("|"),
+                        "count": 2,
+                        "instance_type": "p5.48xlarge",
+                    },
+                }
+            ]
+        }
+
+        resources = _resources_with_free_capacity(resource_map, (running,))
+
+        self.assertEqual(resources[environment]["free"], 18)
+        self.assertEqual(resources[environment]["pools"][0]["free"], 18)
 
     def test_requires_one_decision_per_known_waiting_job(self) -> None:
         """Reject incomplete GPT output before creating partial actions."""

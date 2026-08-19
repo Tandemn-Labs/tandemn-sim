@@ -722,7 +722,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a"),
             ranks=(
-                SimpleNamespace(rank_id="rank-oom", shape_json={"gpu_count": 8}),
+                SimpleNamespace(
+                    rank_id="rank-oom",
+                    n_replicas=4,
+                    shape_json={"count": 2},
+                ),
                 SimpleNamespace(rank_id="rank-healthy"),
             ),
         )
@@ -1159,6 +1163,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ranks=(
                 SimpleNamespace(
                     rank_id="rank-oom",
+                    n_replicas=1,
                     shape_json={
                         "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
                         "instance_type": "g6e.48xlarge",
@@ -1168,6 +1173,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 ),
                 SimpleNamespace(
                     rank_id="rank-healthy",
+                    n_replicas=1,
                     shape_json={
                         "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
                         "instance_type": "g6e.48xlarge",
@@ -1915,11 +1921,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
             n_replicas=4,
             shape_json={
                 "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
-                "count": 4,
-                "tp": 1,
+                "count": 2,
+                "tp": 2,
                 "pp": 1,
-                "dp": 4,
-                "gpu_count": 4,
+                "dp": 1,
+                "gpu_count": 2,
                 "ep": 1,
                 "instance_type": "sim.h100.8gpu",
                 "target_p99_ttft_ms": 600,
@@ -2096,7 +2102,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertEqual(calls[0], ("run", 1, 1_300))
         self.assertEqual(calls[1][0], "commit")
-        self.assertEqual(len(calls[1][1]), 1)
+        self.assertEqual(len(calls[1][1]), 2)
         gpu_event = next(event for event in events if event["kind"] == "gpu_sample")
         rank_event = next(event for event in events if event["kind"] == "rank_window")
         job_event = next(event for event in events if event["kind"] == "job_window")
@@ -2112,7 +2118,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(job_event["completion_ratio"], 1.0)
         self.assertEqual(job_event["latency_scope"], "completed_requests")
         self.assertEqual(pool_event["expected_gpu_count"], 8)
-        self.assertEqual(pool_event["allocated_gpu_count"], 4)
+        self.assertEqual(pool_event["allocated_gpu_count"], 8)
         self.assertEqual(cluster_event["capacity_gpu_hours"], 16 * 300 / 3600)
         self.assertEqual(cluster_event["jobs_admitted_in_tick"], 2)
         self.assertEqual(cluster_event["rolling_admission_time_ms"], 12_000.0)
