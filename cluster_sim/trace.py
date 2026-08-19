@@ -48,7 +48,7 @@ def run_started(
         "method": method,
         "started_at": started_at,
         "tick_duration_seconds": tick_duration_seconds,
-        "admission_definition": "first_place_plan_created",
+        "admission_definition": "first_active_rank_materialized",
     }
 
 

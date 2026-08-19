@@ -88,7 +88,9 @@ class TracePathTest(unittest.TestCase):
         )
 
         self.assertEqual(event["trace_version"], 4)
-        self.assertEqual(event["admission_definition"], "first_place_plan_created")
+        self.assertEqual(
+            event["admission_definition"], "first_active_rank_materialized"
+        )
         self.assertEqual(event["method"], "koi")
 
     def test_tick_started_keeps_logical_start_time(self) -> None:
