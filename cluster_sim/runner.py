@@ -318,10 +318,29 @@ class ClusterSimulator:
                     result.error,
                 ),
             )
+        apply_pending_plans(self.user_id, self.postgres)
+        applied_plans = []
+        if trace_file is not None:
+            for plan in plans:
+                stored = plan_store.get(plan["plan_id"])
+                applied_plans.append(
+                    {**plan, "status": stored.status if stored is not None else "missing"}
+                )
+        if trace_file is not None:
+            running_jobs = self.jobs.running_jobs(self.user_id)
+            active_plans = {
+                (running.job.job_id, rank.plan_id)
+                for running in running_jobs
+                for rank in running.ranks
+            }
             for plan in plans:
                 for action in plan["actions"]:
                     job_id = action["job_id"]
-                    if action["type"] != "place" or job_id in self._admitted_jobs:
+                    if (
+                        action["type"] != "place"
+                        or job_id in self._admitted_jobs
+                        or (job_id, plan["plan_id"]) not in active_plans
+                    ):
                         continue
                     job = self.jobs.get(job_id)
                     if job is None:
@@ -333,7 +352,7 @@ class ClusterSimulator:
                             plan["plan_id"],
                             job.created_at.isoformat(),
                             start.isoformat(),
-                            "logical_place_plan_created",
+                            "active_rank_materialized",
                         ),
                     )
                     self._admitted_jobs.add(job_id)
@@ -341,16 +360,7 @@ class ClusterSimulator:
                         (start - job.created_at).total_seconds() * 1_000
                     )
                     self._admissions_in_tick += 1
-        apply_pending_plans(self.user_id, self.postgres)
-        applied_plans = []
-        if trace_file is not None:
-            for plan in plans:
-                stored = plan_store.get(plan["plan_id"])
-                applied_plans.append(
-                    {**plan, "status": stored.status if stored is not None else "missing"}
-                )
-        if trace_file is not None:
-            for running in self.jobs.running_jobs(self.user_id):
+            for running in running_jobs:
                 self._trace_job_state(
                     running.job.job_id, "RUNNING", start, "ranks_materialized")
                 for rank in running.ranks:

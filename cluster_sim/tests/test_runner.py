@@ -433,6 +433,93 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(sum(event["kind"] == "placement_observed" for event in events), 2)
         self.assertEqual(simulator._admission_latencies_ms, [0.0])
 
+    def test_tick_admits_only_materialized_place(self) -> None:
+        """Wait for a replacement rank before recording the first admission."""
+        def plan(plan_id: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                plan_id=plan_id,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                status="applied",
+                actions=[
+                    SimpleNamespace(
+                        model_dump=lambda mode: {"job_id": "job-a", "type": "place"}
+                    )
+                ],
+            )
+
+        plans = {plan_id: plan(plan_id) for plan_id in ("plan-failed", "plan-retry")}
+        state = {"active_plan": None}
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "trace-smoke", 300_000_000_000, 600_000_000_000, (), ()
+        )
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.planner = SimpleNamespace(
+            create_plans=lambda tick, start: PlannerResult(
+                tick,
+                (CreatedPlan("plan-failed" if tick == 0 else "plan-retry"),),
+            )
+        )
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator._submitted_jobs = set()
+        simulator._admitted_jobs = set()
+        simulator._admission_latencies_ms = []
+        simulator._admissions_in_tick = 0
+
+        def running_jobs(user_id):
+            ranks = ()
+            if state["active_plan"] is not None:
+                ranks = (
+                    SimpleNamespace(
+                        plan_id=state["active_plan"],
+                        rank_id="rank-a",
+                        n_replicas=1,
+                        shape_json={"count": 1},
+                    ),
+                )
+            return (SimpleNamespace(job=SimpleNamespace(job_id="job-a"), ranks=ranks),)
+
+        simulator.jobs = SimpleNamespace(
+            get=lambda job_id: SimpleNamespace(created_at=datetime(2026, 1, 1, tzinfo=UTC)),
+            running_jobs=running_jobs,
+        )
+
+        class PlanStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self, plan_id):
+                return plans[plan_id]
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with (
+                patch("tandemn_system_data.clients.PlanStore", PlanStore),
+                patch(
+                    "tandemn_system_data.clients.ResourceMapStore",
+                    return_value=SimpleNamespace(
+                        get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                    ),
+                ),
+                patch("runner.apply_pending_plans"),
+                patch.object(simulator, "_simulate_tick"),
+            ):
+                simulator.run_tick(0)
+                state["active_plan"] = "plan-retry"
+                simulator.run_tick(1)
+
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+            ]
+
+        admissions = [event for event in events if event["kind"] == "job_admitted"]
+        self.assertEqual(len(admissions), 1)
+        self.assertEqual(admissions[0]["plan_id"], "plan-retry")
+        self.assertEqual(admissions[0]["admission_source"], "active_rank_materialized")
+        self.assertEqual(admissions[0]["admitted_at"], "2026-01-01T00:05:00+00:00")
+
     def test_tick_trace_appends_new_koi_debug_facts(self) -> None:
         """Copy Koi JSONL facts once after each simulator planner tick."""
         simulator = object.__new__(ClusterSimulator)
