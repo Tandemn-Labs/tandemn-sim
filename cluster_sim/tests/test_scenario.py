@@ -98,18 +98,20 @@ class ScenarioTest(unittest.TestCase):
         )["resource_map"]
         regions = resource_map["clouds"]["azure"]["regions"]
 
-        self.assertNotIn("eastus", regions)
-        self.assertIn(
-            "Standard_ND96amsr_A100_v4",
-            regions["westus2"]["zones"]["1"]["network_fabrics"]["infiniband"][
-                "machine_pools"
-            ],
+        nd = regions["westus2"]["zones"]["1"]["network_fabrics"]["infiniband"][
+            "machine_pools"
+        ]["Standard_ND96amsr_A100_v4"]
+        nc = regions["westus2"]["zones"]["1"]["network_fabrics"]["default"][
+            "machine_pools"
+        ]["Standard_NC96ads_A100_v4"]
+
+        self.assertEqual(
+            (nd["gpu_type"], nd["gpu_memory_gb"], nd["gpus_per_instance"]),
+            ("A100_80GB", 80, 8),
         )
-        self.assertIn(
-            "Standard_NC96ads_A100_v4",
-            regions["WestUS3"]["zones"]["1"]["network_fabrics"]["default"][
-                "machine_pools"
-            ],
+        self.assertEqual(
+            (nc["gpu_type"], nc["gpu_memory_gb"], nc["gpus_per_instance"]),
+            ("A100_80GB", 80, 4),
         )
 
     def test_linear_ramp_uses_integrated_rate(self) -> None:

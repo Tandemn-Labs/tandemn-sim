@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from rank_ids import rank_id
 
 SYSTEM_PROMPT = """You are the placement planner for an AI inference cluster.
 
@@ -454,15 +455,11 @@ def _place_action(
     return {
         "job_id": job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": (
             target_tps if target_tps is not None else _target_tps(scenario_job)
         ),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             _placement_ladder(
                 scenario_job,
@@ -546,20 +543,20 @@ def _placement_ladder(
         "instance_type": instance_type,
         "gpu_type": gpu_type,
         "gpu_count": gpu_count,
-        "count": known.get("count"),
+        "count": gpu_count,
         "tp": tp,
         "pp": pp,
         "dp": dp,
-        "ep": known.get("ep"),
-        "max_num_seq": known.get("max_num_seq"),
-        "max_num_batched_tokens": known.get("max_num_batched_tokens"),
-        "gpu_mem_util": known.get("gpu_mem_util"),
+        "ep": known.get("ep") or 1,
+        "max_num_seq": known.get("max_num_seq") or 256,
+        "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
+        "gpu_mem_util": known.get("gpu_mem_util") or 0.9,
         "prefix_cache_enabled": known.get("prefix_cache_enabled"),
         "rank_traffic_share": 1.0,
     }
     return {
         "role": known.get("role") or "aggregate",
-        "rank_id": known.get("rank_id") or "rank_0",
+        "rank_id": rank_id(known),
         "env": placement.environment.split("|"),
         "config": rank_config,
         "n_replicas": replicas,
