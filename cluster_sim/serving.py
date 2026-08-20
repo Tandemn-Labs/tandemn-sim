@@ -40,6 +40,8 @@ SAMPLE_BUCKET_NS = 10 * SECOND
 SERVING_WINDOW_SECONDS = 300
 # ponytail: fixed retry cap prevents flaky ASTRA exits from stalling a benchmark.
 ASTRA_CRASH_RETRIES = 2
+# ponytail: retries absorb transient simulator failures without stalling every rank.
+SIMULATION_RETRIES = 2
 PROFILE_ALIASES = {
     "H100": "H100",
     "H100-SXM-80GB": "H100",
@@ -459,24 +461,14 @@ def _run_rank(
     wall_time_seconds: float = SERVING_WINDOW_SECONDS,
 ) -> RankResult:
     """Run and parse one rank simulation command."""
-    deadline_epoch_seconds = time() + wall_time_seconds
-    command = (
-        *rank_run.command,
-        "--wall-deadline-epoch-seconds",
-        str(deadline_epoch_seconds),
-    )
     try:
-        for attempt in range(ASTRA_CRASH_RETRIES + 1):
-            if time() >= deadline_epoch_seconds:
-                return RankResult(
-                    rank_run.deployment,
-                    (),
-                    (),
-                    "",
-                    "",
-                    "wall_time_limit",
-                    (),
-                )
+        for attempt in range(SIMULATION_RETRIES + 1):
+            deadline_epoch_seconds = time() + wall_time_seconds
+            command = (
+                *rank_run.command,
+                "--wall-deadline-epoch-seconds",
+                str(deadline_epoch_seconds),
+            )
             try:
                 completed = subprocess.run(
                     command,
@@ -486,17 +478,29 @@ def _run_rank(
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
-                raise RuntimeError(
-                    f"{rank_run.deployment.rank_name} simulation timed out"
-                ) from error
+                if attempt < SIMULATION_RETRIES:
+                    print(
+                        f"{rank_run.deployment.rank_name} simulation timeout "
+                        f"({attempt + 1}/{SIMULATION_RETRIES + 1})",
+                        flush=True,
+                    )
+                    continue
+                return RankResult(
+                    rank_run.deployment,
+                    (),
+                    (),
+                    str(error.stdout or ""),
+                    str(error.stderr or ""),
+                    "simulation_timeout",
+                )
             output = f"{completed.stdout}\n{completed.stderr}"
-            if completed.returncode and "ASTRA-Sim exited unexpectedly" in output:
+            if completed.returncode and _is_retryable_simulator_crash(output):
                 print(
-                    f"{rank_run.deployment.rank_name} ASTRA crash "
-                    f"({attempt + 1}/{ASTRA_CRASH_RETRIES + 1}): {output[-1_000:]}",
+                    f"{rank_run.deployment.rank_name} simulator crash "
+                    f"({attempt + 1}/{SIMULATION_RETRIES + 1}): {output[-1_000:]}",
                     flush=True,
                 )
-                if attempt < ASTRA_CRASH_RETRIES:
+                if attempt < SIMULATION_RETRIES:
                     continue
                 return RankResult(
                     rank_run.deployment,
@@ -506,7 +510,24 @@ def _run_rank(
                     completed.stderr,
                     "process_crash",
                 )
-            return parse_rank_result(rank_run, completed)
+            result = parse_rank_result(rank_run, completed)
+            if getattr(result, "status", "completed") != "wall_time_limit":
+                return result
+            if attempt < SIMULATION_RETRIES:
+                print(
+                    f"{rank_run.deployment.rank_name} simulation deadline "
+                    f"({attempt + 1}/{SIMULATION_RETRIES + 1})",
+                    flush=True,
+                )
+                continue
+            return RankResult(
+                rank_run.deployment,
+                (),
+                (),
+                result.stdout,
+                result.stderr,
+                "simulation_timeout",
+            )
     finally:
         if rank_run.cleanup_dir is not None and rank_run.cleanup_dir.exists():
             shutil.rmtree(rank_run.cleanup_dir)
@@ -535,6 +556,15 @@ def parse_rank_result(
                 completed.stdout,
                 completed.stderr,
                 "oom",
+            )
+        if _is_model_catalog_error(lowered):
+            return RankResult(
+                rank_run.deployment,
+                (),
+                (),
+                completed.stdout,
+                completed.stderr,
+                "model_catalog_invalid",
             )
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
     summary = _run_summary(output)
@@ -585,6 +615,30 @@ def parse_rank_result(
         tuple(completed_requests),
         summary["sim_time_ns"],
         tuple(rank_run.requests[request_id] for request_id in summary["admitted_request_ids"]),
+    )
+
+
+def _is_retryable_simulator_crash(output: str) -> bool:
+    lowered = output.lower()
+    return "astra-sim exited unexpectedly" in lowered or (
+        "[memorymodel]" in lowered
+        and "tried to free" in lowered
+        and "only" in lowered
+        and "is used" in lowered
+    )
+
+
+def _is_model_catalog_error(output: str) -> bool:
+    fields = (
+        "max_num_batched_tokens",
+        "max_num_seq",
+        "max_model_len",
+        "block_size",
+        "kvcache_dtype",
+    )
+    diagnostics = ("valueerror", "invalid", "must be", "missing")
+    return any(field in output for field in fields) and any(
+        diagnostic in output for diagnostic in diagnostics
     )
 
 

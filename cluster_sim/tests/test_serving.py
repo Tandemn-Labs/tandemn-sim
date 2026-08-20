@@ -25,6 +25,7 @@ from serving import (
     CSV_HEADER,
     RankRun,
     RankResult,
+    SIMULATION_RETRIES,
     batch_probe_measurements,
     batch_probe_chain_metrics,
     build_rank_cluster,
@@ -806,6 +807,99 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(result.status, "process_crash")
         self.assertEqual(result.stderr, crashed.stderr)
 
+    def test_rank_retries_timeout_with_fresh_deadline(self) -> None:
+        """Give a timed-out subprocess fresh wall time before succeeding."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        timeout = subprocess.TimeoutExpired(("python3",), 330)
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        parsed = SimpleNamespace(status="completed")
+
+        with (
+            patch("serving.time", side_effect=(1_000, 1_100)),
+            patch("serving.subprocess.run", side_effect=(timeout, completed)) as run,
+            patch("serving.parse_rank_result", return_value=parsed),
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[0].args[0][-2:],
+            ("--wall-deadline-epoch-seconds", "1300"),
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0][-2:],
+            ("--wall-deadline-epoch-seconds", "1400"),
+        )
+
+    def test_rank_marks_timeout_after_retry_cap(self) -> None:
+        """Return a rank-local timeout instead of aborting the whole tick."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        timeout = subprocess.TimeoutExpired(("python3",), 330)
+
+        with (
+            patch("serving.time", side_effect=(1_000, 1_100, 1_200)),
+            patch("serving.subprocess.run", side_effect=timeout) as run,
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertEqual(run.call_count, SIMULATION_RETRIES + 1)
+        self.assertEqual(result.status, "simulation_timeout")
+
+    def test_rank_retries_memory_bookkeeping_crash_before_succeeding(self) -> None:
+        """Retry LLMServingSim's known MemoryModel free-accounting failure."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        crashed = subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            "Cannot load the request due to max_num_batched_tokens limitation\n"
+            "[MemoryModel] tried to free 124MB but only 124MB is used",
+        )
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        parsed = SimpleNamespace(status="completed")
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", side_effect=(crashed, completed)) as run,
+            patch("serving.parse_rank_result", return_value=parsed),
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(run.call_count, 2)
+
+    def test_rank_marks_memory_bookkeeping_crash_after_retry_cap(self) -> None:
+        """Keep an exhausted MemoryModel failure local to its rank."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        crashed = subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            "[MemoryModel] tried to free 124MB but only 124MB is used",
+        )
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=crashed) as run,
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertEqual(run.call_count, SIMULATION_RETRIES + 1)
+        self.assertEqual(result.status, "process_crash")
+
     def test_rank_queued_after_first_wave_gets_fresh_deadline(self) -> None:
         """Start a queued simulator with a budget measured from worker start."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
@@ -983,6 +1077,28 @@ class ServingInputTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "unexpected failure"):
             parse_rank_result(rank_run, completed)
+
+    def test_parse_rank_result_marks_invalid_catalog_setting(self) -> None:
+        """Classify explicit invalid catalog fields without treating warnings as errors."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 30)
+        invalid = subprocess.CompletedProcess(
+            (), 1, "", "ValueError: max_num_batched_tokens must be positive"
+        )
+        warning_then_crash = subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            "Cannot load the request due to max_num_batched_tokens limitation\n"
+            "[MemoryModel] tried to free 124MB but only 124MB is used",
+        )
+
+        self.assertEqual(
+            parse_rank_result(rank_run, invalid).status,
+            "model_catalog_invalid",
+        )
+        with self.assertRaisesRegex(RuntimeError, "tried to free"):
+            parse_rank_result(rank_run, warning_then_crash)
 
     def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:
         """Only LLMServingSim's two explicit terminal states are accepted."""
