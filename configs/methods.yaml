@@ -12,6 +12,17 @@ methods:
     status: implemented
     settings:
       default_optimization_goal: throughput
+  prism:
+    display_name: Prism placement
+    status: implemented
+    settings:
+      backend: vllm
+  cp_sat:
+    display_name: CP-SAT global placement
+    status: implemented
+    settings:
+      backend: vllm
+      max_time_seconds: 30.0
   dynamo_aic:
     display_name: Dynamo Planner + AIConfigurator
     status: implemented

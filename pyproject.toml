@@ -9,9 +9,16 @@ description = "Launch AIPerf for one benchmark job."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "aiconfigurator>=0.11",
     "aiperf==0.11.0",
     "huggingface-hub>=1.24,<2",
+    "openai>=3.3",
+    "openevolve>=0.2.27",
+    "ortools>=9.14",
     "pyyaml>=6.0,<7",
+    "sqlalchemy>=2.0",
+    "tandemn-store",
+    "tandemn-orca",
 ]
 
 [project.scripts]
@@ -21,15 +28,17 @@ controller = "data_generation.controller:main"
 agentic = [
     "claude-agent-sdk>=0.2.136",
 ]
-openevolve = [
-    "openevolve>=0.2.27",
-]
 dev = [
   "mypy>=1.16",
   "pre-commit>=4.2",
   "ruff>=0.12",
   "types-pyyaml>=6.0",
 ]
+
+[tool.uv.sources]
+tandemn-store = { path = "../tandemn-store", editable = true }
+tandemn-orca = { path = "../Tandemn-orca", editable = true }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
