@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -20,9 +22,11 @@ from agentic import (
     AgenticPlannerDriver,
     ClaudeAgentPlacementClient,
     StoreSnapshot,
+    _build_user_prompt,
     _validate_tick_plan,
 )
 from models import OnlineJob, Scenario
+from policy import load_config_policy
 
 
 class AgenticPlannerTest(unittest.TestCase):
@@ -41,6 +45,58 @@ class AgenticPlannerTest(unittest.TestCase):
 
         self.assertEqual(methods["methods"]["agentic"]["status"], "implemented")
 
+    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
+        """Use the existing planner Store connection for tick catalog context."""
+        driver = _driver()
+        requested = []
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (),
+            waiting_jobs=lambda _user_id: (_store_job(),),
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {
+                    "reserved|aws|us-east|use1-az1|H100": {
+                        "gpu_type": "H100",
+                        "total": 1,
+                        "pools": [],
+                    }
+                },
+            )
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(model_dump=lambda **_kwargs: _catalogs()[model_id])
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+
+        self.assertEqual(requested, ["meta-llama/Llama-3.2-1B-Instruct"])
+        self.assertEqual(snapshot.model_catalogs, _catalogs())
+        prompt = json.loads(
+            _build_user_prompt(
+                1,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                tuple(driver.jobs.values()),
+                load_config_policy(),
+            )
+        )
+        self.assertEqual(
+            prompt["model_catalog"],
+            [
+                {
+                    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                    "gpu_type": "H100",
+                    **_launch_config(),
+                }
+            ],
+        )
+
     def test_driver_excludes_terminal_jobs(self) -> None:
         """Create actions without acting on terminal jobs."""
         driver = _driver()
@@ -57,12 +113,13 @@ class AgenticPlannerTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=({"job_id": "paused"},),
             finished_jobs=({"job_id": "finished"},),
+            model_catalogs=_catalogs(),
         )
         placement = AgenticPlacement(
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type=None,
-            configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+            configuration=_configuration(),
         )
 
         actions = driver._build_actions(snapshot, (placement,))
@@ -76,6 +133,8 @@ class AgenticPlannerTest(unittest.TestCase):
             ],
         )
         self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "bf16")
+        self.assertEqual(actions[1]["ladder"][0]["config"]["engine_version"], "0.16.0")
+        self.assertEqual(actions[1]["ladder"][0]["config"]["max_num_seq"], 256)
 
     def test_client_requires_positive_max_turns(self) -> None:
         """Reject an agent loop with no permitted tool-use turns."""
@@ -88,7 +147,8 @@ class AgenticPlannerTest(unittest.TestCase):
         client = ClaudeAgentPlacementClient(max_turns=6)
 
         with patch("agentic._load_agent_sdk", return_value=sdk):
-            placements = client.place(
+            placements, usage = client.place(
+                7,
                 model="sonnet",
                 max_tokens=12000,
                 system_prompt="system",
@@ -98,6 +158,10 @@ class AgenticPlannerTest(unittest.TestCase):
         self.assertEqual(
             [placement.decision for placement in placements], ["defer"] * 2
         )
+        self.assertEqual(usage[0].tick_number, 7)
+        self.assertEqual(usage[0].input_tokens, 120)
+        self.assertEqual(usage[0].output_tokens, 30)
+        self.assertEqual(usage[0].model, "claude-sonnet-test")
         self.assertEqual(sdk.options["model"], "sonnet")
         self.assertEqual(sdk.options["max_turns"], 6)
         self.assertEqual(sdk.options["task_budget"], {"total": 12000})
@@ -124,12 +188,7 @@ class AgenticPlannerTest(unittest.TestCase):
             "decision": "place",
             "environment": "reserved|aws|us-east|use1-az1|H100",
             "instance_type": None,
-            "configuration": {
-                "replicas_needed": 1,
-                "tp": 1,
-                "pp": 1,
-                "dp": 1,
-            },
+            "configuration": _configuration(),
         }
 
         result = _validate_tick_plan(
@@ -147,6 +206,7 @@ class AgenticPlannerTest(unittest.TestCase):
 
         with patch("agentic._load_agent_sdk", return_value=sdk):
             client.place(
+                7,
                 model="haiku",
                 max_tokens=12000,
                 system_prompt="system",
@@ -173,18 +233,41 @@ class AgenticPlannerTest(unittest.TestCase):
                         "decision": "place",
                         "environment": "reserved|aws|us-east|use1-az1|H100",
                         "instance_type": None,
-                        "configuration": {
-                            "replicas_needed": 1,
-                            "tp": 1,
-                            "pp": 1,
-                            "dp": 1,
-                        },
+                        "configuration": _configuration(),
                     },
                 ]
             },
         )
 
         self.assertTrue(result["valid"])
+
+    def test_tick_validation_rejects_changed_catalog_fields(self) -> None:
+        """Reject a final Claude response that changes Store launch values."""
+        configuration = _configuration()
+        configuration["max_num_seq"] = 999
+
+        result = _validate_tick_plan(
+            _scheduler_document(),
+            {
+                "placements": [
+                    {
+                        "decision": "place",
+                        "environment": "reserved|aws|us-east|use1-az1|H100",
+                        "instance_type": None,
+                        "configuration": configuration,
+                    },
+                    {
+                        "decision": "defer",
+                        "environment": None,
+                        "instance_type": None,
+                        "configuration": None,
+                    },
+                ]
+            },
+        )
+
+        self.assertFalse(result["valid"])
+        self.assertIn("do not match Store", result["errors"][0])
 
 
 def _scheduler_document() -> dict[str, object]:
@@ -211,6 +294,13 @@ def _scheduler_document() -> dict[str, object]:
                 "allowed_tp": [1],
             }
         ],
+        "model_catalog": [
+            {
+                "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                "gpu_type": "H100",
+                **_launch_config(),
+            }
+        ],
         "jobs_for_tick": [job, job],
     }
 
@@ -233,6 +323,7 @@ def _driver() -> AgenticPlannerDriver:
         scenario=Scenario("test", 1, 1, (job,), ()),
         job_store=object(),
         resource_map_store=object(),
+        model_catalog_store=object(),
         plan_store=object(),
         model="sonnet",
         max_tokens=100,
@@ -257,6 +348,60 @@ def _store_job() -> dict[str, object]:
     }
 
 
+def _launch_config() -> dict[str, object]:
+    """Return one resolved H100 launch profile from Tandemn Store."""
+    return {
+        "engine_name": "vllm",
+        "engine_version": "0.16.0",
+        "weight_dtype": "float16",
+        "weight_quantization_method": "none",
+        "weight_quantization_bits": 16,
+        "activation_dtype": "float16",
+        "gpu_mem_util": 0.9,
+        "max_model_len": 131072,
+        "prefix_cache_enabled": False,
+        "chunked_prefill_enable": True,
+        "chunk_size": 100,
+        "scheduling_policy": "fcfs",
+        "preemption_policy": "recompute",
+        "router_policy": "kv_router",
+        "max_num_seq": 256,
+        "max_num_batched_tokens": 8192,
+        "block_size": 16,
+        "kvcache_dtype": "auto",
+    }
+
+
+def _catalogs() -> dict[str, dict[str, object]]:
+    """Return one raw Store model catalog keyed by model ID."""
+    catalog = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        catalog[field] = [{"gpu_type": "H100", "value": catalog[field]}]
+    return {"meta-llama/Llama-3.2-1B-Instruct": catalog}
+
+
+def _configuration(
+    *,
+    replicas_needed: int = 1,
+    tp: int = 1,
+    pp: int = 1,
+    dp: int = 1,
+) -> dict[str, object]:
+    """Return Claude output that copies its supplied Store launch profile."""
+    return {
+        "replicas_needed": replicas_needed,
+        "tp": tp,
+        "pp": pp,
+        "dp": dp,
+        **_launch_config(),
+    }
+
+
 class _FakeResultMessage:
     """Represent one successful Agent SDK result in the client test."""
 
@@ -264,6 +409,7 @@ class _FakeResultMessage:
     is_error = False
     errors = None
     result = None
+    usage = None
     structured_output = {
         "placements": [
             {
@@ -279,6 +425,13 @@ class _FakeResultMessage:
                 "configuration": None,
             },
         ]
+    }
+    model_usage = {
+        "sonnet": {
+            "inputTokens": 120,
+            "outputTokens": 30,
+            "canonicalModel": "claude-sonnet-test",
+        }
     }
 
 

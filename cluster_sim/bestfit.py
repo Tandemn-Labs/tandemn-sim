@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
-from policy import load_config_policy
+from policy import ConfigPolicy, load_config_policy
 from rank_ids import rank_id
 from vram import (
     VRAM_REQUIREMENTS_GIB,
@@ -965,6 +965,27 @@ _HARDWARE_ALIASES = {
     "mi300x-192gb": "mi300x-192gb",
 }
 
+LAUNCH_FIELDS = (
+    "engine_name",
+    "engine_version",
+    "weight_dtype",
+    "weight_quantization_method",
+    "weight_quantization_bits",
+    "activation_dtype",
+    "gpu_mem_util",
+    "max_model_len",
+    "prefix_cache_enabled",
+    "chunked_prefill_enable",
+    "chunk_size",
+    "scheduling_policy",
+    "preemption_policy",
+    "router_policy",
+    "max_num_seq",
+    "max_num_batched_tokens",
+    "block_size",
+    "kvcache_dtype",
+)
+
 
 @dataclass(frozen=True)
 class StoreSnapshot:
@@ -975,6 +996,7 @@ class StoreSnapshot:
     waiting_jobs: tuple[dict[str, Any], ...]
     paused_jobs: tuple[dict[str, Any], ...]
     finished_jobs: tuple[dict[str, Any], ...]
+    model_catalogs: dict[str, dict[str, Any]]
 
 
 class JobStoreClient(Protocol):
@@ -1001,6 +1023,12 @@ class ResourceMapStoreClient(Protocol):
     def get(self) -> ResourceMap: ...
 
 
+class ModelCatalogStoreClient(Protocol):
+    """Read one model catalog by canonical model ID."""
+
+    def get(self, model_id: str) -> object | None: ...
+
+
 class PlanStoreClient(Protocol):
     """Persist one canonical Store plan."""
 
@@ -1018,6 +1046,7 @@ class BestFitPlannerDriver:
         scenario: Scenario,
         job_store: JobStoreClient,
         resource_map_store: ResourceMapStoreClient,
+        model_catalog_store: ModelCatalogStoreClient,
         plan_store: PlanStoreClient,
         backend: str,
     ) -> None:
@@ -1028,6 +1057,7 @@ class BestFitPlannerDriver:
         self.benchmark_job_ids = {job.store_job_id: job.name for job in jobs}
         self.job_store = job_store
         self.resource_map_store = resource_map_store
+        self.model_catalog_store = model_catalog_store
         self.plan_store = plan_store
         self.backend = backend
 
@@ -1042,6 +1072,7 @@ class BestFitPlannerDriver:
         """Build best-fit with Tandemn Store public clients."""
         from tandemn_system_data.clients import (
             JobStore,
+            ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
@@ -1053,6 +1084,7 @@ class BestFitPlannerDriver:
             scenario=scenario,
             job_store=JobStore(postgres),
             resource_map_store=ResourceMapStore(postgres, user_id=user_id),
+            model_catalog_store=ModelCatalogStore(postgres),
             plan_store=PlanStore(postgres),
             backend=_text(settings.get("backend"), "backend"),
         )
@@ -1097,18 +1129,31 @@ class BestFitPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        waiting_jobs = tuple(_model_payload(job) for job in waiting)
+        model_ids = {
+            _text(_known_job_fields(job).get("model_id"), "model_id")
+            for job in waiting_jobs
+        }
+        model_catalogs = {}
+        for model_id in sorted(model_ids):
+            catalog = self.model_catalog_store.get(model_id)
+            if catalog is None:
+                raise ValueError(f"model catalog missing {model_id!r}")
+            model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
-            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
+            model_catalogs=model_catalogs,
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
         """Place greedily using preferred mappings, then VRAM fallbacks."""
         benchmark = BEST_FIT_CONFIGURATIONS.get(self.benchmark_name, {})
         vram_requirements = VRAM_REQUIREMENTS_GIB.get(self.benchmark_name, {})
+        config_policy = load_config_policy()
         resources = deepcopy(snapshot.resources)
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
@@ -1128,7 +1173,7 @@ class BestFitPlannerDriver:
                         model_id=_text(
                             _known_job_fields(waiting).get("model_id"), "model_id"
                         ),
-                        config_policy=load_config_policy(),
+                        config_policy=config_policy,
                     )
                     used_vram_fallback = placement is not None
             if placement is None:
@@ -1147,7 +1192,8 @@ class BestFitPlannerDriver:
                     tp,
                     pp,
                     dp,
-                    self.backend,
+                    snapshot.model_catalogs,
+                    config_policy,
                 )
             )
         for paused in snapshot.paused_jobs:
@@ -1225,10 +1271,20 @@ def _place_action(
     tp: int,
     pp: int,
     dp: int,
-    backend: str,
+    model_catalogs: Mapping[str, Mapping[str, Any]],
+    config_policy: ConfigPolicy,
 ) -> dict[str, object]:
     """Combine deterministic Store fields with one mapped placement."""
     known = _known_job_fields(store_job)
+    model_id = _text(known.get("model_id"), "model_id")
+    try:
+        catalog = model_catalogs[model_id]
+    except KeyError as error:
+        raise ValueError(f"model catalog missing {model_id!r}") from error
+    launch_config = _materialize_launch_config(catalog, target.gpu_type)
+    rule = config_policy.rule_for(target.gpu_type, model_id)
+    if rule is None or tp not in rule.allowed_tp:
+        raise ValueError("BestFit selected a policy-invalid placement")
     gpu_count = tp * pp * dp
     return {
         "job_id": job_id,
@@ -1242,8 +1298,9 @@ def _place_action(
                 "rank_id": rank_id(known),
                 "env": target.environment_key.split("|"),
                 "config": {
-                    "model_id": known.get("model_id"),
-                    "engine_name": known.get("engine_name") or backend,
+                    **launch_config,
+                    "model_id": model_id,
+                    "precision": rule.precision,
                     "instance_type": target.instance_type,
                     "gpu_type": target.gpu_type,
                     "gpu_count": gpu_count,
@@ -1252,10 +1309,6 @@ def _place_action(
                     "pp": pp,
                     "dp": dp,
                     "ep": known.get("ep") or 1,
-                    "max_num_seq": known.get("max_num_seq") or 256,
-                    "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
-                    "gpu_mem_util": known.get("gpu_mem_util") or 0.9,
-                    "prefix_cache_enabled": bool(known.get("prefix_cache_enabled")),
                     "rank_traffic_share": 1.0,
                 },
                 "n_replicas": dp,
@@ -1263,6 +1316,41 @@ def _place_action(
             }
         ],
     }
+
+
+def _materialize_launch_config(
+    catalog: Mapping[str, Any],
+    gpu_type: str,
+) -> dict[str, object]:
+    """Resolve one Store model catalog against an exact target GPU."""
+    profile_fields = {
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    }
+    launch_config = {}
+    for field in LAUNCH_FIELDS:
+        if field not in profile_fields:
+            value = catalog.get(field)
+            if value is None:
+                raise ValueError(f"model catalog is missing {field}")
+            launch_config[field] = value
+            continue
+
+        entries = catalog.get(field)
+        if not isinstance(entries, list):
+            raise ValueError(f"model catalog {field} must be a GPU profile list")
+        value = None
+        for raw_entry in entries:
+            entry = _mapping(raw_entry, field)
+            if entry.get("gpu_type") == gpu_type:
+                value = entry.get("value")
+                break
+        if value is None:
+            raise ValueError(f"model catalog {field} has no profile for {gpu_type}")
+        launch_config[field] = value
+    return launch_config
 
 
 def _target_available(target: ResourceTarget) -> int:

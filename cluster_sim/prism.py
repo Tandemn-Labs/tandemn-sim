@@ -12,25 +12,27 @@ from typing import Any, Protocol
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
 from vram import (
+    _HARDWARE_MEMORY_GIB,
+    LAUNCH_FIELDS,
     MODEL_ARCHITECTURES,
     VRAM_REQUIREMENTS_GIB,
+    ModelCatalogStoreClient,
     ResourceTarget,
     StoreSnapshot,
-    _HARDWARE_MEMORY_GIB,
     _cache_elements_per_token,
     _canonical_hardware,
     _known_job_fields,
+    _materialize_launch_config,
     _model_payload,
     _resource_targets,
     _resources_with_free_capacity,
     _running_job_payload,
     _target_available,
     _target_footprint,
+    _target_tps,
     _validate_complete_job_actions,
     reserve_vram_placement,
 )
-from vram import _target_tps
-
 
 _PRIORITY_LEVELS = {
     "BEST_EFFORT": 1,
@@ -176,6 +178,7 @@ class PrismPlannerDriver:
         scenario: Scenario,
         job_store: JobStoreClient,
         resource_map_store: ResourceMapStoreClient,
+        model_catalog_store: ModelCatalogStoreClient,
         plan_store: PlanStoreClient,
         backend: str,
         config_policy: ConfigPolicy,
@@ -187,6 +190,7 @@ class PrismPlannerDriver:
         self.benchmark_job_ids = {job.store_job_id: job.name for job in jobs}
         self.job_store = job_store
         self.resource_map_store = resource_map_store
+        self.model_catalog_store = model_catalog_store
         self.plan_store = plan_store
         self.backend = backend
         self.config_policy = config_policy
@@ -202,6 +206,7 @@ class PrismPlannerDriver:
         """Build Prism with Tandemn Store public clients."""
         from tandemn_system_data.clients import (
             JobStore,
+            ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
@@ -213,6 +218,7 @@ class PrismPlannerDriver:
             scenario=scenario,
             job_store=JobStore(postgres),
             resource_map_store=ResourceMapStore(postgres, user_id=user_id),
+            model_catalog_store=ModelCatalogStore(postgres),
             plan_store=PlanStore(postgres),
             backend=_required_text(settings.get("backend"), "backend"),
             config_policy=load_config_policy(),
@@ -258,12 +264,24 @@ class PrismPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        waiting_jobs = tuple(_model_payload(job) for job in waiting)
+        model_ids = {
+            _required_text(_known_job_fields(job).get("model_id"), "model_id")
+            for job in waiting_jobs
+        }
+        model_catalogs = {}
+        for model_id in sorted(model_ids):
+            catalog = self.model_catalog_store.get(model_id)
+            if catalog is None:
+                raise ValueError(f"model catalog missing {model_id!r}")
+            model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
-            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
+            model_catalogs=model_catalogs,
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
@@ -288,8 +306,17 @@ class PrismPlannerDriver:
             if candidate is None:
                 actions.append({"job_id": problem.job_id, "type": "defer"})
                 continue
-            plan = self._build_place_plan(problem, candidate)
-            verify_place_plan(plan, candidate, self.config_policy)
+            plan = self._build_place_plan(
+                problem,
+                candidate,
+                snapshot.model_catalogs,
+            )
+            verify_place_plan(
+                plan,
+                candidate,
+                snapshot.model_catalogs,
+                self.config_policy,
+            )
             reserve_vram_placement(candidate.target, candidate.gpu_count)
             actions.append(plan)
         for paused in snapshot.paused_jobs:
@@ -309,12 +336,13 @@ class PrismPlannerDriver:
         self,
         problem: PlacementProblem,
         candidate: PlacementCandidate,
+        model_catalogs: Mapping[str, Mapping[str, Any]],
     ) -> dict[str, object]:
         """Build Prism's complete per-job placement plan."""
         return build_prism_plan(
             problem.store_job,
             candidate,
-            self.backend,
+            model_catalogs,
             self.config_policy,
         )
 
@@ -460,6 +488,7 @@ def validate_selection(
 def verify_place_plan(
     plan: Mapping[str, object],
     candidate: PlacementCandidate,
+    model_catalogs: Mapping[str, Mapping[str, Any]],
     config_policy: ConfigPolicy,
 ) -> None:
     """Verify one complete Prism placement plan before it is returned."""
@@ -502,10 +531,9 @@ def verify_place_plan(
     config = rank.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("placement ladder config must be an object")
-    required_config_keys = {
+    required_config_keys = set(LAUNCH_FIELDS) | {
         "model_id",
         "precision",
-        "engine_name",
         "instance_type",
         "gpu_type",
         "gpu_count",
@@ -514,10 +542,6 @@ def verify_place_plan(
         "pp",
         "dp",
         "ep",
-        "max_num_seq",
-        "max_num_batched_tokens",
-        "gpu_mem_util",
-        "prefix_cache_enabled",
         "rank_traffic_share",
     }
     if set(config) != required_config_keys:
@@ -526,6 +550,7 @@ def verify_place_plan(
         "gpu_type": candidate.target.gpu_type,
         "instance_type": candidate.target.instance_type,
         "gpu_count": candidate.gpu_count,
+        "count": candidate.gpu_count,
         "tp": candidate.tp,
         "pp": candidate.pp,
         "dp": candidate.dp,
@@ -542,17 +567,36 @@ def verify_place_plan(
         raise ValueError("placement plan violates the configuration policy")
     if config.get("precision") != rule.precision:
         raise ValueError("placement plan precision violates the configuration policy")
+    try:
+        catalog = model_catalogs[model_id]
+    except KeyError as error:
+        raise ValueError(f"model catalog missing {model_id!r}") from error
+    launch_config = _materialize_launch_config(
+        catalog,
+        candidate.target.gpu_type,
+    )
+    for launch_field, launch_value in launch_config.items():
+        if config.get(launch_field) != launch_value:
+            raise ValueError(f"placement plan config has invalid {launch_field}")
 
 
 def build_prism_plan(
     store_job: Mapping[str, object],
     candidate: PlacementCandidate,
-    backend: str,
+    model_catalogs: Mapping[str, Mapping[str, Any]],
     config_policy: ConfigPolicy,
 ) -> dict[str, object]:
     """Return one complete Prism placement plan."""
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
+    try:
+        catalog = model_catalogs[model_id]
+    except KeyError as error:
+        raise ValueError(f"model catalog missing {model_id!r}") from error
+    launch_config = _materialize_launch_config(
+        catalog,
+        candidate.target.gpu_type,
+    )
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
     if rule is None or candidate.tp not in rule.allowed_tp:
         raise ValueError("Prism selected a policy-invalid placement")
@@ -572,21 +616,17 @@ def build_prism_plan(
                 "rank_id": known.get("rank_id") or "rank_0",
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
+                    **launch_config,
                     "model_id": model_id,
                     "precision": rule.precision,
-                    "engine_name": known.get("engine_name") or backend,
                     "instance_type": candidate.target.instance_type,
                     "gpu_type": candidate.target.gpu_type,
                     "gpu_count": candidate.gpu_count,
-                    "count": known.get("count"),
+                    "count": candidate.gpu_count,
                     "tp": candidate.tp,
                     "pp": candidate.pp,
                     "dp": candidate.dp,
-                    "ep": known.get("ep"),
-                    "max_num_seq": known.get("max_num_seq"),
-                    "max_num_batched_tokens": known.get("max_num_batched_tokens"),
-                    "gpu_mem_util": known.get("gpu_mem_util"),
-                    "prefix_cache_enabled": known.get("prefix_cache_enabled"),
+                    "ep": known.get("ep") or 1,
                     "rank_traffic_share": 1.0,
                 },
                 "n_replicas": 1,

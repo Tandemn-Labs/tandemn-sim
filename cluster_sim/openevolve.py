@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from types import ModuleType, SimpleNamespace
 from typing import Any, Protocol, cast
 
+from llm_usage import LlmUsage
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
 from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
@@ -22,13 +23,18 @@ from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardwar
 OPENEOLVE_SYSTEM_PROMPT = """You improve a deterministic placement policy for one
 frozen Tandemn scheduler tick. Modify only compute_placement(payload). The payload
 contains each job's required_vram_gib, available GPU resources with
-gpu_memory_gib, and allowed configurations. Return one ordered place or defer
-decision for every job in payload['jobs_for_tick'].
+gpu_memory_gib, allowed configurations, and resolved Store model_catalog profiles.
+Use the model catalog as supplementary workload context. Return one ordered place
+or defer decision for every job in payload['jobs_for_tick'].
 
 Never use network, filesystem, subprocesses, hidden state, or third-party packages.
 Do not construct Tandemn Store actions. Choose only from the supplied environments
 and configurations. Preserve the function signature and return only
 {'placements': [...]}.
+
+Keep placement configuration limited to replicas_needed, tp, pp, and dp. Tandemn
+materializes authoritative model catalog fields after the policy chooses a target
+GPU; never copy those fields into the policy response.
 
 Prioritize valid plans, then admission of urgent work, then predicted SLO fitness,
 then lower cost and GPU use. Defer a job when no policy-compliant placement fits.
@@ -131,6 +137,7 @@ class StoreSnapshot:
     waiting_jobs: tuple[dict[str, Any], ...]
     paused_jobs: tuple[dict[str, Any], ...]
     finished_jobs: tuple[dict[str, Any], ...]
+    model_catalogs: dict[str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -168,11 +175,12 @@ class OpenEvolveClient(Protocol):
 
     def place(
         self,
+        tick_number: int,
         model: str,
         max_tokens: int,
         system_prompt: str,
         user_prompt: str,
-    ) -> tuple[OpenEvolvePlacement, ...]: ...
+    ) -> tuple[tuple[OpenEvolvePlacement, ...], tuple[LlmUsage, ...]]: ...
 
 
 class JobStoreClient(Protocol):
@@ -197,6 +205,12 @@ class ResourceMapStoreClient(Protocol):
     """Read one current Store resource map."""
 
     def get(self) -> ResourceMap: ...
+
+
+class ModelCatalogStoreClient(Protocol):
+    """Read one model catalog by its canonical model ID."""
+
+    def get(self, model_id: str) -> object | None: ...
 
 
 class PlanStoreClient(Protocol):
@@ -227,23 +241,31 @@ class OnlineOpenEvolveClient:
 
     def place(
         self,
+        tick_number: int,
         model: str,
         max_tokens: int,
         system_prompt: str,
         user_prompt: str,
-    ) -> tuple[OpenEvolvePlacement, ...]:
+    ) -> tuple[tuple[OpenEvolvePlacement, ...], tuple[LlmUsage, ...]]:
         """Evolve and execute one policy against the current tick only."""
         try:
             payload = _mapping(json.loads(user_prompt), "scheduler payload")
         except json.JSONDecodeError as error:
             raise ValueError("scheduler payload is not valid JSON") from error
+        model_catalog = payload.get("model_catalog")
+        if not isinstance(model_catalog, list):
+            raise ValueError("scheduler payload model_catalog must be an array")
+        tick_system_prompt = (
+            f"{system_prompt}\n\nFrozen resolved model catalog for this tick:\n"
+            f"{json.dumps(model_catalog, sort_keys=True, separators=(',', ':'))}"
+        )
         result = (self.runner or run_openevolve)(
             self.initial_program,
             _evaluator_source(payload),
             _openevolve_config(
                 model,
                 max_tokens,
-                OPENEOLVE_SYSTEM_PROMPT,
+                tick_system_prompt,
                 self.api_base,
             ),
             self.iterations,
@@ -260,7 +282,21 @@ class OnlineOpenEvolveClient:
         _validate_policy_response(payload, document)
         self.initial_program = source
         self.tick_number += 1
-        return placements
+        usage = tuple(
+            LlmUsage(
+                tick_number=tick_number,
+                input_tokens=_nonnegative_int(
+                    row.get("input_tokens"), "input_tokens"
+                ),
+                output_tokens=_nonnegative_int(
+                    row.get("output_tokens"), "output_tokens"
+                ),
+                model=_required_text(row.get("model"), "model"),
+            )
+            for raw_row in getattr(result, "llm_usage", ())
+            for row in (_mapping(raw_row, "OpenEvolve LLM usage"),)
+        )
+        return placements, usage
 
 
 class OpenEvolvePlannerDriver:
@@ -274,6 +310,7 @@ class OpenEvolvePlannerDriver:
         scenario: Scenario,
         job_store: JobStoreClient,
         resource_map_store: ResourceMapStoreClient,
+        model_catalog_store: ModelCatalogStoreClient,
         plan_store: PlanStoreClient,
         model: str,
         max_tokens: int,
@@ -289,6 +326,7 @@ class OpenEvolvePlannerDriver:
             self.jobs[batch_job.store_job_id] = batch_job
         self.job_store = job_store
         self.resource_map_store = resource_map_store
+        self.model_catalog_store = model_catalog_store
         self.plan_store = plan_store
         self.model = model
         self.max_tokens = max_tokens
@@ -307,6 +345,7 @@ class OpenEvolvePlannerDriver:
         """Build the standalone Store planner and online OpenEvolve client."""
         from tandemn_system_data.clients import (
             JobStore,
+            ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
@@ -318,6 +357,7 @@ class OpenEvolvePlannerDriver:
             scenario=scenario,
             job_store=JobStore(postgres),
             resource_map_store=ResourceMapStore(postgres, user_id=user_id),
+            model_catalog_store=ModelCatalogStore(postgres),
             plan_store=PlanStore(postgres),
             model=_required_text(settings.get("model"), "model"),
             max_tokens=_positive_int(settings.get("max_tokens"), "max_tokens"),
@@ -342,6 +382,7 @@ class OpenEvolvePlannerDriver:
                 if job.get("job_id") in self.jobs
             )
             placements: tuple[OpenEvolvePlacement, ...] = ()
+            llm_usage: tuple[LlmUsage, ...] = ()
             if waiting_ids:
                 prompt = _build_user_prompt(
                     tick_number,
@@ -350,7 +391,8 @@ class OpenEvolvePlannerDriver:
                     tuple(self.jobs[job_id] for job_id in waiting_ids),
                     load_config_policy(),
                 )
-                placements = self.client.place(
+                placements, llm_usage = self.client.place(
+                    tick_number,
                     self.model,
                     self.max_tokens,
                     OPENEOLVE_SYSTEM_PROMPT,
@@ -359,7 +401,11 @@ class OpenEvolvePlannerDriver:
 
             actions = self._build_actions(snapshot, placements)
             if not actions:
-                return PlannerResult(tick_number=tick_number, plans=())
+                return PlannerResult(
+                    tick_number=tick_number,
+                    plans=(),
+                    llm_usage=llm_usage,
+                )
 
             from tandemn_system_data.models import Plan
 
@@ -373,6 +419,7 @@ class OpenEvolvePlannerDriver:
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(CreatedPlan(plan_id=plan.plan_id),),
+                llm_usage=llm_usage,
             )
         except Exception as error:
             return PlannerResult(
@@ -388,12 +435,28 @@ class OpenEvolvePlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        waiting_jobs = tuple(_model_payload(job) for job in waiting)
+        model_ids = {
+            _required_text(
+                _mapping(job.get("spec_json"), "job spec_json").get("model_id"),
+                "model_id",
+            )
+            for job in waiting_jobs
+            if job.get("job_id") in self.jobs
+        }
+        model_catalogs = {}
+        for model_id in sorted(model_ids):
+            catalog = self.model_catalog_store.get(model_id)
+            if catalog is None:
+                raise ValueError(f"model catalog missing {model_id!r}")
+            model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
-            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
+            model_catalogs=model_catalogs,
         )
 
     def _build_actions(
@@ -431,7 +494,7 @@ class OpenEvolvePlannerDriver:
                     self.jobs[job_id],
                     placement,
                     resources,
-                    self.backend,
+                    snapshot.model_catalogs,
                 )
             )
         for paused in snapshot.paused_jobs:
@@ -459,6 +522,12 @@ def _build_user_prompt(
             },
             "config_policy": _config_policy_payload(
                 config_policy,
+                snapshot.resources,
+                jobs,
+            ),
+            "model_catalog": _model_catalog_payload(
+                config_policy,
+                snapshot.model_catalogs,
                 snapshot.resources,
                 jobs,
             ),
@@ -496,13 +565,43 @@ def _config_policy_payload(
     return entries
 
 
+def _model_catalog_payload(
+    config_policy: ConfigPolicy,
+    catalogs: Mapping[str, Mapping[str, Any]],
+    resources: Mapping[str, Mapping[str, Any]],
+    jobs: Sequence[OnlineJob | BatchJob],
+) -> list[dict[str, object]]:
+    """Resolve Store launch profiles for this tick's feasible model/GPU pairs."""
+    hardware = {
+        str(resource.get("gpu_type") or environment_key.split("|")[-1])
+        for environment_key, resource in resources.items()
+    }
+    profiles = []
+    for model_id in sorted({job.model_name for job in jobs}):
+        try:
+            catalog = catalogs[model_id]
+        except KeyError as error:
+            raise ValueError(f"model catalog missing {model_id!r}") from error
+        for gpu_type in sorted(hardware):
+            if config_policy.rule_for(gpu_type, model_id) is None:
+                continue
+            profiles.append(
+                {
+                    "model_id": model_id,
+                    "gpu_type": gpu_type,
+                    **_materialize_launch_config(catalog, gpu_type),
+                }
+            )
+    return profiles
+
+
 def _place_action(
     job_id: str,
     store_job: Mapping[str, object],
     scenario_job: OnlineJob | BatchJob,
     placement: OpenEvolvePlacement,
     resources: dict[str, dict[str, Any]],
-    backend: str,
+    catalogs: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, object]:
     """Combine deterministic job fields with one evolved placement."""
     known = _known_job_fields(store_job, scenario_job)
@@ -525,7 +624,7 @@ def _place_action(
                 known,
                 placement,
                 resources,
-                backend,
+                catalogs,
             )
         ],
     }
@@ -536,7 +635,7 @@ def _placement_ladder(
     known: Mapping[str, object],
     placement: OpenEvolvePlacement,
     resources: dict[str, dict[str, Any]],
-    backend: str,
+    catalogs: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, object]:
     """Validate one placement and reserve its Store resource footprint."""
     if placement.environment is None or placement.configuration is None:
@@ -556,6 +655,11 @@ def _placement_ladder(
     dp = _positive_int(config.get("dp"), "dp")
     model_id = str(known.get("model_id") or job.model_name)
     gpu_type = str(environment.get("gpu_type") or placement.environment.split("|")[-1])
+    try:
+        catalog = catalogs[model_id]
+    except KeyError as error:
+        raise ValueError(f"model catalog missing {model_id!r}") from error
+    launch_config = _materialize_launch_config(catalog, gpu_type)
     policy_rule = load_config_policy().rule_for(gpu_type, model_id)
     if policy_rule is None:
         raise ValueError(f"{model_id} is unsupported on {gpu_type}")
@@ -605,21 +709,17 @@ def _placement_ladder(
         pool["free"] = int(pool["free"]) - footprint
 
     rank_config: dict[str, object] = {
+        **launch_config,
         "model_id": model_id,
         "precision": policy_rule.precision,
-        "engine_name": known.get("engine_name") or backend,
         "instance_type": instance_type,
         "gpu_type": gpu_type,
         "gpu_count": gpu_count,
-        "count": known.get("count"),
+        "count": gpu_count,
         "tp": tp,
         "pp": pp,
         "dp": dp,
-        "ep": known.get("ep"),
-        "max_num_seq": known.get("max_num_seq"),
-        "max_num_batched_tokens": known.get("max_num_batched_tokens"),
-        "gpu_mem_util": known.get("gpu_mem_util"),
-        "prefix_cache_enabled": known.get("prefix_cache_enabled"),
+        "ep": known.get("ep") or 1,
         "rank_traffic_share": 1.0,
     }
     return {
@@ -630,6 +730,61 @@ def _placement_ladder(
         "n_replicas": replicas,
         "mechanism_id": known.get("mechanism_id"),
     }
+
+
+def _materialize_launch_config(
+    catalog: Mapping[str, Any],
+    gpu_type: str,
+) -> dict[str, object]:
+    """Resolve one Store model catalog against an exact target GPU."""
+    profile_fields = {
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    }
+    launch_fields = (
+        "engine_name",
+        "engine_version",
+        "weight_dtype",
+        "weight_quantization_method",
+        "weight_quantization_bits",
+        "activation_dtype",
+        "gpu_mem_util",
+        "max_model_len",
+        "prefix_cache_enabled",
+        "chunked_prefill_enable",
+        "chunk_size",
+        "scheduling_policy",
+        "preemption_policy",
+        "router_policy",
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    )
+    launch_config = {}
+    for field in launch_fields:
+        if field not in profile_fields:
+            value = catalog.get(field)
+            if value is None:
+                raise ValueError(f"model catalog is missing {field}")
+            launch_config[field] = value
+            continue
+
+        entries = catalog.get(field)
+        if not isinstance(entries, list):
+            raise ValueError(f"model catalog {field} must be a GPU profile list")
+        value = None
+        for raw_entry in entries:
+            entry = _mapping(raw_entry, field)
+            if entry.get("gpu_type") == gpu_type:
+                value = entry.get("value")
+                break
+        if value is None:
+            raise ValueError(f"model catalog {field} has no profile for {gpu_type}")
+        launch_config[field] = value
+    return launch_config
 
 
 def _resources_with_free_capacity(
@@ -875,9 +1030,7 @@ def _resource_prompt_payload(
                 raise ValueError("resource pool must be an object")
             pool_memory_gib = _gpu_memory_gib(resource, gpu_type, pool)
             if pool_memory_gib is None:
-                raise ValueError(
-                    f"{environment_key} pool is missing gpu_memory_gib"
-                )
+                raise ValueError(f"{environment_key} pool is missing gpu_memory_gib")
             pool["gpu_memory_gib"] = pool_memory_gib
     return payload
 
@@ -1018,11 +1171,30 @@ def run_openevolve(
         program_path.write_text(initial_program, encoding="utf-8")
         evaluator_path.write_text(evaluator, encoding="utf-8")
         script = """\
+import asyncio
 import json
 import sys
 from pathlib import Path
 from openevolve import run_evolution
 from openevolve.config import Config
+from openevolve.llm.openai import OpenAILLM
+
+llm_usage = []
+
+class TrackedOpenAILLM(OpenAILLM):
+    async def _call_api(self, params):
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self.client.chat.completions.create(**params),
+        )
+        usage = response.usage
+        llm_usage.append({
+            "input_tokens": usage.prompt_tokens,
+            "output_tokens": usage.completion_tokens,
+            "model": response.model or self.model,
+        })
+        return response.choices[0].message.content
 
 (
     program_path,
@@ -1032,16 +1204,19 @@ from openevolve.config import Config
     config_json,
     iterations,
 ) = sys.argv[1:]
+config = Config.from_dict(json.loads(config_json))
+for model_config in config.llm.models:
+    model_config.init_client = TrackedOpenAILLM
 result = run_evolution(
     initial_program=program_path,
     evaluator=evaluator_path,
-    config=Config.from_dict(json.loads(config_json)),
+    config=config,
     iterations=int(iterations),
     output_dir=output_dir,
     cleanup=False,
 )
 Path(result_path).write_text(
-    json.dumps({"best_code": result.best_code}),
+    json.dumps({"best_code": result.best_code, "llm_usage": llm_usage}),
     encoding="utf-8",
 )
 """
@@ -1078,7 +1253,10 @@ Path(result_path).write_text(
             document = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("OpenEvolve returned no readable result") from error
-    return SimpleNamespace(best_code=document.get("best_code"))
+    return SimpleNamespace(
+        best_code=document.get("best_code"),
+        llm_usage=document.get("llm_usage", []),
+    )
 
 
 def load_policy_source(source: str) -> OpenEvolvePolicy:
@@ -1177,6 +1355,10 @@ def _validate(payload, result):
         (value["model_id"], value["gpu_type"]): value
         for value in payload["config_policy"]
     }}
+    catalogs = {{
+        (value["model_id"], value["gpu_type"]): value
+        for value in payload["model_catalog"]
+    }}
     total_footprint = 0
     for job, placement in zip(jobs, placements):
         if (
@@ -1215,7 +1397,12 @@ def _validate(payload, result):
             return {{"valid": False}}
         gpu_type = str(resource.get("gpu_type") or environment.split("|")[-1])
         policy = policies.get((job["model_name"], gpu_type))
-        if policy is None or configuration["tp"] not in policy["allowed_tp"]:
+        catalog = catalogs.get((job["model_name"], gpu_type))
+        if (
+            policy is None
+            or catalog is None
+            or configuration["tp"] not in policy["allowed_tp"]
+        ):
             return {{"valid": False}}
 
         gpu_count = values[1] * values[2] * values[3]
@@ -1326,6 +1513,13 @@ def _validate_policy_response(
     policies = payload.get("config_policy")
     if not isinstance(policies, list):
         raise ValueError("config_policy must be an array")
+    catalog_profiles = payload.get("model_catalog")
+    if not isinstance(catalog_profiles, list):
+        raise ValueError("model_catalog must be an array")
+    catalog_pairs = set()
+    for raw_profile in catalog_profiles:
+        profile = _mapping(raw_profile, "model catalog profile")
+        catalog_pairs.add((profile.get("model_id"), profile.get("gpu_type")))
 
     expected_placement = {
         "decision",
@@ -1371,6 +1565,10 @@ def _validate_policy_response(
             if policy is None:
                 raise ValueError(
                     f"{job.get('model_name')} is unsupported on {gpu_type}"
+                )
+            if (job.get("model_name"), gpu_type) not in catalog_pairs:
+                raise ValueError(
+                    f"model catalog missing {job.get('model_name')} on {gpu_type}"
                 )
             allowed_tp = policy.get("allowed_tp")
             if not isinstance(allowed_tp, list) or tp not in allowed_tp:
@@ -1447,6 +1645,13 @@ def _positive_int(value: object, name: str) -> int:
     """Require one positive integer setting."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _nonnegative_int(value: object, name: str) -> int:
+    """Return one nonnegative integer token count."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a nonnegative integer")
     return value
 
 

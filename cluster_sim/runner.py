@@ -8,34 +8,6 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
 from time import perf_counter
-from typing import TypedDict
-
-from koi_trace import compile_koi_events
-from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Request, Scenario
-from planning import PlannerDriver
-from routing import StickyRoundRobinRouter
-from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
-from serving import (
-    BatchProbeMeasurement,
-    RankRun,
-    batch_probe_measurements,
-    build_rank_deployments,
-    commit_tick_metrics,
-    completed_request_summary,
-    gpu_metrics_from_results,
-    merge_hardware_catalogs,
-    profile_coverage_error,
-    prepare_rank_run,
-    resolve_rank_hardware,
-    run_ranks,
-)
-from telemetry import (
-    OUTCOME_METRICS,
-    aggregate_job_metrics,
-    cluster_accounting,
-    collect_rank_telemetry,
-    pool_telemetry,
-)
 from trace import (
     append_event,
     cluster_window,
@@ -56,6 +28,35 @@ from trace import (
     run_started,
     tick_started,
     trace_path,
+)
+from typing import TypedDict
+
+from koi_trace import compile_koi_events
+from llm_usage import LlmUsage, append_usage, usage_path
+from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Request, Scenario
+from planning import PlannerDriver
+from routing import StickyRoundRobinRouter
+from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
+from serving import (
+    BatchProbeMeasurement,
+    RankRun,
+    batch_probe_measurements,
+    build_rank_deployments,
+    commit_tick_metrics,
+    completed_request_summary,
+    gpu_metrics_from_results,
+    merge_hardware_catalogs,
+    prepare_rank_run,
+    profile_coverage_error,
+    resolve_rank_hardware,
+    run_ranks,
+)
+from telemetry import (
+    OUTCOME_METRICS,
+    aggregate_job_metrics,
+    cluster_accounting,
+    collect_rank_telemetry,
+    pool_telemetry,
 )
 
 
@@ -278,6 +279,8 @@ class ClusterSimulator:
         decision_time_ms = (perf_counter() - decision_started) * 1_000
         planner_finished_at = datetime.now(UTC)
         if trace_file is not None:
+            for usage in result.llm_usage:
+                append_usage(usage_path(trace_file), usage)
             debug_logger = getattr(self.planner, "debug_logger", None)
             events_path = getattr(debug_logger, "events_path", None)
             if events_path is not None:
@@ -285,6 +288,29 @@ class ClusterSimulator:
                 event_count = getattr(self, "_koi_event_count", 0)
                 for event in compiled_koi_events[event_count:]:
                     append_event(trace_file, event)
+                    koi_model = event.get("model") or getattr(
+                        getattr(self.planner, "llm", None),
+                        "model",
+                        None,
+                    )
+                    if (
+                        event.get("kind") == "koi_llm_call"
+                        and isinstance(event.get("tick"), int)
+                        and isinstance(event.get("prompt_tokens"), int)
+                        and isinstance(event.get("completion_tokens"), int)
+                        and isinstance(koi_model, str)
+                        and koi_model
+                        and not result.llm_usage
+                    ):
+                        append_usage(
+                            usage_path(trace_file),
+                            LlmUsage(
+                                tick_number=event["tick"],
+                                input_tokens=event["prompt_tokens"],
+                                output_tokens=event["completion_tokens"],
+                                model=koi_model,
+                            ),
+                        )
                 self._koi_event_count = len(compiled_koi_events)
             from tandemn_system_data.clients import PlanStore
 

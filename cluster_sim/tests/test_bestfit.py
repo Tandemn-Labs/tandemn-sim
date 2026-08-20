@@ -8,6 +8,7 @@ import sys
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -17,6 +18,8 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 from bestfit import BEST_FIT_CONFIGURATIONS, BestFitPlannerDriver, StoreSnapshot
 from models import OnlineJob, Scenario
 from policy import VALID_TP_DEGREES, load_config_policy
+
+MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
 
 class BestFitPlannerDriverTest(unittest.TestCase):
@@ -123,6 +126,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(first), _store_job(second)),
             paused_jobs=({"job_id": "paused"},),
             finished_jobs=({"job_id": "finished"},),
+            model_catalogs=_catalogs(),
         )
 
         actions = driver._build_actions(snapshot)
@@ -137,20 +141,56 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             ],
         )
         placed = actions[1]
-        self.assertEqual(placed["ladder"][0]["config"]["model_id"], "model")
-        self.assertEqual(placed["ladder"][0]["config"]["dp"], 1)
+        rank_config = placed["ladder"][0]["config"]
+        self.assertEqual(rank_config["model_id"], MODEL_ID)
+        self.assertEqual(rank_config["precision"], "fp16")
+        self.assertEqual(rank_config["dp"], 1)
         self.assertEqual(
-            placed["ladder"][0]["config"]["count"],
-            placed["ladder"][0]["config"]["gpu_count"],
+            rank_config["count"],
+            rank_config["gpu_count"],
         )
-        self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
-        self.assertRegex(placed["ladder"][0]["rank_id"], r"^rank_[0-7][0-9A-HJKMNP-TV-Z]{25}$")
+        self.assertEqual(rank_config["ep"], 1)
+        for field, value in _launch_config().items():
+            self.assertEqual(rank_config[field], value)
+        self.assertRegex(
+            placed["ladder"][0]["rank_id"], r"^rank_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+        )
+
+    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
+        """Freeze Store catalog records with the rest of the planning tick."""
+        driver = _driver()
+        requested = []
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (),
+            waiting_jobs=lambda _user_id: (
+                _store_job("first"),
+                _store_job("second"),
+            ),
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {},
+            )
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(model_dump=lambda **_kwargs: _catalogs()[model_id])
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+
+        self.assertEqual(requested, [MODEL_ID])
+        self.assertEqual(snapshot.model_catalogs, _catalogs())
 
     def test_unavailable_fixed_mapping_uses_vram_fallback(self) -> None:
         """Use memory best-fit until the preferred hardware becomes free."""
         driver = _driver()
         job_id = "job-benchmark_timing_real_12hr_192gpu-0-1"
-        model_id = "meta-llama/Llama-3.2-1B-Instruct"
+        model_id = MODEL_ID
         unavailable = _snapshot(
             job_id,
             l40s_free=0,
@@ -190,11 +230,12 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             },
             running_jobs=(),
             waiting_jobs=(
-                _store_job(first, "meta-llama/Llama-3.2-1B-Instruct"),
-                _store_job(second, "meta-llama/Llama-3.2-1B-Instruct"),
+                _store_job(first, MODEL_ID),
+                _store_job(second, MODEL_ID),
             ),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
 
         actions = driver._build_actions(snapshot)
@@ -219,7 +260,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         scenario_job = OnlineJob(
             name=benchmark_job_id,
             store_job_id=store_job_id,
-            model_name="model",
+            model_name=MODEL_ID,
             starts_at_ns=0,
             stops_at_ns=1,
             workload={},
@@ -242,12 +283,13 @@ def _driver(jobs: tuple[OnlineJob, ...] = ()) -> BestFitPlannerDriver:
         scenario=scenario,
         job_store=object(),
         resource_map_store=object(),
+        model_catalog_store=object(),
         plan_store=object(),
         backend="vllm",
     )
 
 
-def _store_job(job_id: str, model_id: str = "model") -> dict[str, object]:
+def _store_job(job_id: str, model_id: str = MODEL_ID) -> dict[str, object]:
     """Create one canonical waiting Store job payload."""
     return {
         "job_id": job_id,
@@ -267,7 +309,7 @@ def _snapshot(
     job_id: str,
     l40s_free: int,
     h100_free: int,
-    model_id: str = "model",
+    model_id: str = MODEL_ID,
 ) -> StoreSnapshot:
     """Create one tick snapshot with independently controlled hardware."""
     return StoreSnapshot(
@@ -289,7 +331,48 @@ def _snapshot(
         waiting_jobs=(_store_job(job_id, model_id),),
         paused_jobs=(),
         finished_jobs=(),
+        model_catalogs=_catalogs(),
     )
+
+
+def _launch_config() -> dict[str, object]:
+    """Return one resolved launch profile from Tandemn Store."""
+    return {
+        "engine_name": "vllm",
+        "engine_version": "0.16.0",
+        "weight_dtype": "float16",
+        "weight_quantization_method": "none",
+        "weight_quantization_bits": 16,
+        "activation_dtype": "float16",
+        "gpu_mem_util": 0.9,
+        "max_model_len": 131072,
+        "prefix_cache_enabled": False,
+        "chunked_prefill_enable": True,
+        "chunk_size": 100,
+        "scheduling_policy": "fcfs",
+        "preemption_policy": "recompute",
+        "router_policy": "kv_router",
+        "max_num_seq": 256,
+        "max_num_batched_tokens": 8192,
+        "block_size": 16,
+        "kvcache_dtype": "auto",
+    }
+
+
+def _catalogs() -> dict[str, dict[str, object]]:
+    """Return one raw Store catalog with exact target-GPU profiles."""
+    catalog = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        catalog[field] = [
+            {"gpu_type": gpu_type, "value": catalog[field]}
+            for gpu_type in ("H100", "L40S")
+        ]
+    return {MODEL_ID: catalog}
 
 
 def _fits_capacity_bins(shapes: list[int], capacities: tuple[int, ...]) -> bool:
