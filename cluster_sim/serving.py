@@ -510,24 +510,7 @@ def _run_rank(
                     completed.stderr,
                     "process_crash",
                 )
-            result = parse_rank_result(rank_run, completed)
-            if getattr(result, "status", "completed") != "wall_time_limit":
-                return result
-            if attempt < SIMULATION_RETRIES:
-                print(
-                    f"{rank_run.deployment.rank_name} simulation deadline "
-                    f"({attempt + 1}/{SIMULATION_RETRIES + 1})",
-                    flush=True,
-                )
-                continue
-            return RankResult(
-                rank_run.deployment,
-                (),
-                (),
-                result.stdout,
-                result.stderr,
-                "simulation_timeout",
-            )
+            return parse_rank_result(rank_run, completed)
     finally:
         if rank_run.cleanup_dir is not None and rank_run.cleanup_dir.exists():
             shutil.rmtree(rank_run.cleanup_dir)
