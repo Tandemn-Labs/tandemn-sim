@@ -49,6 +49,14 @@ class ConfigPolicyTest(unittest.TestCase):
         assert rule is not None
         self.assertEqual(rule.allowed_tp, (4, 8))
 
+    def test_phi_a10g_excludes_unprofiled_tp_one(self) -> None:
+        """Keep Phi-4 off A10G TP one until ServingSim has final_layernorm data."""
+        rule = policy.load_config_policy().rule_for("A10G", "microsoft/phi-4")
+
+        self.assertIsNotNone(rule)
+        assert rule is not None
+        self.assertEqual(rule.allowed_tp, (2,))
+
     def test_accepts_one_and_supported_even_tp_degrees(self) -> None:
         """Allow no sharding or an explicitly supported even degree."""
         policy_text = """\
