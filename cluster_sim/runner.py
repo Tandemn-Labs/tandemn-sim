@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
-from time import perf_counter, time
+from time import perf_counter
 from typing import TypedDict
 
 from koi_trace import compile_koi_events
@@ -18,7 +18,6 @@ from scenario import build_batch_probe, materialize_online_requests, requests_in
 from serving import (
     BatchProbeMeasurement,
     RankRun,
-    SERVING_WINDOW_SECONDS,
     batch_probe_measurements,
     build_rank_deployments,
     commit_tick_metrics,
@@ -250,6 +249,7 @@ class ClusterSimulator:
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
         trace_file = getattr(self, "trace_file", None)
         plans = []
+        materialized_rank_ids: set[str] = set()
         if trace_file is not None:
             append_event(trace_file, tick_started(tick_number, start.isoformat()))
             from tandemn_system_data.clients import ResourceMapStore
@@ -272,9 +272,11 @@ class ClusterSimulator:
 
         self._submit_jobs_before_or_at(start_offset_ns)
         self._admissions_in_tick = 0
+        planner_started_at = datetime.now(UTC)
         decision_started = perf_counter()
         result = self.planner.create_plans(tick_number, start)
         decision_time_ms = (perf_counter() - decision_started) * 1_000
+        planner_finished_at = datetime.now(UTC)
         if trace_file is not None:
             debug_logger = getattr(self.planner, "debug_logger", None)
             events_path = getattr(debug_logger, "events_path", None)
@@ -310,7 +312,8 @@ class ClusterSimulator:
                 planner_finished(
                     tick_number,
                     start.isoformat(),
-                    start.isoformat(),
+                    planner_started_at.isoformat(),
+                    planner_finished_at.isoformat(),
                     decision_time_ms,
                     plans,
                     planned_job_ids,
@@ -328,6 +331,9 @@ class ClusterSimulator:
                 )
         if trace_file is not None:
             running_jobs = self.jobs.running_jobs(self.user_id)
+            materialized_rank_ids = {
+                rank.rank_id for running in running_jobs for rank in running.ranks
+            }
             active_plans = {
                 (running.job.job_id, rank.plan_id)
                 for running in running_jobs
@@ -382,12 +388,17 @@ class ClusterSimulator:
             self._trace_plan_validations(
                 tick_number,
                 applied_plans,
+                materialized_rank_ids,
                 selected_plan_error=getattr(
                     self, "_tick_selected_plan_error", False
                 ),
             )
             raise
-        self._trace_plan_validations(tick_number, applied_plans)
+        self._trace_plan_validations(
+            tick_number,
+            applied_plans,
+            materialized_rank_ids,
+        )
         self._submit_jobs_before(end_offset_ns)
         self.clock.advance(timedelta(microseconds=self.scenario.tick_duration_ns // 1_000))
         return result
@@ -487,7 +498,6 @@ class ClusterSimulator:
         finished_online = []
         failed_rank_ids: set[str] = set()
         self._tick_failed_rank_ids = set()
-        self._tick_telemetry_rank_ids = set()
         self._tick_selected_plan_error = False
         outcome_updates = []
         active_ns_by_job = {}
@@ -585,7 +595,6 @@ class ClusterSimulator:
             for prepared in prepared_jobs
             for rank_run in prepared.rank_runs
         )
-        deadline_epoch_seconds = time() + SERVING_WINDOW_SECONDS
         if rank_runs:
             print(f"[tick {tick_number}] ServingSim ranks: 0/{len(rank_runs)} complete", flush=True)
         try:
@@ -593,7 +602,6 @@ class ClusterSimulator:
                 run_ranks(
                     rank_runs,
                     self.parallel_simulators,
-                    deadline_epoch_seconds,
                     progress=lambda completed, total, rank_run: print(
                         f"[tick {tick_number}] ServingSim ranks: "
                         f"{completed}/{total} complete "
@@ -872,9 +880,6 @@ class ClusterSimulator:
                     if metric_store is not None
                     else ([], {})
                 )
-                self._tick_telemetry_rank_ids = {
-                    row.rank_id for row in rows if row.rank_id is not None
-                }
                 for metric in rows:
                     append_event(
                         trace_file,
@@ -1316,10 +1321,10 @@ class ClusterSimulator:
     @staticmethod
     def _plan_validation_facts(
         plan: dict[str, object],
-        telemetry_rank_ids: set[str],
+        materialized_rank_ids: set[str],
         failed_rank_ids: set[str],
     ) -> tuple[int, bool | None]:
-        """Return applied selected-action count and telemetry-backed validity."""
+        """Return materialized selected-action count and post-run validity."""
         raw_actions = plan.get("actions")
         actions = [
             action
@@ -1328,26 +1333,31 @@ class ClusterSimulator:
         ]
         if plan.get("status") != "applied":
             return 0, False
+        if not actions:
+            return 0, None
+        applied_action_count = 0
         selected_rank_ids = set()
         for action in actions:
             ladder = action.get("ladder")
-            if not isinstance(ladder, list):
-                continue
-            selected_rank_ids.update(
+            rank_ids = {
                 rank["rank_id"]
-                for rank in ladder
+                for rank in (ladder if isinstance(ladder, list) else [])
                 if isinstance(rank, dict) and isinstance(rank.get("rank_id"), str)
-            )
+            }
+            selected_rank_ids.update(rank_ids)
+            if rank_ids and rank_ids <= materialized_rank_ids:
+                applied_action_count += 1
         if selected_rank_ids & failed_rank_ids:
-            return len(actions), False
-        if selected_rank_ids and selected_rank_ids <= telemetry_rank_ids:
-            return len(actions), True
-        return len(actions), None
+            return applied_action_count, False
+        if applied_action_count != len(actions):
+            return applied_action_count, False
+        return applied_action_count, True
 
     def _trace_plan_validations(
         self,
         tick_number: int,
         plans: list[dict[str, object]],
+        materialized_rank_ids: set[str],
         *,
         selected_plan_error: bool = False,
     ) -> None:
@@ -1355,13 +1365,10 @@ class ClusterSimulator:
         trace_file = getattr(self, "trace_file", None)
         if trace_file is None:
             return
-        telemetry_rank_ids: set[str] = getattr(
-            self, "_tick_telemetry_rank_ids", set()
-        )
         failed_rank_ids: set[str] = getattr(self, "_tick_failed_rank_ids", set())
         for plan in plans:
             applied_action_count, selected_plan_valid = self._plan_validation_facts(
-                plan, telemetry_rank_ids, failed_rank_ids
+                plan, materialized_rank_ids, failed_rank_ids
             )
             if selected_plan_error and applied_action_count:
                 selected_plan_valid = False

@@ -41,7 +41,7 @@ def run_started(
     """Build the immutable first event for one experiment trace."""
     return {
         "kind": "run_started",
-        "trace_version": 4,
+        "trace_version": 5,
         "run_id": run_id,
         "scenario": scenario,
         "benchmark": benchmark,
@@ -93,6 +93,7 @@ def placement_observed(
 
 def planner_finished(
     tick: int | None,
+    logical_at: str,
     started_at: str,
     finished_at: str,
     decision_time_ms: float | None,
@@ -114,6 +115,7 @@ def planner_finished(
     return {
         "kind": "planner_finished",
         "tick": tick,
+        "logical_at": logical_at,
         "planner_started_at": started_at,
         "planner_finished_at": finished_at,
         "decision_time_ms": decision_time_ms,

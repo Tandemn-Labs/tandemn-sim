@@ -435,7 +435,6 @@ def prepare_rank_run(
 def run_ranks(
     rank_runs: Sequence[RankRun],
     max_parallel: int,
-    deadline_epoch_seconds: float | None = None,
     progress=None,
 ) -> tuple[RankResult, ...]:
     """Run independent rank simulations concurrently and fail as one batch."""
@@ -443,7 +442,7 @@ def run_ranks(
         raise ValueError("max_parallel must be positive")
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
         futures = {
-            executor.submit(_run_rank, rank_run, deadline_epoch_seconds): index
+            executor.submit(_run_rank, rank_run): index
             for index, rank_run in enumerate(rank_runs)
         }
         results = [None] * len(rank_runs)
@@ -456,19 +455,19 @@ def run_ranks(
 
 
 def _run_rank(
-    rank_run: RankRun, deadline_epoch_seconds: float | None = None
+    rank_run: RankRun,
+    wall_time_seconds: float = SERVING_WINDOW_SECONDS,
 ) -> RankResult:
     """Run and parse one rank simulation command."""
-    command = rank_run.command
-    if deadline_epoch_seconds is not None:
-        command = (
-            *command,
-            "--wall-deadline-epoch-seconds",
-            str(deadline_epoch_seconds),
-        )
+    deadline_epoch_seconds = time() + wall_time_seconds
+    command = (
+        *rank_run.command,
+        "--wall-deadline-epoch-seconds",
+        str(deadline_epoch_seconds),
+    )
     try:
         for attempt in range(ASTRA_CRASH_RETRIES + 1):
-            if deadline_epoch_seconds is not None and time() >= deadline_epoch_seconds:
+            if time() >= deadline_epoch_seconds:
                 return RankResult(
                     rank_run.deployment,
                     (),

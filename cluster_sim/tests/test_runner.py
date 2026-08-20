@@ -215,7 +215,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(outcome["slo_pass_count"], 50)
         self.assertEqual(outcome["qualified_output_tokens"], 50)
 
-    def test_plan_validation_requires_applied_plan_and_all_rank_telemetry(self) -> None:
+    def test_plan_validation_requires_every_selected_rank_to_materialize(self) -> None:
         plan = {
             "status": "applied",
             "actions": [
@@ -235,7 +235,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         )
         self.assertEqual(
             ClusterSimulator._plan_validation_facts(plan, {"rank-a"}, set()),
-            (1, None),
+            (0, False),
         )
         self.assertEqual(
             ClusterSimulator._plan_validation_facts(
@@ -250,10 +250,34 @@ class RunnerDataPlaneTest(unittest.TestCase):
             (0, False),
         )
 
+    def test_plan_validation_counts_only_fully_materialized_actions(self) -> None:
+        plan = {
+            "status": "applied",
+            "actions": [
+                {"type": "place", "ladder": [{"rank_id": "rank-a"}]},
+                {"type": "swap", "ladder": [{"rank_id": "rank-b"}]},
+                {"type": "keep"},
+            ],
+        }
+
+        self.assertEqual(
+            ClusterSimulator._plan_validation_facts(plan, {"rank-a"}, set()),
+            (1, False),
+        )
+
+    def test_keep_only_plan_validation_is_not_applicable(self) -> None:
+        plan = {
+            "status": "applied",
+            "actions": [{"type": "keep"}, {"type": "defer"}],
+        }
+
+        self.assertEqual(
+            ClusterSimulator._plan_validation_facts(plan, set(), set()),
+            (0, None),
+        )
+
     def test_rank_execution_error_marks_applied_selected_plan_invalid(self) -> None:
         simulator = object.__new__(ClusterSimulator)
-        simulator._tick_telemetry_rank_ids = set()
-        simulator._tick_failed_rank_ids = set()
         plan = {
             "plan_id": "plan-a",
             "status": "applied",
@@ -264,7 +288,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
-            simulator._trace_plan_validations(0, [plan], selected_plan_error=True)
+            simulator._trace_plan_validations(
+                0,
+                [plan],
+                {"rank-a"},
+                selected_plan_error=True,
+            )
             event = json.loads(
                 simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1]
             )
@@ -272,9 +301,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(event["applied_action_count"], 1)
         self.assertFalse(event["selected_plan_valid"])
 
-    def test_accounting_error_leaves_selected_plan_validity_unknown(self) -> None:
+    def test_missing_materialized_rank_marks_selected_plan_invalid(self) -> None:
         simulator = object.__new__(ClusterSimulator)
-        simulator._tick_telemetry_rank_ids = set()
         simulator._tick_failed_rank_ids = set()
         plan = {
             "plan_id": "plan-a",
@@ -286,12 +314,13 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
-            simulator._trace_plan_validations(0, [plan])
+            simulator._trace_plan_validations(0, [plan], set())
             event = json.loads(
                 simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1]
             )
 
-        self.assertIsNone(event["selected_plan_valid"])
+        self.assertEqual(event["applied_action_count"], 0)
+        self.assertFalse(event["selected_plan_valid"])
 
     def test_trace_configuration_writes_run_metadata(self) -> None:
         """Start one trace before the first simulation tick."""
@@ -325,7 +354,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
     def test_tick_trace_includes_planner_time_and_canonical_plan(self) -> None:
         """Write one planner outcome before Noop-Orca applies its plan."""
         action = SimpleNamespace(
-            model_dump=lambda mode: {"job_id": "job-a", "type": "place"}
+            model_dump=lambda mode: {
+                "job_id": "job-a",
+                "type": "place",
+                "ladder": [{"rank_id": "rank-a"}],
+            }
         )
         plan = SimpleNamespace(
             plan_id="plan-1",
@@ -408,12 +441,24 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
+            wall_times = (
+                datetime(2026, 8, 19, 21, 30, 1, tzinfo=UTC),
+                datetime(2026, 8, 19, 21, 30, 15, tzinfo=UTC),
+                datetime(2026, 8, 19, 21, 30, 16, tzinfo=UTC),
+                datetime(2026, 8, 19, 21, 30, 16, 10_000, tzinfo=UTC),
+            )
             with (
                 patch("tandemn_system_data.clients.PlanStore", PlanStore),
                 patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
-                patch("runner.apply_pending_plans"),
+                patch(
+                    "runner.apply_pending_plans",
+                    side_effect=lambda *args: setattr(plan, "status", "applied"),
+                ),
                 patch.object(simulator, "_simulate_tick"),
+                patch("runner.datetime") as wall_datetime,
+                patch("runner.perf_counter", side_effect=(100, 114, 200, 200.01)),
             ):
+                wall_datetime.now.side_effect = wall_times
                 simulator.run_tick(0)
                 simulator.run_tick(1)
 
@@ -425,13 +470,30 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(events[0]["kind"], "tick_started")
         self.assertEqual(events[1]["kind"], "resource_snapshot")
         self.assertEqual(events[2]["kind"], "planner_finished")
+        self.assertEqual(events[2]["logical_at"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(
+            events[2]["planner_started_at"], "2026-08-19T21:30:01+00:00"
+        )
+        self.assertEqual(
+            events[2]["planner_finished_at"], "2026-08-19T21:30:15+00:00"
+        )
+        self.assertEqual(events[2]["decision_time_ms"], 14_000)
         self.assertEqual(events[2]["plans"][0]["actions"][0]["job_id"], "job-a")
         self.assertEqual(events[2]["planned_job_ids"], ["job-a"])
         self.assertEqual(events[3]["kind"], "job_admitted")
         self.assertEqual(events[3]["admitted_at"], "2026-01-01T00:00:00+00:00")
         self.assertEqual(sum(event["kind"] == "job_admitted" for event in events), 1)
         self.assertEqual(sum(event["kind"] == "placement_observed" for event in events), 2)
+        validation = next(
+            event for event in events if event["kind"] == "plan_validation"
+        )
+        self.assertEqual(validation["applied_action_count"], 1)
+        self.assertTrue(validation["selected_plan_valid"])
         self.assertEqual(simulator._admission_latencies_ms, [0.0])
+        self.assertEqual(
+            simulator.clock.now(),
+            datetime(2026, 1, 1, 0, 10, tzinfo=UTC),
+        )
 
     def test_tick_admits_only_materialized_place(self) -> None:
         """Wait for a replacement rank before recording the first admission."""
@@ -1063,8 +1125,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         def prepare(running, *args):
             return rank_runs[running.job.job_id], ()
 
-        def run(runs, max_parallel, deadline_epoch_seconds, progress=None):
-            launched.append((runs, max_parallel, deadline_epoch_seconds))
+        def run(runs, max_parallel, progress=None):
+            launched.append((runs, max_parallel))
             return result_a, result_b
 
         def metrics(job, deployments, results, *args):
@@ -1080,13 +1142,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
             patch.object(simulator, "_prepare_job_runs", side_effect=prepare),
             patch("runner.run_ranks", side_effect=run),
             patch("runner.gpu_metrics_from_results", side_effect=metrics),
-            patch("runner.time", return_value=1_000),
         ):
             simulator._simulate_tick(0, 0, 300_000_000_000)
 
         self.assertEqual(
             launched,
-            [((*rank_runs["job-a"], *rank_runs["job-b"]), 5, 1_300)],
+            [((*rank_runs["job-a"], *rank_runs["job-b"]), 5)],
         )
         self.assertEqual(
             finalized,
@@ -1707,7 +1768,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 (),
             )
 
-        def run(rank_runs, max_parallel, deadline_epoch_seconds, progress=None):
+        def run(rank_runs, max_parallel, progress=None):
             name = next(completed_names)
             completed = next(
                 request
@@ -2046,9 +2107,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
             deployment = args[0]
             return SimpleNamespace(deployment=deployment, request_count=1)
 
-        def run(rank_runs, max_parallel, deadline_epoch_seconds, progress=None):
+        def run(rank_runs, max_parallel, progress=None):
             deployment = rank_runs[0].deployment
-            calls.append(("run", max_parallel, deadline_epoch_seconds))
+            calls.append(("run", max_parallel))
             return (
                 RankResult(
                     deployment,
@@ -2086,7 +2147,6 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch("runner.profile_coverage_error", return_value=None),
                 patch("runner.prepare_rank_run", prepare),
                 patch("runner.run_ranks", run),
-                patch("runner.time", return_value=1_000),
                 patch(
                     "runner.commit_tick_metrics",
                     lambda store, metrics: calls.append(("commit", metrics))
@@ -2100,7 +2160,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(calls[0], ("run", 1, 1_300))
+        self.assertEqual(calls[0], ("run", 1))
         self.assertEqual(calls[1][0], "commit")
         self.assertEqual(len(calls[1][1]), 2)
         gpu_event = next(event for event in events if event["kind"] == "gpu_sample")

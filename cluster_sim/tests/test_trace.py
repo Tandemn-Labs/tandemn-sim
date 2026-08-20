@@ -87,7 +87,7 @@ class TracePathTest(unittest.TestCase):
             300,
         )
 
-        self.assertEqual(event["trace_version"], 4)
+        self.assertEqual(event["trace_version"], 5)
         self.assertEqual(
             event["admission_definition"], "first_active_rank_materialized"
         )
@@ -123,7 +123,8 @@ class TracePathTest(unittest.TestCase):
         event = planner_finished(
             4,
             "2026-01-01T00:20:00+00:00",
-            "2026-01-01T00:20:14+00:00",
+            "2026-08-19T21:30:01+00:00",
+            "2026-08-19T21:30:15+00:00",
             14_000,
             [
                 {
@@ -141,6 +142,13 @@ class TracePathTest(unittest.TestCase):
             None,
         )
 
+        self.assertEqual(event["logical_at"], "2026-01-01T00:20:00+00:00")
+        self.assertEqual(
+            event["planner_started_at"], "2026-08-19T21:30:01+00:00"
+        )
+        self.assertEqual(
+            event["planner_finished_at"], "2026-08-19T21:30:15+00:00"
+        )
         self.assertEqual(event["decision_time_ms"], 14_000)
         self.assertEqual(event["plans"][0]["plan_id"], "plan-4")
         self.assertFalse(event["timed_out"])

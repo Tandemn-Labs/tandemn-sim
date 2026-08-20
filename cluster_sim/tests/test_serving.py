@@ -737,8 +737,8 @@ class ServingInputTest(unittest.TestCase):
                 "300",
             )
 
-    def test_rank_run_receives_shared_deadline(self) -> None:
-        """Append one tick deadline to an active simulator command."""
+    def test_rank_run_receives_per_start_deadline(self) -> None:
+        """Give each started simulator its own wall-time budget."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
         rank_run = RankRun(deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330)
         parsed = SimpleNamespace()
@@ -749,7 +749,7 @@ class ServingInputTest(unittest.TestCase):
             patch("serving.subprocess.run", return_value=completed) as run,
             patch("serving.parse_rank_result", return_value=parsed),
         ):
-            result = _run_rank(rank_run, 1_300)
+            result = _run_rank(rank_run, 300)
 
         self.assertIs(result, parsed)
         self.assertEqual(
@@ -777,7 +777,7 @@ class ServingInputTest(unittest.TestCase):
             patch("serving.parse_rank_result", return_value=parsed) as parse,
             patch("builtins.print") as printed,
         ):
-            result = _run_rank(rank_run, 1_300)
+            result = _run_rank(rank_run, 300)
 
         self.assertIs(result, parsed)
         self.assertEqual(run.call_count, 3)
@@ -799,31 +799,36 @@ class ServingInputTest(unittest.TestCase):
             patch("serving.subprocess.run", return_value=crashed) as run,
             patch("builtins.print") as printed,
         ):
-            result = _run_rank(rank_run, 1_300)
+            result = _run_rank(rank_run, 300)
 
         self.assertEqual(run.call_count, ASTRA_CRASH_RETRIES + 1)
         self.assertEqual(printed.call_count, ASTRA_CRASH_RETRIES + 1)
         self.assertEqual(result.status, "process_crash")
         self.assertEqual(result.stderr, crashed.stderr)
 
-    def test_rank_queued_past_shared_deadline_is_not_started(self) -> None:
-        """Return an unfinished result without launching a late simulator."""
+    def test_rank_queued_after_first_wave_gets_fresh_deadline(self) -> None:
+        """Start a queued simulator with a budget measured from worker start."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
         with tempfile.TemporaryDirectory() as directory:
             cleanup_dir = Path(directory) / "rank"
             cleanup_dir.mkdir()
             rank_run = RankRun(deployment, (), (), Path(), Path(), 0, 330, cleanup_dir)
+            completed = subprocess.CompletedProcess((), 0, "", "")
+            parsed = SimpleNamespace()
             with (
                 patch("serving.time", return_value=1_301),
-                patch("serving.subprocess.run") as run,
+                patch("serving.subprocess.run", return_value=completed) as run,
+                patch("serving.parse_rank_result", return_value=parsed),
             ):
-                result = _run_rank(rank_run, 1_300)
+                result = _run_rank(rank_run, 300)
 
             self.assertFalse(cleanup_dir.exists())
 
-        run.assert_not_called()
-        self.assertEqual(result.status, "wall_time_limit")
-        self.assertEqual(result.completed_requests, ())
+        self.assertIs(result, parsed)
+        self.assertEqual(
+            run.call_args.args[0][-2:],
+            ("--wall-deadline-epoch-seconds", "1601"),
+        )
 
     def test_rank_parse_failure_cleans_up_generated_files(self) -> None:
         """Remove one failed rank's generated simulator inputs."""
