@@ -20,6 +20,9 @@ Additional scheduling methods are tracked in `configs/methods.yaml`. Each method
 
 Benchmarks live in `benchmarks/` and cover both simulated and real-hardware environments. They define the cluster resources, model mix, online and batch jobs, arrival patterns, SLOs, deadlines, and run duration.
 
+See [`benchmarks/README.md`](benchmarks/README.md) for one-time local Store setup,
+fixed hardware snapshots, and isolated baseline-user creation.
+
 The benchmark catalog currently includes:
 
 - 3-hour, 12-hour, and 24-hour simulation workloads.
