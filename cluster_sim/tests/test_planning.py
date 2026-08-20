@@ -4,20 +4,50 @@ from __future__ import annotations
 
 import sys
 import unittest
-from types import SimpleNamespace
-
-
 from pathlib import Path
-
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from planning import PLANNER_BUILDERS, KoiPlannerDriver, SimulationPlanExecutor, normalize_plan_for_simulation
+from planning import (
+    PLANNER_BUILDERS,
+    KoiPlannerDriver,
+    SimulationPlanExecutor,
+    normalize_plan_for_simulation,
+)
 
 
 class KoiPlannerDriverTest(unittest.TestCase):
     """Verify Koi plan acknowledgements cross the simulator boundary."""
+
+    def test_tick_returns_provider_token_usage(self) -> None:
+        """Capture Koi's OpenAI-compatible response at its API boundary."""
+        response = SimpleNamespace(
+            model="koi-model-used",
+            usage=SimpleNamespace(prompt_tokens=70, completion_tokens=15),
+            choices=[SimpleNamespace(message=SimpleNamespace(content="done"))],
+        )
+        resource = SimpleNamespace(create=lambda **_kwargs: response)
+        sdk_client = SimpleNamespace(chat=SimpleNamespace(completions=resource))
+        llm = SimpleNamespace(_client=sdk_client, model="koi-model", calls=[])
+
+        def run_tick(tick: int) -> SimpleNamespace:
+            llm._client.chat.completions.create(model=llm.model)
+            return SimpleNamespace(deploy_acks=[], error=None)
+
+        result = KoiPlannerDriver(
+            "user_1",
+            SimpleNamespace(run_tick=run_tick),
+            SimpleNamespace(),
+            llm,
+        ).create_plans(6, None)
+
+        self.assertIs(llm._client, sdk_client)
+        self.assertEqual(result.llm_usage[0].tick_number, 6)
+        self.assertEqual(result.llm_usage[0].input_tokens, 70)
+        self.assertEqual(result.llm_usage[0].output_tokens, 15)
+        self.assertEqual(result.llm_usage[0].model, "koi-model-used")
 
     def test_tick_returns_plan_ids_and_clears_debug_buffers(self) -> None:
         """Translate Koi deploy acknowledgements into one PlannerResult."""

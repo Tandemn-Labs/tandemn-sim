@@ -10,14 +10,17 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from gpt import (
+    PLACEMENT_SCHEMA,
     SYSTEM_PROMPT,
     GptPlacement,
     GptPlannerDriver,
+    OpenAIResponsesClient,
     StoreSnapshot,
     _build_user_prompt,
     _resources_with_free_capacity,
@@ -31,6 +34,87 @@ from tandemn_system_data.models import Plan
 
 class GptPlannerDriverTest(unittest.TestCase):
     """Verify GPT decisions become complete canonical Store actions."""
+
+    def test_client_returns_provider_token_usage(self) -> None:
+        """Keep exact Responses API usage with its simulation tick."""
+        response = SimpleNamespace(
+            status="completed",
+            output_text=json.dumps(
+                {
+                    "placements": [
+                        {
+                            "decision": "defer",
+                            "environment": None,
+                            "instance_type": None,
+                            "configuration": None,
+                        }
+                    ]
+                }
+            ),
+            model="gpt-used",
+            usage=SimpleNamespace(input_tokens=90, output_tokens=10),
+        )
+        sdk = SimpleNamespace(
+            OpenAI=lambda: SimpleNamespace(
+                responses=SimpleNamespace(create=lambda **_kwargs: response)
+            )
+        )
+
+        with patch("gpt.import_module", return_value=sdk):
+            placements, usage = OpenAIResponsesClient().place(
+                2,
+                "gpt-requested",
+                100,
+                "system",
+                "prompt",
+            )
+
+        self.assertEqual(placements[0].decision, "defer")
+        self.assertEqual(usage[0].tick_number, 2)
+        self.assertEqual(usage[0].input_tokens, 90)
+        self.assertEqual(usage[0].output_tokens, 10)
+        self.assertEqual(usage[0].model, "gpt-used")
+
+    def test_schema_requires_every_catalog_field(self) -> None:
+        """Keep the OpenAI strict schema aligned with the rank launch config."""
+        placement = PLACEMENT_SCHEMA["properties"]["placements"]["items"]
+        configuration = placement["properties"]["configuration"]["anyOf"][0]
+
+        self.assertEqual(
+            set(configuration["required"]),
+            set(configuration["properties"]),
+        )
+        self.assertFalse(configuration["additionalProperties"])
+
+    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
+        """Use the existing planner Store connection for tick catalog context."""
+        driver = _driver(("first", "second"))
+        requested = []
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (),
+            waiting_jobs=lambda _user_id: (
+                _store_job("first"),
+                _store_job("second"),
+            ),
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(market="reserved", scheduling_summary=dict)
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(model_dump=lambda **_kwargs: _catalogs()[model_id])
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+
+        self.assertEqual(
+            requested,
+            ["meta-llama/Llama-3.2-1B-Instruct"],
+        )
+        self.assertEqual(snapshot.model_catalogs, _catalogs())
 
     def test_builds_actions_without_terminal_jobs(self) -> None:
         """Combine GPT placement fields without acting on terminal jobs."""
@@ -55,12 +139,13 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=({"job_id": "paused"},),
             finished_jobs=({"job_id": "finished"},),
+            model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type="p5.48xlarge",
-            configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+            configuration=_configuration(),
         )
 
         actions = driver._build_actions(snapshot, (placement,))
@@ -82,6 +167,9 @@ class GptPlannerDriverTest(unittest.TestCase):
         self.assertEqual(placed["ladder"][0]["config"]["tp"], 1)
         self.assertEqual(placed["ladder"][0]["config"]["precision"], "bf16")
         self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
+        self.assertEqual(placed["ladder"][0]["config"]["engine_version"], "0.16.0")
+        self.assertEqual(placed["ladder"][0]["config"]["max_num_seq"], 256)
+        self.assertEqual(placed["ladder"][0]["config"]["kvcache_dtype"], "auto")
         plan = Plan(user_id="user", actions=actions)
         self.assertEqual(plan.actions[1].job_id, "waiting")
         ranks = ladder_to_ranks(
@@ -123,6 +211,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
 
         prompt = _build_user_prompt(
@@ -142,6 +231,16 @@ class GptPlannerDriverTest(unittest.TestCase):
                     "gpu_type": "H100",
                     "model_id": "meta-llama/Llama-3.2-1B-Instruct",
                     "precision": "bf16",
+                }
+            ],
+        )
+        self.assertEqual(
+            document["model_catalog"],
+            [
+                {
+                    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                    "gpu_type": "H100",
+                    **_launch_config(),
                 }
             ],
         )
@@ -172,13 +271,14 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job("first"), _store_job("second")),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
         placements = tuple(
             GptPlacement(
                 decision="place",
                 environment=environment,
                 instance_type="p5.48xlarge",
-                configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+                configuration=_configuration(),
             )
             for _ in range(2)
         )
@@ -206,12 +306,13 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type=None,
-            configuration={"replicas_needed": 1, "tp": 3, "pp": 1, "dp": 1},
+            configuration=_configuration(tp=3),
         )
 
         with self.assertRaisesRegex(ValueError, "tp=3 is not allowed"):
@@ -242,12 +343,13 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
             decision="place",
             environment=environment,
             instance_type="p5.48xlarge",
-            configuration={"replicas_needed": 2, "tp": 2, "pp": 1, "dp": 3},
+            configuration=_configuration(replicas_needed=2, tp=2, dp=3),
         )
 
         ladder = driver._build_actions(snapshot, (placement,))[0]["ladder"]
@@ -304,6 +406,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs(),
         )
 
         with self.assertRaisesRegex(ValueError, "decide every waiting job"):
@@ -335,6 +438,7 @@ def _driver(job_ids: tuple[str, ...] = ("waiting",)) -> GptPlannerDriver:
         scenario=scenario,
         job_store=object(),
         resource_map_store=object(),
+        model_catalog_store=object(),
         plan_store=object(),
         model="gpt-test",
         max_tokens=100,
@@ -356,6 +460,60 @@ def _store_job(job_id: str = "waiting") -> dict[str, object]:
                 "target_p99_tpot_ms": 55,
             },
         },
+    }
+
+
+def _launch_config() -> dict[str, object]:
+    """Return one resolved H100 launch profile from Tandemn Store."""
+    return {
+        "engine_name": "vllm",
+        "engine_version": "0.16.0",
+        "weight_dtype": "float16",
+        "weight_quantization_method": "none",
+        "weight_quantization_bits": 16,
+        "activation_dtype": "float16",
+        "gpu_mem_util": 0.9,
+        "max_model_len": 131072,
+        "prefix_cache_enabled": False,
+        "chunked_prefill_enable": True,
+        "chunk_size": 100,
+        "scheduling_policy": "fcfs",
+        "preemption_policy": "recompute",
+        "router_policy": "kv_router",
+        "max_num_seq": 256,
+        "max_num_batched_tokens": 8192,
+        "block_size": 16,
+        "kvcache_dtype": "auto",
+    }
+
+
+def _catalogs() -> dict[str, dict[str, object]]:
+    """Return one raw Store model catalog keyed by model ID."""
+    catalog = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        catalog[field] = [{"gpu_type": "H100", "value": catalog[field]}]
+    return {"meta-llama/Llama-3.2-1B-Instruct": catalog}
+
+
+def _configuration(
+    *,
+    replicas_needed: int = 1,
+    tp: int = 1,
+    pp: int = 1,
+    dp: int = 1,
+) -> dict[str, object]:
+    """Return GPT output that copies its supplied Store launch profile."""
+    return {
+        "replicas_needed": replicas_needed,
+        "tp": tp,
+        "pp": pp,
+        "dp": dp,
+        **_launch_config(),
     }
 
 

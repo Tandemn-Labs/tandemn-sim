@@ -56,11 +56,22 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             iterations=3,
             output_dir=Path("outputs/test-openevolve"),
             runner=lambda *args: (
-                calls.append(args) or SimpleNamespace(best_code=_VALID_POLICY)
+                calls.append(args)
+                or SimpleNamespace(
+                    best_code=_VALID_POLICY,
+                    llm_usage=[
+                        {
+                            "input_tokens": 80,
+                            "output_tokens": 20,
+                            "model": "model-used",
+                        }
+                    ],
+                )
             ),
         )
 
-        placements = client.place(
+        placements, usage = client.place(
+            4,
             "model-test",
             123,
             "system",
@@ -74,8 +85,67 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             {"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
         )
         self.assertEqual(calls[0][3], 3)
+        system_message = calls[0][2]["prompt"]["system_message"]
+        self.assertTrue(system_message.startswith("system"))
+        self.assertIn('"engine_version":"0.16.0"', system_message)
         self.assertEqual(client.tick_number, 1)
         self.assertEqual(client.initial_program, _VALID_POLICY)
+        self.assertEqual(usage[0].tick_number, 4)
+        self.assertEqual(usage[0].input_tokens, 80)
+        self.assertEqual(usage[0].output_tokens, 20)
+        self.assertEqual(usage[0].model, "model-used")
+
+    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
+        """Freeze resolved Store launch profiles for the tick and LLM context."""
+        driver = _driver()
+        requested = []
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (),
+            waiting_jobs=lambda _user_id: (_store_job(),),
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {
+                    "reserved|aws|us-east|use1-az1|H100": {
+                        "gpu_type": "H100",
+                        "total": 1,
+                        "pools": [],
+                    }
+                },
+            )
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(model_dump=lambda **_kwargs: _catalogs()[model_id])
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+        prompt = json.loads(
+            _build_user_prompt(
+                1,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                tuple(driver.jobs.values()),
+                load_config_policy(),
+            )
+        )
+
+        self.assertEqual(requested, ["meta-llama/Llama-3.2-1B-Instruct"])
+        self.assertEqual(snapshot.model_catalogs, _catalogs())
+        self.assertEqual(
+            prompt["model_catalog"],
+            [
+                {
+                    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                    "gpu_type": "H100",
+                    **_launch_config(),
+                }
+            ],
+        )
 
     def test_driver_excludes_terminal_jobs(self) -> None:
         """Own lifecycle actions without acting on terminal jobs."""
@@ -93,6 +163,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=({"job_id": "paused"},),
             finished_jobs=({"job_id": "finished"},),
+            model_catalogs=_catalogs(),
         )
         placement = OpenEvolvePlacement(
             decision="place",
@@ -114,8 +185,11 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         placed = actions[1]
         self.assertEqual(placed["tenant_id"], "tenant")
         self.assertEqual(placed["target_p99_ttft_ms"], 700.0)
-        self.assertEqual(placed["ladder"][0]["config"]["precision"], "bf16")
-        self.assertEqual(placed["ladder"][0]["config"]["tp"], 1)
+        rank_config = placed["ladder"][0]["config"]
+        self.assertEqual(rank_config["precision"], "bf16")
+        self.assertEqual(rank_config["tp"], 1)
+        for field, value in _launch_config().items():
+            self.assertEqual(rank_config[field], value)
 
     def test_seed_policy_reserves_tensor_parallel_footprint(self) -> None:
         """Defer when the smallest allowed TP shape cannot fit the pool."""
@@ -142,6 +216,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             waiting_jobs=(_store_job(),),
             paused_jobs=(),
             finished_jobs=(),
+            model_catalogs=_catalogs("H100-SXM-80GB"),
         )
 
         prompt = json.loads(
@@ -156,9 +231,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(prompt["jobs_for_tick"][0]["required_vram_gib"], 7.966)
         self.assertEqual(
-            prompt["tandemn_state"]["resources"]["env|H100-SXM-80GB"][
-                "gpu_memory_gib"
-            ],
+            prompt["tandemn_state"]["resources"]["env|H100-SXM-80GB"]["gpu_memory_gib"],
             80,
         )
 
@@ -166,9 +239,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         """Reject a policy whose TP/PP copy cannot hold the workload."""
         payload = _payload()
         payload["jobs_for_tick"][0]["required_vram_gib"] = 171.67
-        payload["tandemn_state"]["resources"]["env|H100"][
-            "gpu_memory_gib"
-        ] = 40
+        payload["tandemn_state"]["resources"]["env|H100"]["gpu_memory_gib"] = 40
         payload["tandemn_state"]["resources"]["env|H100"]["total"] = 8
         payload["tandemn_state"]["resources"]["env|H100"]["free"] = 8
         payload["config_policy"][0]["allowed_tp"] = [2]
@@ -255,6 +326,13 @@ def _payload() -> dict[str, object]:
                 "allowed_tp": [1],
             }
         ],
+        "model_catalog": [
+            {
+                "model_id": "model",
+                "gpu_type": "H100",
+                **_launch_config(),
+            }
+        ],
         "jobs_for_tick": [{"model_name": "model", "required_vram_gib": 1.0}],
     }
 
@@ -281,6 +359,7 @@ def _driver() -> OpenEvolvePlannerDriver:
         scenario=Scenario("test", 1, 1, (job,), ()),
         job_store=object(),
         resource_map_store=object(),
+        model_catalog_store=object(),
         plan_store=object(),
         model="model-test",
         max_tokens=100,
@@ -303,6 +382,43 @@ def _store_job() -> dict[str, object]:
             },
         },
     }
+
+
+def _launch_config() -> dict[str, object]:
+    """Return one resolved H100 launch profile from Tandemn Store."""
+    return {
+        "engine_name": "vllm",
+        "engine_version": "0.16.0",
+        "weight_dtype": "float16",
+        "weight_quantization_method": "none",
+        "weight_quantization_bits": 16,
+        "activation_dtype": "float16",
+        "gpu_mem_util": 0.9,
+        "max_model_len": 131072,
+        "prefix_cache_enabled": False,
+        "chunked_prefill_enable": True,
+        "chunk_size": 100,
+        "scheduling_policy": "fcfs",
+        "preemption_policy": "recompute",
+        "router_policy": "kv_router",
+        "max_num_seq": 256,
+        "max_num_batched_tokens": 8192,
+        "block_size": 16,
+        "kvcache_dtype": "auto",
+    }
+
+
+def _catalogs(gpu_type: str = "H100") -> dict[str, dict[str, object]]:
+    """Return one raw Store model catalog keyed by model ID."""
+    catalog = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        catalog[field] = [{"gpu_type": gpu_type, "value": catalog[field]}]
+    return {"meta-llama/Llama-3.2-1B-Instruct": catalog}
 
 
 _VALID_POLICY = """\

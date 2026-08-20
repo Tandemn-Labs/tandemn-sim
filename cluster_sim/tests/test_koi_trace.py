@@ -7,15 +7,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
+
+from trace import append_event
 
 from koi_trace import (
     compile_koi_events,
     normalize_koi_candidate,
-    normalize_koi_evidence,
     normalize_koi_cusum,
+    normalize_koi_evidence,
     normalize_koi_llm_calls,
     normalize_koi_rank_predictions,
     normalize_koi_regret,
@@ -23,7 +24,6 @@ from koi_trace import (
     normalize_koi_state,
     normalize_koi_tick_summary,
 )
-from trace import append_event
 
 
 class KoiTraceTest(unittest.TestCase):
@@ -77,12 +77,21 @@ class KoiTraceTest(unittest.TestCase):
             "kind": "llm_calls",
             "tick": 4,
             "ts": "2026-01-01T00:20:00+00:00",
-            "payload": {"calls": [{"elapsed_sec": 2.5, "error": None}]},
+            "payload": {
+                "calls": [
+                    {
+                        "elapsed_sec": 2.5,
+                        "model": "koi-model",
+                        "error": None,
+                    }
+                ]
+            },
         }
 
         normalized = normalize_koi_llm_calls(event)
 
         self.assertEqual(normalized[0]["elapsed_ms"], 2500.0)
+        self.assertEqual(normalized[0]["model"], "koi-model")
         self.assertIsNone(normalized[0]["total_tokens"])
 
     def test_normalizes_s2_evidence_rows(self) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -10,16 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Protocol, cast
 
+from llm_usage import LlmUsage, OpenAIUsageClient
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
 from vram import (
+    _HARDWARE_MEMORY_GIB,
     MODEL_ARCHITECTURES,
     VRAM_REQUIREMENTS_GIB,
     ResourceTarget,
-    _HARDWARE_MEMORY_GIB,
     _cache_elements_per_token,
     _canonical_hardware,
     _known_job_fields,
@@ -44,6 +46,27 @@ _PRIORITY_LEVELS = {
     "P0": 4,
 }
 
+LAUNCH_FIELDS = (
+    "engine_name",
+    "engine_version",
+    "weight_dtype",
+    "weight_quantization_method",
+    "weight_quantization_bits",
+    "activation_dtype",
+    "gpu_mem_util",
+    "max_model_len",
+    "prefix_cache_enabled",
+    "chunked_prefill_enable",
+    "chunk_size",
+    "scheduling_policy",
+    "preemption_policy",
+    "router_policy",
+    "max_num_seq",
+    "max_num_batched_tokens",
+    "block_size",
+    "kvcache_dtype",
+)
+
 EVOX_SYSTEM_PROMPT = """You are evolving a deterministic GPU placement program
 online for the current simulator control tick.
 
@@ -52,6 +75,9 @@ tandemn-evox-placement/v1 and contains public static facts: jobs, each job's
 priority and feasible policy-compliant candidates, and nested resource
 capacities. Each candidate includes its exact capacity consumption, GPU shape,
 VRAM demand, model-weight memory, estimated KV demand, and hourly price.
+The model_catalog contains authoritative Store runtime and weight configuration
+resolved for each candidate model and exact target GPU. Use it as supplementary
+model workload context, but return only candidate IDs.
 
 Return {"placements": [{"job_id": str, "candidate_id": str | null}, ...]} with
 exactly one entry for every input job. A non-null candidate must belong to that
@@ -122,6 +148,7 @@ class StoreSnapshot:
     waiting_jobs: tuple[dict[str, Any], ...]
     paused_jobs: tuple[dict[str, Any], ...]
     finished_jobs: tuple[dict[str, Any], ...]
+    model_catalogs: dict[str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -140,6 +167,7 @@ class PlacementCandidate:
     model_weight_gib: float
     kv_demand: float
     price_per_hour: float
+    launch_config: dict[str, object]
 
     @property
     def gpu_count(self) -> int:
@@ -166,6 +194,7 @@ class PlacementProblem:
     """Hold public facts and feasible placements for one waiting EvoX job."""
 
     job_id: str
+    model_id: str
     priority: int
     priority_class: str
     store_job: dict[str, Any]
@@ -196,6 +225,12 @@ class ResourceMapStoreClient(Protocol):
     def get(self) -> ResourceMap: ...
 
 
+class ModelCatalogStoreClient(Protocol):
+    """Read one model catalog by canonical model ID."""
+
+    def get(self, model_id: str) -> object | None: ...
+
+
 class PlanStoreClient(Protocol):
     """Persist one canonical Store plan."""
 
@@ -213,9 +248,10 @@ class EvoxClient(Protocol):
 
     def select(
         self,
+        tick_number: int,
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
-    ) -> Mapping[str, PlacementCandidate]: ...
+    ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]: ...
 
 
 class OnlineSkyDiscoverEvoxClient:
@@ -240,11 +276,20 @@ class OnlineSkyDiscoverEvoxClient:
 
     def select(
         self,
+        tick_number: int,
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
-    ) -> Mapping[str, PlacementCandidate]:
+    ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]:
         """Evolve, verify, and execute the current tick's winning program."""
         evaluator = OnlineEvoxEvaluator(problems, capacities)
+        payload = build_evox_payload(problems, capacities)
+        catalog_json = json.dumps(
+            payload["model_catalog"], sort_keys=True, separators=(",", ":")
+        )
+        system_prompt = (
+            f"{EVOX_SYSTEM_PROMPT}\n\nFrozen resolved model catalog for this tick:\n"
+            f"{catalog_json}"
+        )
         result = run_evox_discovery(
             evaluator.evaluate,
             self.output_dir / f"tick-{self.tick_number:06d}",
@@ -252,6 +297,8 @@ class OnlineSkyDiscoverEvoxClient:
             iterations=self.iterations,
             initial_program=self.initial_program,
             api_base=self.api_base,
+            system_prompt=system_prompt,
+            tick_number=tick_number,
         )
         best_solution = getattr(result, "best_solution", None)
         if not isinstance(best_solution, str) or not best_solution:
@@ -260,7 +307,7 @@ class OnlineSkyDiscoverEvoxClient:
         selected = select_evox_placements(policy, problems, capacities)
         self.initial_program = best_solution
         self.tick_number += 1
-        return selected
+        return selected, tuple(getattr(result, "llm_usage", ()))
 
 
 class OnlineEvoxEvaluator:
@@ -324,6 +371,7 @@ class EvoxPlannerDriver:
         scenario: Scenario,
         job_store: JobStoreClient,
         resource_map_store: ResourceMapStoreClient,
+        model_catalog_store: ModelCatalogStoreClient,
         plan_store: PlanStoreClient,
         backend: str,
         config_policy: ConfigPolicy,
@@ -336,6 +384,7 @@ class EvoxPlannerDriver:
         self.benchmark_job_ids = {job.store_job_id: job.name for job in jobs}
         self.job_store = job_store
         self.resource_map_store = resource_map_store
+        self.model_catalog_store = model_catalog_store
         self.plan_store = plan_store
         self.backend = backend
         self.config_policy = config_policy
@@ -353,6 +402,7 @@ class EvoxPlannerDriver:
         """Build online EvoX with Store clients and SkyDiscover settings."""
         from tandemn_system_data.clients import (
             JobStore,
+            ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
@@ -370,6 +420,7 @@ class EvoxPlannerDriver:
             scenario=scenario,
             job_store=JobStore(postgres),
             resource_map_store=ResourceMapStore(postgres, user_id=user_id),
+            model_catalog_store=ModelCatalogStore(postgres),
             plan_store=PlanStore(postgres),
             backend=_required_text(settings.get("backend"), "backend"),
             config_policy=load_config_policy(),
@@ -389,11 +440,17 @@ class EvoxPlannerDriver:
     ) -> PlannerResult:
         """Read one Store snapshot, persist one plan, and return its identity."""
         del logical_time
+        self._tick_number = tick_number
+        self._llm_usage: tuple[LlmUsage, ...] = ()
         try:
             snapshot = self._read_store_snapshot()
             actions = self._build_actions(snapshot)
             if not actions:
-                return PlannerResult(tick_number=tick_number, plans=())
+                return PlannerResult(
+                    tick_number=tick_number,
+                    plans=(),
+                    llm_usage=self._llm_usage,
+                )
 
             from tandemn_system_data.models import Plan
 
@@ -411,6 +468,7 @@ class EvoxPlannerDriver:
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(CreatedPlan(plan_id=plan.plan_id),),
+                llm_usage=self._llm_usage,
             )
         except Exception as error:
             return PlannerResult(
@@ -426,12 +484,24 @@ class EvoxPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        waiting_jobs = tuple(_model_payload(job) for job in waiting)
+        model_ids = {
+            _required_text(_known_job_fields(job).get("model_id"), "model_id")
+            for job in waiting_jobs
+        }
+        model_catalogs = {}
+        for model_id in sorted(model_ids):
+            catalog = self.model_catalog_store.get(model_id)
+            if catalog is None:
+                raise ValueError(f"model catalog missing {model_id!r}")
+            model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
-            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
+            model_catalogs=model_catalogs,
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
@@ -443,6 +513,7 @@ class EvoxPlannerDriver:
             self.benchmark_name,
             self.benchmark_job_ids,
             self.config_policy,
+            snapshot.model_catalogs,
         )
         capacities = capacity_limits(resources)
         selected = dict(self._select_placements(problems, capacities))
@@ -473,7 +544,12 @@ class EvoxPlannerDriver:
         """Evolve and validate the current tick's placement response."""
         if not problems:
             return {}
-        return self.client.select(problems, capacities)
+        selected, self._llm_usage = self.client.select(
+            self._tick_number,
+            problems,
+            capacities,
+        )
+        return selected
 
     def _build_place_plan(
         self,
@@ -517,21 +593,17 @@ def build_evox_plan(
                 "rank_id": known.get("rank_id") or "rank_0",
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
+                    **candidate.launch_config,
                     "model_id": model_id,
                     "precision": rule.precision,
-                    "engine_name": known.get("engine_name") or backend,
                     "instance_type": candidate.target.instance_type,
                     "gpu_type": candidate.target.gpu_type,
                     "gpu_count": candidate.gpu_count,
-                    "count": known.get("count"),
+                    "count": candidate.gpu_count,
                     "tp": candidate.tp,
                     "pp": candidate.pp,
                     "dp": candidate.dp,
-                    "ep": known.get("ep"),
-                    "max_num_seq": known.get("max_num_seq"),
-                    "max_num_batched_tokens": known.get("max_num_batched_tokens"),
-                    "gpu_mem_util": known.get("gpu_mem_util"),
-                    "prefix_cache_enabled": known.get("prefix_cache_enabled"),
+                    "ep": known.get("ep") or 1,
                     "rank_traffic_share": 1.0,
                 },
                 "n_replicas": 1,
@@ -547,6 +619,7 @@ def build_placement_problems(
     benchmark_name: str,
     benchmark_job_ids: Mapping[str, str],
     config_policy: ConfigPolicy,
+    model_catalogs: Mapping[str, Mapping[str, Any]],
 ) -> tuple[PlacementProblem, ...]:
     """Build feasible EvoX candidates for every waiting Store job."""
     requirements = VRAM_REQUIREMENTS_GIB.get(benchmark_name, {})
@@ -556,13 +629,17 @@ def build_placement_problems(
         job_id = _required_text(store_job.get("job_id"), "waiting Store job_id")
         known = _known_job_fields(store_job)
         benchmark_job_id = benchmark_job_ids.get(job_id, job_id)
+        model_id = _required_text(known.get("model_id"), "model_id")
+        try:
+            model_catalog = model_catalogs[model_id]
+        except KeyError as error:
+            raise ValueError(f"model catalog missing {model_id!r}") from error
         required_vram_gib = _required_vram_gib(
             known,
             requirements.get(benchmark_job_id),
         )
         candidates = ()
         if required_vram_gib is not None:
-            model_id = _required_text(known.get("model_id"), "model_id")
             candidates = enumerate_candidates(
                 job_id,
                 model_id,
@@ -570,11 +647,13 @@ def build_placement_problems(
                 required_vram_gib,
                 resources,
                 config_policy,
+                model_catalog,
             )
         priority_class, priority = _priority(known)
         problems.append(
             PlacementProblem(
                 job_id=job_id,
+                model_id=model_id,
                 priority=priority,
                 priority_class=priority_class,
                 store_job=store_job,
@@ -591,6 +670,7 @@ def enumerate_candidates(
     required_vram_gib: float,
     resources: dict[str, dict[str, Any]],
     config_policy: ConfigPolicy,
+    model_catalog: Mapping[str, Any],
 ) -> tuple[PlacementCandidate, ...]:
     """Enumerate policy-compliant static shapes that fit current capacity."""
     candidates = []
@@ -601,6 +681,7 @@ def enumerate_candidates(
         rule = config_policy.rule_for(target.gpu_type, model_id)
         if rule is None:
             continue
+        launch_config = _materialize_launch_config(model_catalog, target.gpu_type)
         minimum_gpus = math.ceil(required_vram_gib / memory_gib)
         for tp in sorted(rule.allowed_tp):
             pp = math.ceil(minimum_gpus / tp)
@@ -631,9 +712,46 @@ def enumerate_candidates(
                     ),
                     kv_demand=_kv_demand(model_id, rule.precision, known),
                     price_per_hour=_placement_price(target, footprint),
+                    launch_config=launch_config,
                 )
             )
     return tuple(sorted(candidates, key=lambda candidate: candidate.candidate_id))
+
+
+def _materialize_launch_config(
+    catalog: Mapping[str, Any],
+    gpu_type: str,
+) -> dict[str, object]:
+    """Resolve one Store model catalog against an exact target GPU."""
+    profile_fields = {
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    }
+    launch_config = {}
+    for field in LAUNCH_FIELDS:
+        if field not in profile_fields:
+            value = catalog.get(field)
+            if value is None:
+                raise ValueError(f"model catalog is missing {field}")
+            launch_config[field] = value
+            continue
+
+        entries = catalog.get(field)
+        if not isinstance(entries, list):
+            raise ValueError(f"model catalog {field} must be a GPU profile list")
+        value = None
+        for raw_entry in entries:
+            if not isinstance(raw_entry, Mapping):
+                raise ValueError(f"model catalog {field} entry must be an object")
+            if raw_entry.get("gpu_type") == gpu_type:
+                value = raw_entry.get("value")
+                break
+        if value is None:
+            raise ValueError(f"model catalog {field} has no profile for {gpu_type}")
+        launch_config[field] = value
+    return launch_config
 
 
 def capacity_limits(
@@ -725,9 +843,9 @@ def verify_place_plan(
     if not isinstance(config, Mapping):
         raise ValueError("placement ladder config must be an object")
     required_config_keys = {
+        *LAUNCH_FIELDS,
         "model_id",
         "precision",
-        "engine_name",
         "instance_type",
         "gpu_type",
         "gpu_count",
@@ -736,10 +854,6 @@ def verify_place_plan(
         "pp",
         "dp",
         "ep",
-        "max_num_seq",
-        "max_num_batched_tokens",
-        "gpu_mem_util",
-        "prefix_cache_enabled",
         "rank_traffic_share",
     }
     if set(config) != required_config_keys:
@@ -756,6 +870,9 @@ def verify_place_plan(
     for key, value in expected.items():
         if config.get(key) != value:
             raise ValueError(f"placement plan config has invalid {key}")
+    for key, value in candidate.launch_config.items():
+        if config.get(key) != value:
+            raise ValueError(f"placement plan config has invalid catalog field {key}")
     model_id = config.get("model_id")
     if not isinstance(model_id, str) or not model_id:
         raise ValueError("placement plan config requires model_id")
@@ -772,9 +889,15 @@ def build_evox_payload(
 ) -> dict[str, object]:
     """Serialize public placement facts for current-tick evolution."""
     jobs = []
+    catalog_profiles: dict[tuple[str, str], dict[str, object]] = {}
     for problem in problems:
         candidates = []
         for candidate in problem.candidates:
+            catalog_profiles[(problem.model_id, candidate.target.gpu_type)] = {
+                "model_id": problem.model_id,
+                "gpu_type": candidate.target.gpu_type,
+                **candidate.launch_config,
+            }
             candidates.append(
                 {
                     "candidate_id": candidate.candidate_id,
@@ -799,6 +922,7 @@ def build_evox_payload(
         jobs.append(
             {
                 "job_id": problem.job_id,
+                "model_id": problem.model_id,
                 "priority": problem.priority,
                 "priority_class": problem.priority_class,
                 "candidates": candidates,
@@ -810,6 +934,7 @@ def build_evox_payload(
             {"capacity_id": key, "available": value}
             for key, value in sorted(capacities.items())
         ],
+        "model_catalog": [catalog_profiles[key] for key in sorted(catalog_profiles)],
         "jobs": jobs,
     }
 
@@ -898,6 +1023,8 @@ def run_evox_discovery(
     iterations: int = 100,
     initial_program: str | Path | None = None,
     api_base: str | None = None,
+    system_prompt: str = EVOX_SYSTEM_PROMPT,
+    tick_number: int = 0,
 ) -> object:
     """Run SkyDiscover EvoX online for one frozen control-tick snapshot."""
     if iterations < 1:
@@ -908,6 +1035,7 @@ def run_evox_discovery(
     try:
         from skydiscover import run_discovery
         from skydiscover.config import Config
+        from skydiscover.llm.openai import OpenAILLM
     except ImportError as error:
         raise RuntimeError(
             "EvoX discovery requires the sibling SkyDiscover project"
@@ -934,7 +1062,7 @@ def run_evox_discovery(
                 "share_llm": True,
                 "database": {"auto_generate_variation_operators": True},
             },
-            "prompt": {"system_message": EVOX_SYSTEM_PROMPT},
+            "prompt": {"system_message": system_prompt},
             "evaluator": {
                 "timeout": 360,
                 "max_retries": 3,
@@ -942,13 +1070,31 @@ def run_evox_discovery(
             },
         }
     )
-    return run_discovery(
+    llm_usage: list[LlmUsage] = []
+
+    class TrackedOpenAILLM(OpenAILLM):
+        def __init__(self, model_config: object) -> None:
+            super().__init__(model_config)
+            self.client = OpenAIUsageClient(
+                self.client,
+                tick_number,
+                model,
+                llm_usage,
+            )
+
+    for configured_model in config.llm.models:
+        configured_model.init_client = TrackedOpenAILLM
+    result = run_discovery(
         evaluator=evaluator,
         initial_program=initial_program or EVOX_INITIAL_PROGRAM,
         iterations=iterations,
         config=config,
         output_dir=str(output_dir),
         cleanup=True,
+    )
+    return SimpleNamespace(
+        best_solution=getattr(result, "best_solution", None),
+        llm_usage=tuple(llm_usage),
     )
 
 
@@ -1167,6 +1313,7 @@ __all__ = [
     "EvoxClient",
     "EvoxPolicy",
     "JobStoreClient",
+    "ModelCatalogStoreClient",
     "OnlineEvoxEvaluator",
     "OnlineSkyDiscoverEvoxClient",
     "EvoxPlannerDriver",

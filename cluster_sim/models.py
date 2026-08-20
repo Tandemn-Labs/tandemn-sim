@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from llm_usage import LlmUsage
+
 
 @dataclass(frozen=True)
 class OnlineJob:
@@ -113,6 +115,7 @@ class PlannerResult:
     plans: tuple[CreatedPlan, ...]
     degraded: bool = False
     error: str | None = None
+    llm_usage: tuple[LlmUsage, ...] = ()
 
 
 @dataclass(frozen=True)

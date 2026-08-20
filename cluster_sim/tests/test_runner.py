@@ -15,6 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
+from llm_usage import LlmUsage, usage_path
 from models import (
     BatchJob,
     BatchProgress,
@@ -374,7 +375,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator.postgres = object()
         simulator.planner = SimpleNamespace(
             create_plans=lambda tick, start: PlannerResult(
-                tick, (CreatedPlan("plan-1"),)
+                tick,
+                (CreatedPlan("plan-1"),),
+                llm_usage=(LlmUsage(tick, 100, 20, "model-used"),),
             )
         )
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
@@ -466,6 +469,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 json.loads(line)
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
             ]
+            usage_events = [
+                json.loads(line)
+                for line in usage_path(simulator.trace_file)
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
 
         self.assertEqual(events[0]["kind"], "tick_started")
         self.assertEqual(events[1]["kind"], "resource_snapshot")
@@ -484,6 +493,23 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(events[3]["admitted_at"], "2026-01-01T00:00:00+00:00")
         self.assertEqual(sum(event["kind"] == "job_admitted" for event in events), 1)
         self.assertEqual(sum(event["kind"] == "placement_observed" for event in events), 2)
+        self.assertEqual(
+            usage_events,
+            [
+                {
+                    "tick_number": 0,
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "model": "model-used",
+                },
+                {
+                    "tick_number": 1,
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "model": "model-used",
+                },
+            ],
+        )
         validation = next(
             event for event in events if event["kind"] == "plan_validation"
         )

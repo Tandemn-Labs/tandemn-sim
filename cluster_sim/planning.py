@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import sys
-from os import getenv
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from os import getenv
 from pathlib import Path
 from typing import Callable, Protocol
 
+from llm_usage import LlmUsage, OpenAIUsageClient
 from models import CreatedPlan, PlannerResult, Scenario
 
 
@@ -121,7 +122,25 @@ class KoiPlannerDriver:
 
     def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
         """Run one Koi tick and return the Store plans it created."""
-        context = self.runner.run_tick(tick_number)
+        usage: list[LlmUsage] = []
+        sdk_client = getattr(self.llm, "_client", None)
+        model = getattr(self.llm, "model", None)
+        if sdk_client is not None and isinstance(model, str) and model:
+            setattr(
+                self.llm,
+                "_client",
+                OpenAIUsageClient(
+                    sdk_client,
+                    tick_number,
+                    model,
+                    usage,
+                ),
+            )
+        try:
+            context = self.runner.run_tick(tick_number)
+        finally:
+            if sdk_client is not None and isinstance(model, str) and model:
+                setattr(self.llm, "_client", sdk_client)
         if self.debug_logger is not None:
             self.debug_logger.persist_runner_tick(context, self.agent, self.llm)
         events = getattr(getattr(self.agent, "trace", None), "events", None)
@@ -135,6 +154,7 @@ class KoiPlannerDriver:
             plans=tuple(CreatedPlan(plan_id=ack["plan_id"]) for ack in context.deploy_acks or []),
             degraded=context.error is not None,
             error=None if context.error is None else repr(context.error),
+            llm_usage=tuple(usage),
         )
 
 

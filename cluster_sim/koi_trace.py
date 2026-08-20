@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
 from trace import read_events
+from typing import Any
 
 
 def normalize_koi_state(event: dict[str, Any]) -> dict[str, object] | None:
@@ -65,6 +64,7 @@ def normalize_koi_llm_calls(event: dict[str, Any]) -> tuple[dict[str, object], .
                 "prompt_tokens": call.get("prompt_tokens"),
                 "completion_tokens": call.get("completion_tokens"),
                 "total_tokens": call.get("total_tokens"),
+                "model": call.get("model"),
                 "error": call.get("error"),
             }
         )

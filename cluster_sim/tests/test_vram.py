@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
@@ -15,8 +16,8 @@ from models import OnlineJob, Scenario
 from policy import load_config_policy
 from vram import (
     MODEL_ARCHITECTURES,
-    ModelArchitecture,
     VRAM_REQUIREMENTS_GIB,
+    ModelArchitecture,
     StoreSnapshot,
     VramPlannerDriver,
     calculate_max_vram_gib,
@@ -164,6 +165,46 @@ class VramPlannerDriverTest(unittest.TestCase):
             second_tick[0]["ladder"][0]["config"]["gpu_type"],
             "A10G",
         )
+        rank_config = first_tick[0]["ladder"][0]["config"]
+        for field, value in _launch_config().items():
+            self.assertEqual(rank_config[field], value)
+
+    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
+        """Freeze Store catalog records with the rest of the planning tick."""
+        driver = _driver()
+        requested = []
+        waiting = _snapshot(
+            "job-benchmark_timing_3hr-0-5",
+            a10g_free=1,
+            h100_free=0,
+        ).waiting_jobs
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (),
+            waiting_jobs=lambda _user_id: waiting,
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {},
+            )
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(
+                    model_dump=lambda **_kwargs: _catalogs(model_id)[model_id]
+                )
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+
+        self.assertEqual(requested, ["intfloat/multilingual-e5-large"])
+        self.assertEqual(
+            snapshot.model_catalogs,
+            _catalogs("intfloat/multilingual-e5-large"),
+        )
 
     def test_placement_minimizes_total_provisioned_vram(self) -> None:
         """Prefer seven 80 GiB GPUs over three 192 GiB GPUs."""
@@ -221,6 +262,7 @@ class VramPlannerDriverTest(unittest.TestCase):
             waiting_jobs=(),
             paused_jobs=(),
             finished_jobs=({"job_id": "finished"},),
+            model_catalogs={},
         )
 
         self.assertEqual(_driver()._build_actions(snapshot), [])
@@ -275,6 +317,7 @@ def _driver(
         scenario=scenario,
         job_store=object(),
         resource_map_store=object(),
+        model_catalog_store=object(),
         plan_store=object(),
         backend="vllm",
         config_policy=load_config_policy(),
@@ -334,7 +377,48 @@ def _snapshot(
         ),
         paused_jobs=(),
         finished_jobs=(),
+        model_catalogs=_catalogs(model_id),
     )
+
+
+def _launch_config() -> dict[str, object]:
+    """Return one resolved launch profile from Tandemn Store."""
+    return {
+        "engine_name": "vllm",
+        "engine_version": "0.16.0",
+        "weight_dtype": "float16",
+        "weight_quantization_method": "none",
+        "weight_quantization_bits": 16,
+        "activation_dtype": "float16",
+        "gpu_mem_util": 0.9,
+        "max_model_len": 131072,
+        "prefix_cache_enabled": False,
+        "chunked_prefill_enable": True,
+        "chunk_size": 100,
+        "scheduling_policy": "fcfs",
+        "preemption_policy": "recompute",
+        "router_policy": "kv_router",
+        "max_num_seq": 256,
+        "max_num_batched_tokens": 8192,
+        "block_size": 16,
+        "kvcache_dtype": "auto",
+    }
+
+
+def _catalogs(model_id: str) -> dict[str, dict[str, object]]:
+    """Return one raw Store catalog with exact target-GPU profiles."""
+    catalog = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        catalog[field] = [
+            {"gpu_type": gpu_type, "value": catalog[field]}
+            for gpu_type in ("A10G", "H100", "MI300X", "L40S")
+        ]
+    return {model_id: catalog}
 
 
 if __name__ == "__main__":
