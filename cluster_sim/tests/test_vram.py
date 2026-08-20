@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from models import OnlineJob, Scenario
 from policy import load_config_policy
+from tandemn_system_data.ids import is_valid_id
+from tandemn_system_data.models import Plan
 from vram import (
     MODEL_ARCHITECTURES,
     VRAM_REQUIREMENTS_GIB,
@@ -168,6 +170,8 @@ class VramPlannerDriverTest(unittest.TestCase):
         rank_config = first_tick[0]["ladder"][0]["config"]
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
+        self.assertTrue(is_valid_id(first_tick[0]["ladder"][0]["rank_id"], "rank"))
+        Plan(user_id="tenant", actions=[first_tick[0]])
 
     def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
         """Freeze Store catalog records with the rest of the planning tick."""

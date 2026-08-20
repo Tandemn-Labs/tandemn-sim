@@ -15,10 +15,14 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 from cp_sat import (
     CpSatPlannerDriver,
     PlacementCandidate,
+    PlacementProblem,
     build_cp_sat_plan,
+    solve_cp_sat,
     verify_place_plan,
 )
 from policy import load_config_policy
+from tandemn_system_data.ids import is_valid_id
+from tandemn_system_data.models import Plan
 from vram import ResourceTarget, StoreSnapshot
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
@@ -111,7 +115,33 @@ class CpSatPlannerDriverTest(unittest.TestCase):
         self.assertEqual(config["count"], 1)
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
+        self.assertTrue(is_valid_id(plan["ladder"][0]["rank_id"], "rank"))
         verify_place_plan(plan, candidate, catalogs, policy)
+        Plan(user_id="tenant", actions=[plan])
+
+    def test_solver_respects_capacity_and_prefers_higher_priority(self) -> None:
+        """Use the installed OR-Tools solver for the global admission choice."""
+        target = ResourceTarget(
+            environment_key="reserved|aws|us-east|use1-az1|L40S",
+            environment={},
+            pool=None,
+            gpu_type="L40S",
+            instance_type=None,
+        )
+        low = _candidate("low", target)
+        high = _candidate("high", target)
+        problems = (
+            PlacementProblem("low", 1, "LOW", {}, (low,)),
+            PlacementProblem("high", 4, "CRITICAL", {}, (high,)),
+        )
+
+        selected = solve_cp_sat(
+            problems,
+            {"environment::reserved|aws|us-east|use1-az1|L40S": 1},
+            max_time_seconds=1.0,
+        )
+
+        self.assertEqual(set(selected), {"high"})
 
 
 def _store_job(job_id: str) -> dict[str, object]:
@@ -121,6 +151,23 @@ def _store_job(job_id: str) -> dict[str, object]:
         "user_id": "tenant",
         "spec_json": {"model_id": MODEL_ID},
     }
+
+
+def _candidate(job_id: str, target: ResourceTarget) -> PlacementCandidate:
+    return PlacementCandidate(
+        candidate_id=job_id,
+        job_id=job_id,
+        target=target,
+        tp=1,
+        pp=1,
+        dp=1,
+        footprint=1,
+        memory_gib=48.0,
+        required_vram_gib=1.0,
+        model_weight_gib=1.0,
+        kv_demand=0.0,
+        price_per_hour=1.0,
+    )
 
 
 def _launch_config() -> dict[str, object]:

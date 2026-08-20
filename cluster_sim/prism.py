@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from rank_ids import rank_id
 from vram import (
     _HARDWARE_MEMORY_GIB,
     LAUNCH_FIELDS,
@@ -495,13 +496,9 @@ def verify_place_plan(
     required_plan_keys = {
         "job_id",
         "type",
-        "tenant_id",
         "target_tps",
         "target_p99_ttft_ms",
         "target_p99_tpot_ms",
-        "mechanism_id",
-        "budget_ref",
-        "rationale",
         "ladder",
     }
     if set(plan) != required_plan_keys:
@@ -603,17 +600,13 @@ def build_prism_plan(
     return {
         "job_id": candidate.job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": known.get("rank_id") or "rank_0",
+                "rank_id": rank_id(known),
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
                     **launch_config,

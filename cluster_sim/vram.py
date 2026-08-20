@@ -15,6 +15,7 @@ from typing import Any, Protocol
 import yaml
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
+from rank_ids import rank_id
 
 VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
     "real_3h_homogenous": {
@@ -1005,17 +1006,13 @@ def _place_action(
     return {
         "job_id": job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": known.get("rank_id") or "rank_0",
+                "rank_id": rank_id(known),
                 "env": target.environment_key.split("|"),
                 "config": {
                     **launch_config,
