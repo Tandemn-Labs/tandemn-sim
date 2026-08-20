@@ -1285,7 +1285,7 @@ def _place_action(
     rule = config_policy.rule_for(target.gpu_type, model_id)
     if rule is None or tp not in rule.allowed_tp:
         raise ValueError("BestFit selected a policy-invalid placement")
-    gpu_count = tp * pp * dp
+    per_replica_gpu_count = tp * pp
     return {
         "job_id": job_id,
         "type": "place",
@@ -1303,8 +1303,8 @@ def _place_action(
                     "precision": rule.precision,
                     "instance_type": target.instance_type,
                     "gpu_type": target.gpu_type,
-                    "gpu_count": gpu_count,
-                    "count": gpu_count,
+                    "gpu_count": per_replica_gpu_count,
+                    "count": per_replica_gpu_count,
                     "tp": tp,
                     "pp": pp,
                     "dp": dp,

@@ -15,11 +15,25 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from bestfit import BEST_FIT_CONFIGURATIONS, BestFitPlannerDriver, StoreSnapshot
+from bestfit import (
+    BEST_FIT_CONFIGURATIONS,
+    BestFitPlannerDriver,
+    StoreSnapshot,
+    _place_action,
+)
 from models import OnlineJob, Scenario
 from policy import VALID_TP_DEGREES, load_config_policy
+from serving import build_rank_cluster
+from tandemn_system_data.models import Plan
+from vram import ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+_SERVINGSIM_HARDWARE = {
+    "profile": "H100",
+    "memory_gb": 80,
+    "memory_bandwidth_gb_s": 3350,
+    "link_bandwidth_gb_s": 900,
+}
 
 
 class BestFitPlannerDriverTest(unittest.TestCase):
@@ -273,6 +287,42 @@ class BestFitPlannerDriverTest(unittest.TestCase):
 
         self.assertEqual(actions[0]["type"], "place")
         self.assertEqual(actions[0]["ladder"][0]["config"]["gpu_type"], "L40S")
+
+    def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
+        """Keep DP in replica count rather than one ServingSim rank shape."""
+        action = _place_action(
+            "job",
+            _store_job("job"),
+            ResourceTarget(
+                environment_key="reserved|aws|us-east|use1-az1|H100",
+                environment={},
+                pool=None,
+                gpu_type="H100",
+                instance_type=None,
+            ),
+            1,
+            1,
+            4,
+            _catalogs(),
+            load_config_policy(),
+        )
+
+        shape = action["ladder"][0]["config"]
+        self.assertEqual(shape["count"], 1)
+        self.assertEqual(shape["gpu_count"], 1)
+        self.assertEqual(action["ladder"][0]["n_replicas"], 4)
+        Plan(user_id="tenant", actions=[action])
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                rank_name=action["ladder"][0]["rank_id"],
+                model_name=shape["model_id"],
+                shape=shape,
+                chains=(object(),) * 4,
+            ),
+            _SERVINGSIM_HARDWARE,
+        )
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 1)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 4)
 
 
 def _driver(jobs: tuple[OnlineJob, ...] = ()) -> BestFitPlannerDriver:

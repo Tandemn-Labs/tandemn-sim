@@ -24,12 +24,21 @@ from openevolve import (
     StoreSnapshot,
     _build_user_prompt,
     _evaluator_source,
+    _place_action,
     _validate_policy_response,
     load_policy_source,
 )
 from policy import load_config_policy
+from serving import build_rank_cluster
 from tandemn_system_data.ids import is_valid_id
 from tandemn_system_data.models import Plan
+
+_SERVINGSIM_HARDWARE = {
+    "profile": "H100",
+    "memory_gb": 80,
+    "memory_bandwidth_gb_s": 3350,
+    "link_bandwidth_gb_s": 900,
+}
 
 
 class OpenEvolvePlannerTest(unittest.TestCase):
@@ -193,6 +202,48 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
         Plan(user_id="tenant", actions=[placed])
+
+    def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
+        """Keep DP in replica count rather than one ServingSim rank shape."""
+        driver = _driver()
+        job = driver.jobs["waiting"]
+        action = _place_action(
+            "waiting",
+            _store_job(),
+            job,
+            OpenEvolvePlacement(
+                decision="place",
+                environment="reserved|aws|us-east|use1-az1|H100",
+                instance_type=None,
+                configuration={"replicas_needed": 2, "tp": 2, "pp": 1, "dp": 3},
+            ),
+            {
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 12,
+                    "free": 12,
+                    "pools": [],
+                }
+            },
+            _catalogs(),
+        )
+
+        shape = action["ladder"][0]["config"]
+        self.assertEqual(shape["count"], 2)
+        self.assertEqual(shape["gpu_count"], 2)
+        self.assertEqual(action["ladder"][0]["n_replicas"], 6)
+        Plan(user_id="tenant", actions=[action])
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                rank_name=action["ladder"][0]["rank_id"],
+                model_name=shape["model_id"],
+                shape=shape,
+                chains=(object(),) * 6,
+            ),
+            _SERVINGSIM_HARDWARE,
+        )
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 6)
 
     def test_seed_policy_reserves_tensor_parallel_footprint(self) -> None:
         """Defer when the smallest allowed TP shape cannot fit the pool."""

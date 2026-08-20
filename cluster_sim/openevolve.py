@@ -286,9 +286,7 @@ class OnlineOpenEvolveClient:
         usage = tuple(
             LlmUsage(
                 tick_number=tick_number,
-                input_tokens=_nonnegative_int(
-                    row.get("input_tokens"), "input_tokens"
-                ),
+                input_tokens=_nonnegative_int(row.get("input_tokens"), "input_tokens"),
                 output_tokens=_nonnegative_int(
                     row.get("output_tokens"), "output_tokens"
                 ),
@@ -665,7 +663,8 @@ def _placement_ladder(
             f"tp={tp} is not allowed for {model_id} on {gpu_type}; "
             f"expected one of {policy_rule.allowed_tp}"
         )
-    gpu_count = tp * pp * dp
+    gpu_count = tp * pp
+    replicas *= dp
     pool = _select_pool(environment, placement.instance_type)
     required_vram_gib = _job_required_vram_gib(job)
     gpu_memory_gib = _gpu_memory_gib(environment, gpu_type, pool)
