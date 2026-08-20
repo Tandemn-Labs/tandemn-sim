@@ -998,9 +998,10 @@ def _job_required_vram_gib(job: OnlineJob | BatchJob) -> float | None:
             if value is not None and value > 0:
                 return value
     for requirements in VRAM_REQUIREMENTS_GIB.values():
-        value = requirements.get(job.store_job_id)
-        if value is not None:
-            return float(value)
+        for job_id in (job.store_job_id, job.name):
+            value = requirements.get(job_id)
+            if value is not None:
+                return float(value)
     return None
 
 

@@ -24,6 +24,7 @@ from openevolve import (
     StoreSnapshot,
     _build_user_prompt,
     _evaluator_source,
+    _job_required_vram_gib,
     _place_action,
     _resource_prompt_payload,
     _validate_policy_response,
@@ -245,6 +246,19 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         )
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
         self.assertEqual(cluster["nodes"][0]["num_instances"], 6)
+
+    def test_vram_requirement_uses_benchmark_name_after_store_id_refresh(self) -> None:
+        """Keep OpenEvolve's VRAM lookup stable across repeated CLI runs."""
+        job = OnlineJob(
+            name="job-benchmark_timing_3hr-0-5",
+            store_job_id="job-fresh-store-id",
+            model_name="intfloat/multilingual-e5-large",
+            starts_at_ns=0,
+            stops_at_ns=1,
+            workload={},
+        )
+
+        self.assertEqual(_job_required_vram_gib(job), 2.458)
 
     def test_seed_policy_reserves_tensor_parallel_footprint(self) -> None:
         """Defer when the smallest allowed TP shape cannot fit the pool."""
