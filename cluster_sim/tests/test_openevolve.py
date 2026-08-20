@@ -28,6 +28,8 @@ from openevolve import (
     load_policy_source,
 )
 from policy import load_config_policy
+from tandemn_system_data.ids import is_valid_id
+from tandemn_system_data.models import Plan
 
 
 class OpenEvolvePlannerTest(unittest.TestCase):
@@ -183,13 +185,14 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             ],
         )
         placed = actions[1]
-        self.assertEqual(placed["tenant_id"], "tenant")
         self.assertEqual(placed["target_p99_ttft_ms"], 700.0)
+        self.assertTrue(is_valid_id(placed["ladder"][0]["rank_id"], "rank"))
         rank_config = placed["ladder"][0]["config"]
         self.assertEqual(rank_config["precision"], "bf16")
         self.assertEqual(rank_config["tp"], 1)
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
+        Plan(user_id="tenant", actions=[placed])
 
     def test_seed_policy_reserves_tensor_parallel_footprint(self) -> None:
         """Defer when the smallest allowed TP shape cannot fit the pool."""

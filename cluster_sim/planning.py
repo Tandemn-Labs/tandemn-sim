@@ -214,6 +214,30 @@ def _build_vram(context: PlannerContext) -> PlannerDriver:
     )
 
 
+def _build_prism(context: PlannerContext) -> PlannerDriver:
+    """Build the existing Prism placement baseline with its standard backend."""
+    from prism import PrismPlannerDriver
+
+    return PrismPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm"},
+        context.postgres,
+    )
+
+
+def _build_cp_sat(context: PlannerContext) -> PlannerDriver:
+    """Build the existing CP-SAT placement baseline with its fixed solve budget."""
+    from cp_sat import CpSatPlannerDriver
+
+    return CpSatPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm", "max_time_seconds": 30.0},
+        context.postgres,
+    )
+
+
 def _build_gpt(context: PlannerContext) -> PlannerDriver:
     """Build the existing GPT-only baseline from the configured model name."""
     from gpt import GptPlannerDriver
@@ -251,6 +275,8 @@ PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "dynamo_aic": _build_aic,
     "bestfit": _build_bestfit,
     "vram": _build_vram,
+    "prism": _build_prism,
+    "cp_sat": _build_cp_sat,
     "gpt_only": _build_gpt,
     "openevolve": _build_openevolve,
 }

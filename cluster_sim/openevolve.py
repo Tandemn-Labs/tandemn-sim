@@ -18,6 +18,7 @@ from typing import Any, Protocol, cast
 from llm_usage import LlmUsage
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from rank_ids import rank_id
 from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
 
 OPENEOLVE_SYSTEM_PROMPT = """You improve a deterministic placement policy for one
@@ -609,15 +610,11 @@ def _place_action(
     return {
         "job_id": job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": (
             target_tps if target_tps is not None else _target_tps(scenario_job)
         ),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             _placement_ladder(
                 scenario_job,
@@ -724,7 +721,7 @@ def _placement_ladder(
     }
     return {
         "role": known.get("role") or "aggregate",
-        "rank_id": known.get("rank_id") or "rank_0",
+        "rank_id": rank_id(known),
         "env": placement.environment.split("|"),
         "config": rank_config,
         "n_replicas": replicas,

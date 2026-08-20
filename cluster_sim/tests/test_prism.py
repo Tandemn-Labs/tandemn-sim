@@ -20,6 +20,8 @@ from prism import (
     build_prism_plan,
     verify_place_plan,
 )
+from tandemn_system_data.ids import is_valid_id
+from tandemn_system_data.models import Plan
 from vram import ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
@@ -112,7 +114,9 @@ class PrismPlannerDriverTest(unittest.TestCase):
         self.assertEqual(config["count"], 1)
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
+        self.assertTrue(is_valid_id(plan["ladder"][0]["rank_id"], "rank"))
         verify_place_plan(plan, candidate, catalogs, policy)
+        Plan(user_id="tenant", actions=[plan])
 
 
 def _store_job(job_id: str) -> dict[str, object]:

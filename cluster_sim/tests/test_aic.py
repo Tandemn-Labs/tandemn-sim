@@ -20,6 +20,8 @@ from aic import (
     StoreSnapshot,
 )
 from models import OnlineJob, Scenario
+from tandemn_system_data.ids import is_valid_id
+from tandemn_system_data.models import Plan
 
 
 class AicPlannerDriverTest(unittest.TestCase):
@@ -162,9 +164,11 @@ class AicPlannerDriverTest(unittest.TestCase):
                 request.optimization_goal == "throughput" for request in client.requests
             )
         )
-        self.assertIsNone(placed["mechanism_id"])
+        self.assertIsNone(placed["ladder"][0]["mechanism_id"])
+        self.assertTrue(is_valid_id(placed["ladder"][0]["rank_id"], "rank"))
         self.assertIsNone(placed["ladder"][0]["config"]["count"])
         self.assertIsNone(placed["ladder"][0]["config"]["ep"])
+        Plan(user_id="tenant", actions=[placed])
 
 
 class FakeAicClient:
