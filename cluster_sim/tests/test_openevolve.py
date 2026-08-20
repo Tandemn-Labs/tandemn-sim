@@ -25,6 +25,7 @@ from openevolve import (
     _build_user_prompt,
     _evaluator_source,
     _place_action,
+    _resource_prompt_payload,
     _validate_policy_response,
     load_policy_source,
 )
@@ -288,6 +289,29 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             prompt["tandemn_state"]["resources"]["env|H100-SXM-80GB"]["gpu_memory_gib"],
             80,
         )
+
+    def test_resource_prompt_normalizes_azure_a100_memory(self) -> None:
+        """Resolve Store's Azure A100_80GB label without pool memory fields."""
+        payload = _resource_prompt_payload(
+            {
+                "reserved|azure|westus2|1|A100_80GB": {
+                    "gpu_type": "A100_80GB",
+                    "total": 8,
+                    "free": 8,
+                    "pools": [
+                        {
+                            "instance_type": "Standard_ND96amsr_A100_v4",
+                            "total": 8,
+                            "free": 8,
+                        }
+                    ],
+                }
+            }
+        )
+
+        resource = payload["reserved|azure|westus2|1|A100_80GB"]
+        self.assertEqual(resource["gpu_memory_gib"], 80)
+        self.assertEqual(resource["pools"][0]["gpu_memory_gib"], 80)
 
     def test_evaluator_and_final_validator_reject_insufficient_vram(self) -> None:
         """Reject a policy whose TP/PP copy cannot hold the workload."""
