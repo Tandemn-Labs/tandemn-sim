@@ -21,11 +21,18 @@ from cp_sat import (
     verify_place_plan,
 )
 from policy import load_config_policy
+from serving import build_rank_cluster
 from tandemn_system_data.ids import is_valid_id
 from tandemn_system_data.models import Plan
 from vram import ResourceTarget, StoreSnapshot
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+_SERVINGSIM_HARDWARE = {
+    "profile": "H100",
+    "memory_gb": 80,
+    "memory_bandwidth_gb_s": 3350,
+    "link_bandwidth_gb_s": 900,
+}
 
 
 class CpSatPlannerDriverTest(unittest.TestCase):
@@ -92,8 +99,8 @@ class CpSatPlannerDriverTest(unittest.TestCase):
             ),
             tp=1,
             pp=1,
-            dp=1,
-            footprint=1,
+            dp=3,
+            footprint=3,
             memory_gib=48.0,
             required_vram_gib=1.0,
             model_weight_gib=1.0,
@@ -113,11 +120,23 @@ class CpSatPlannerDriverTest(unittest.TestCase):
         config = plan["ladder"][0]["config"]
         self.assertEqual(config["max_num_seq"], 256)
         self.assertEqual(config["count"], 1)
+        self.assertEqual(plan["ladder"][0]["n_replicas"], 3)
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
         self.assertTrue(is_valid_id(plan["ladder"][0]["rank_id"], "rank"))
         verify_place_plan(plan, candidate, catalogs, policy)
         Plan(user_id="tenant", actions=[plan])
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                rank_name=plan["ladder"][0]["rank_id"],
+                model_name=config["model_id"],
+                shape=config,
+                chains=(object(),) * 3,
+            ),
+            _SERVINGSIM_HARDWARE,
+        )
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 1)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
     def test_solver_respects_capacity_and_prefers_higher_priority(self) -> None:
         """Use the installed OR-Tools solver for the global admission choice."""

@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
@@ -20,8 +21,16 @@ from aic import (
     StoreSnapshot,
 )
 from models import OnlineJob, Scenario
+from serving import build_rank_cluster
 from tandemn_system_data.ids import is_valid_id
 from tandemn_system_data.models import Plan
+
+_SERVINGSIM_HARDWARE = {
+    "profile": "H100",
+    "memory_gb": 80,
+    "memory_bandwidth_gb_s": 3350,
+    "link_bandwidth_gb_s": 900,
+}
 
 
 class AicPlannerDriverTest(unittest.TestCase):
@@ -166,9 +175,34 @@ class AicPlannerDriverTest(unittest.TestCase):
         )
         self.assertIsNone(placed["ladder"][0]["mechanism_id"])
         self.assertTrue(is_valid_id(placed["ladder"][0]["rank_id"], "rank"))
-        self.assertIsNone(placed["ladder"][0]["config"]["count"])
-        self.assertIsNone(placed["ladder"][0]["config"]["ep"])
+        self.assertEqual(placed["ladder"][0]["config"]["count"], 1)
+        self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
         Plan(user_id="tenant", actions=[placed])
+
+    def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
+        """Keep DP in replica count rather than one ServingSim rank shape."""
+        client = FakeAicClient(tp=2, dp=3)
+        actions = _driver((_job("job_1"),), client)._build_actions(
+            _snapshot(waiting=({"job_id": "job_1"},), h100_free=6)
+        )
+
+        placed = actions[0]
+        shape = placed["ladder"][0]["config"]
+        self.assertEqual(shape["count"], 2)
+        self.assertEqual(shape["gpu_count"], 2)
+        self.assertEqual(placed["ladder"][0]["n_replicas"], 3)
+        Plan(user_id="tenant", actions=[placed])
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                rank_name=placed["ladder"][0]["rank_id"],
+                model_name=shape["model_id"],
+                shape=shape,
+                chains=(object(),) * 3,
+            ),
+            _SERVINGSIM_HARDWARE,
+        )
+        self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
 
 class FakeAicClient:
@@ -178,10 +212,14 @@ class FakeAicClient:
         self,
         *,
         tp: int = 1,
+        dp: int = 1,
+        replicas: int = 1,
         unsupported_model: str | None = None,
         throughput: dict[str, float] | None = None,
     ) -> None:
         self.tp = tp
+        self.dp = dp
+        self.replicas = replicas
         self.unsupported_model = unsupported_model
         self.throughput = throughput or {"h100_sxm": 300}
         self.requests: list[AicRequest] = []
@@ -193,13 +231,13 @@ class FakeAicClient:
                 "The model's architecture TestModel is not supported"
             )
         return AicResult(
-            devices=self.tp,
-            replicas=1,
+            devices=self.tp * self.dp * self.replicas,
+            replicas=self.replicas,
             ttft_ms=10,
             tpot_ms=5,
             request_latency_ms=100,
             throughput_tokens_per_second=self.throughput[request.system],
-            configuration={"parallel": f"tp{self.tp}pp1dp1"},
+            configuration={"parallel": f"tp{self.tp}pp1dp{self.dp}"},
         )
 
 

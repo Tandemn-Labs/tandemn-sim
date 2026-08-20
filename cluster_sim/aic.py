@@ -536,20 +536,20 @@ def _place_action(
 ) -> dict[str, object]:
     """Combine deterministic job fields with one AIC placement."""
     known = _known_job_fields(store_job)
-    gpu_count = placement.tp * placement.pp * placement.dp
+    per_replica_gpu_count = placement.tp * placement.pp
     rank_config: dict[str, object] = {
         "model_id": known.get("model_id"),
         "engine_name": known.get("engine_name") or backend,
         "instance_type": placement.target.instance_type,
         "gpu_type": placement.target.gpu_type,
-        "gpu_count": gpu_count,
-        "count": known.get("count"),
+        "gpu_count": per_replica_gpu_count,
+        "count": per_replica_gpu_count,
         "tp": placement.tp,
         "pp": placement.pp,
         "dp": placement.dp,
-        "ep": known.get("ep"),
-        "max_num_seq": known.get("max_num_seq"),
-        "max_num_batched_tokens": known.get("max_num_batched_tokens"),
+        "ep": known.get("ep") or 1,
+        "max_num_seq": known.get("max_num_seq") or 128,
+        "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
         "gpu_mem_util": known.get("gpu_mem_util"),
         "prefix_cache_enabled": known.get("prefix_cache_enabled"),
         "rank_traffic_share": 1.0,
@@ -566,7 +566,7 @@ def _place_action(
                 "rank_id": rank_id(known),
                 "env": placement.target.environment_key.split("|"),
                 "config": rank_config,
-                "n_replicas": placement.replicas,
+                "n_replicas": placement.replicas * placement.dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],

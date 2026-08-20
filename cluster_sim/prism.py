@@ -523,8 +523,8 @@ def verify_place_plan(
         raise ValueError("placement ladder rank has incomplete fields")
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
-    if rank.get("n_replicas") != 1:
-        raise ValueError("placement plan must use one replica group")
+    if rank.get("n_replicas") != candidate.dp:
+        raise ValueError("placement plan has the wrong replica count")
     config = rank.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("placement ladder config must be an object")
@@ -546,8 +546,8 @@ def verify_place_plan(
     expected = {
         "gpu_type": candidate.target.gpu_type,
         "instance_type": candidate.target.instance_type,
-        "gpu_count": candidate.gpu_count,
-        "count": candidate.gpu_count,
+        "gpu_count": candidate.tp * candidate.pp,
+        "count": candidate.tp * candidate.pp,
         "tp": candidate.tp,
         "pp": candidate.pp,
         "dp": candidate.dp,
@@ -597,6 +597,7 @@ def build_prism_plan(
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
     if rule is None or candidate.tp not in rule.allowed_tp:
         raise ValueError("Prism selected a policy-invalid placement")
+    per_replica_gpu_count = candidate.tp * candidate.pp
     return {
         "job_id": candidate.job_id,
         "type": "place",
@@ -614,15 +615,15 @@ def build_prism_plan(
                     "precision": rule.precision,
                     "instance_type": candidate.target.instance_type,
                     "gpu_type": candidate.target.gpu_type,
-                    "gpu_count": candidate.gpu_count,
-                    "count": candidate.gpu_count,
+                    "gpu_count": per_replica_gpu_count,
+                    "count": per_replica_gpu_count,
                     "tp": candidate.tp,
                     "pp": candidate.pp,
                     "dp": candidate.dp,
                     "ep": known.get("ep") or 1,
                     "rank_traffic_share": 1.0,
                 },
-                "n_replicas": 1,
+                "n_replicas": candidate.dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],
