@@ -665,14 +665,20 @@ class ClusterSimulator:
                     if getattr(result, "status", "completed") == "oom"
                 )
                 self._fail_oom(prepared.running, job.name, job_results)
+            rank_failure_reasons = {
+                "process_crash": ReasonCode.PROCESS_CRASH,
+                "simulation_timeout": ReasonCode.PROCESS_CRASH,
+                "software_stack_failure": ReasonCode.SOFTWARE_STACK_RANK_FAILURE,
+                "model_catalog_invalid": ReasonCode.MODEL_CATALOG_INVALID,
+            }
             crash_failures = tuple(
                 _RankFailure(
                     result.deployment.rank_name,
-                    ReasonCode.PROCESS_CRASH,
-                    result.stderr or result.stdout or "LLMServingSim ASTRA crash",
+                    rank_failure_reasons[getattr(result, "status", "completed")],
+                    result.stderr or result.stdout or "LLMServingSim rank failure",
                 )
                 for _, result in result_pairs
-                if getattr(result, "status", "completed") == "process_crash"
+                if getattr(result, "status", "completed") in rank_failure_reasons
             )
             if crash_failures:
                 failed_rank_ids.update(
@@ -683,7 +689,7 @@ class ClusterSimulator:
                 (rank_run, result)
                 for rank_run, result in result_pairs
                 if getattr(result, "status", "completed")
-                not in {"oom", "process_crash"}
+                not in {"oom", *rank_failure_reasons}
             )
             active_rank_runs = tuple(rank_run for rank_run, _ in active_pairs)
             active_results = tuple(result for _, result in active_pairs)

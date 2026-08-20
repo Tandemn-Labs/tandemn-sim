@@ -1242,14 +1242,34 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual(cluster_event["allocated_gpu_seconds"], 0)
         self.assertEqual(cluster_event["busy_gpu_seconds"], 0)
 
-    def test_oom_rank_requeues_failed_requests_and_preserves_siblings(self) -> None:
-        """Retry failed-rank traffic while preserving healthy-rank work."""
+    def test_rank_failures_requeue_requests_and_preserve_siblings(self) -> None:
+        """Keep OOM, timeout, and catalog failures local to their ranks."""
         job = OnlineJob("online", "job-a", "model", 0, 300_000_000_000, {"features": {}})
         running = SimpleNamespace(
             job=SimpleNamespace(job_id="job-a", spec_json={"model_id": "model"}),
             ranks=(
                 SimpleNamespace(
                     rank_id="rank-oom",
+                    n_replicas=1,
+                    shape_json={
+                        "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
+                        "instance_type": "g6e.48xlarge",
+                        "count": 3,
+                        "gpu_count": 3,
+                    },
+                ),
+                SimpleNamespace(
+                    rank_id="rank-timeout",
+                    n_replicas=1,
+                    shape_json={
+                        "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
+                        "instance_type": "g6e.48xlarge",
+                        "count": 3,
+                        "gpu_count": 3,
+                    },
+                ),
+                SimpleNamespace(
+                    rank_id="rank-catalog",
                     n_replicas=1,
                     shape_json={
                         "env": ["reserved", "aws", "us-east-1", "us-east-1a", "L40S"],
@@ -1295,6 +1315,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator._requests = {
             "job-a": (
                 Request("request-oom", "oom-session", 0, 0, 1, 1, None),
+                Request("request-timeout", "timeout-session", 0, 0, 1, 1, None),
+                Request("request-catalog", "catalog-session", 0, 0, 1, 1, None),
                 Request("request-healthy", "healthy-session", 0, 0, 1, 1, None),
             ),
         }
@@ -1347,6 +1369,14 @@ class RunnerDataPlaneTest(unittest.TestCase):
             deployment=SimpleNamespace(rank_name="rank-healthy"),
             request_count=1,
         )
+        timeout_rank_run = SimpleNamespace(
+            deployment=SimpleNamespace(rank_name="rank-timeout"),
+            request_count=1,
+        )
+        catalog_rank_run = SimpleNamespace(
+            deployment=SimpleNamespace(rank_name="rank-catalog"),
+            request_count=1,
+        )
         oom_result = SimpleNamespace(
             status="oom",
             deployment=oom_rank_run.deployment,
@@ -1361,9 +1391,25 @@ class RunnerDataPlaneTest(unittest.TestCase):
             request_rows=(
                 {"TTFT": 1, "TPOT": 1, "output": 1, "end_time": 1},
             ),
-            completed_requests=(simulator._requests["job-a"][1],),
+            completed_requests=(simulator._requests["job-a"][3],),
             stdout="",
             stderr="",
+        )
+        timeout_result = SimpleNamespace(
+            status="simulation_timeout",
+            deployment=timeout_rank_run.deployment,
+            request_rows=(),
+            completed_requests=(),
+            stdout="",
+            stderr="rank exceeded wall time",
+        )
+        catalog_result = SimpleNamespace(
+            status="model_catalog_invalid",
+            deployment=catalog_rank_run.deployment,
+            request_rows=(),
+            completed_requests=(),
+            stdout="",
+            stderr="max_num_batched_tokens must be positive",
         )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1375,9 +1421,15 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch.object(
                     simulator,
                     "_prepare_job_runs",
-                    return_value=((oom_rank_run, healthy_rank_run), ()),
+                    return_value=(
+                        (oom_rank_run, timeout_rank_run, catalog_rank_run, healthy_rank_run),
+                        (),
+                    ),
                 ),
-                patch("runner.run_ranks", return_value=(oom_result, healthy_result)),
+                patch(
+                    "runner.run_ranks",
+                    return_value=(oom_result, timeout_result, catalog_result, healthy_result),
+                ),
                 patch("runner.collect_rank_telemetry", return_value=([], {})),
                 patch("runner.commit_tick_metrics"),
                 patch(
@@ -1392,12 +1444,19 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(rank_calls[0][0][0], "rank-oom")
+        self.assertEqual(
+            [call[0][0] for call in rank_calls],
+            ["rank-oom", "rank-timeout", "rank-catalog"],
+        )
+        self.assertEqual(
+            [call[1]["reason_code"] for call in rank_calls],
+            ["OOM", "PROCESS_CRASH", "MODEL_CATALOG_INVALID"],
+        )
         self.assertEqual([call[0].job_id for call in metric_calls], ["job-a"])
         self.assertEqual(metric_calls[0][1], (healthy_rank_run.deployment,))
         self.assertEqual(
             [request.request_name for request in simulator._online_backlog["job-a"]],
-            ["request-oom"],
+            ["request-oom", "request-timeout", "request-catalog"],
         )
         pool_event = next(event for event in events if event["kind"] == "pool_window")
         cluster_event = next(event for event in events if event["kind"] == "cluster_window")
