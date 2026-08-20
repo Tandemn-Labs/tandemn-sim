@@ -266,6 +266,7 @@ _HARDWARE_ALIASES = {
     "h100-sxm": "h100-sxm-80gb",
     "h100-sxm-80gb": "h100-sxm-80gb",
     "a100": "a100-sxm-80gb",
+    "a100-80gb": "a100-sxm-80gb",
     "a100-sxm": "a100-sxm-80gb",
     "a100-sxm-80gb": "a100-sxm-80gb",
     "a100-pcie": "a100-pcie-40gb",
