@@ -852,6 +852,34 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(run.call_count, SIMULATION_RETRIES + 1)
         self.assertEqual(result.status, "simulation_timeout")
 
+    def test_rank_preserves_wall_time_limit_without_retry(self) -> None:
+        """Keep normal partial simulator results instead of replaying the tick."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        partial = RankResult(
+            deployment,
+            (),
+            (),
+            "",
+            "",
+            "wall_time_limit",
+            (),
+            300_000_000_000,
+        )
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=completed) as run,
+            patch("serving.parse_rank_result", return_value=partial),
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertIs(result, partial)
+        self.assertEqual(run.call_count, 1)
+
     def test_rank_retries_memory_bookkeeping_crash_before_succeeding(self) -> None:
         """Retry LLMServingSim's known MemoryModel free-accounting failure."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
