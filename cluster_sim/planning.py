@@ -214,6 +214,18 @@ def _build_vram(context: PlannerContext) -> PlannerDriver:
     )
 
 
+def _build_edf(context: PlannerContext) -> PlannerDriver:
+    """Build the earliest-deadline-first VRAM placement baseline."""
+    from edf import EdfPlannerDriver
+
+    return EdfPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {"backend": "vllm"},
+        context.postgres,
+    )
+
+
 def _build_prism(context: PlannerContext) -> PlannerDriver:
     """Build the existing Prism placement baseline with its standard backend."""
     from prism import PrismPlannerDriver
@@ -275,6 +287,7 @@ PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "dynamo_aic": _build_aic,
     "bestfit": _build_bestfit,
     "vram": _build_vram,
+    "edf": _build_edf,
     "prism": _build_prism,
     "cp_sat": _build_cp_sat,
     "gpt_only": _build_gpt,

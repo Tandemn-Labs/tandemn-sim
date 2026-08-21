@@ -12,6 +12,11 @@ methods:
     status: implemented
     settings:
       default_optimization_goal: throughput
+  edf:
+    display_name: Earliest deadline first + VRAM placement
+    status: implemented
+    settings:
+      default_optimization_goal: throughput
   prism:
     display_name: Prism placement
     status: implemented
