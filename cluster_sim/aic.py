@@ -128,6 +128,7 @@ class AicPlacement:
     tp: int
     pp: int
     dp: int
+    max_num_seq: int
     devices: int
     ttft_ms: float
     tpot_ms: float
@@ -499,6 +500,7 @@ def _normalize_result(
         tp=tp,
         pp=pp,
         dp=dp,
+        max_num_seq=_aic_positive_int(result.configuration.get("bs"), "bs"),
         devices=devices,
         ttft_ms=result.ttft_ms,
         tpot_ms=result.tpot_ms,
@@ -548,7 +550,7 @@ def _place_action(
         "pp": placement.pp,
         "dp": placement.dp,
         "ep": known.get("ep") or 1,
-        "max_num_seq": known.get("max_num_seq") or 128,
+        "max_num_seq": placement.max_num_seq,
         "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
         "gpu_mem_util": known.get("gpu_mem_util"),
         "prefix_cache_enabled": known.get("prefix_cache_enabled"),

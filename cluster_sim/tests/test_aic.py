@@ -93,6 +93,16 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertIsNone(client.requests[0].target_request_rate)
         self.assertEqual(client.requests[0].target_concurrency, 42)
 
+    def test_max_num_seq_uses_aic_batch_size(self) -> None:
+        """Use the AIC-selected batch size instead of a Store value."""
+        client = FakeAicClient(batch_size=32)
+        snapshot = _snapshot(waiting=({"job_id": "job_1"},), h100_free=2)
+        snapshot.waiting_jobs[0]["spec_json"]["max_num_seq"] = 999
+
+        actions = _driver((_job("job_1"),), client)._build_actions(snapshot)
+
+        self.assertEqual(actions[0]["ladder"][0]["config"]["max_num_seq"], 32)
+
     def test_unavailable_aic_parallelism_defers(self) -> None:
         """Reject an exact TP/PP/DP footprint that Store cannot provide."""
         job = _job("job_1")
@@ -213,12 +223,14 @@ class FakeAicClient:
         *,
         tp: int = 1,
         dp: int = 1,
+        batch_size: int = 128,
         replicas: int = 1,
         unsupported_model: str | None = None,
         throughput: dict[str, float] | None = None,
     ) -> None:
         self.tp = tp
         self.dp = dp
+        self.batch_size = batch_size
         self.replicas = replicas
         self.unsupported_model = unsupported_model
         self.throughput = throughput or {"h100_sxm": 300}
@@ -237,7 +249,10 @@ class FakeAicClient:
             tpot_ms=5,
             request_latency_ms=100,
             throughput_tokens_per_second=self.throughput[request.system],
-            configuration={"parallel": f"tp{self.tp}pp1dp{self.dp}"},
+            configuration={
+                "parallel": f"tp{self.tp}pp1dp{self.dp}",
+                "bs": self.batch_size,
+            },
         )
 
 
