@@ -549,6 +549,15 @@ def parse_rank_result(
                 completed.stderr,
                 "model_catalog_invalid",
             )
+        if _is_profile_error(lowered):
+            return RankResult(
+                rank_run.deployment,
+                (),
+                (),
+                completed.stdout,
+                completed.stderr,
+                "software_stack_failure",
+            )
         raise RuntimeError(f"{rank_run.deployment.rank_name} failed: {output[-1000:]}")
     summary = _run_summary(output)
     if not rank_run.output_path.is_file():
@@ -622,6 +631,20 @@ def _is_model_catalog_error(output: str) -> bool:
     diagnostics = ("valueerror", "invalid", "must be", "missing")
     return any(field in output for field in fields) and any(
         diagnostic in output for diagnostic in diagnostics
+    )
+
+
+def _is_profile_error(output: str) -> bool:
+    return any(
+        marker in output
+        for marker in (
+            "missing dense profile",
+            "missing attention profile",
+            "missing per-sequence profile",
+            "missing linear-attention profile",
+            "missing moe profile",
+            "no profile data for tp=",
+        )
     )
 
 

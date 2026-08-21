@@ -27,8 +27,8 @@ A100-80GB:
 - microsoft/phi-4 → fp16 TP: 1, 2
 - mistralai/Mixtral-8x7B-Instruct-v0.1 → fp16 TP: 1, 2, 4, 8
 - Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8
-- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8
-- zai-org/GLM-4.5-Air → bf16 TP: 1, 4, 8
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 4, 8
+- zai-org/GLM-4.5-Air → bf16 TP: 4, 8
 A10G:
 - BAAI/bge-reranker-v2-m3 → fp16 TP: 1
 - intfloat/multilingual-e5-large → fp16 TP: 1
