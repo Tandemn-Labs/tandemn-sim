@@ -42,6 +42,7 @@ BASELINES = (
     "dynamo_aic",
     "bestfit",
     "vram",
+    "edf",
     "prism",
     "cp_sat",
     "gpt_only",
