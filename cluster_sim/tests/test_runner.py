@@ -497,13 +497,13 @@ class RunnerDataPlaneTest(unittest.TestCase):
             usage_events,
             [
                 {
-                    "tick_number": 0,
+                    "tick": 0,
                     "input_tokens": 100,
                     "output_tokens": 20,
                     "model": "model-used",
                 },
                 {
-                    "tick_number": 1,
+                    "tick": 1,
                     "input_tokens": 100,
                     "output_tokens": 20,
                     "model": "model-used",

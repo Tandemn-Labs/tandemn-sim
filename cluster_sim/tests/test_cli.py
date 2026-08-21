@@ -67,12 +67,12 @@ class CliTest(unittest.TestCase):
         self.assertTrue(all(left.store_job_id != right.store_job_id for left, right in zip(original, updated)))
         self.assertEqual(len({job.store_job_id for job in updated}), len(updated))
 
-    def test_trace_options_must_be_supplied_together(self) -> None:
-        """Reject an output directory without an explicit trace identity."""
-        args = parse_args(["--user-id", "user", "--trace-root", "x"])
-        with patch("cli.parse_args", return_value=args):
-            with self.assertRaisesRegex(ValueError, "must be used together"):
-                main()
+    def test_run_id_defaults_trace_output_to_outputs(self) -> None:
+        """Use the baseline run ID for the default trace artifact."""
+        args = parse_args(["--user-id", "user", "--run-id", "run-1"])
+
+        self.assertEqual(args.trace_root, ROOT / "outputs")
+        self.assertEqual(args.trace_run_id, "run-1")
 
     def test_main_passes_trace_configuration_to_simulator(self) -> None:
         """Pass the explicit trace output identity to one simulation run."""

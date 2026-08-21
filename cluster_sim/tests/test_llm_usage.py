@@ -55,7 +55,7 @@ class LlmUsageTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
                 {
-                    "tick_number": 3,
+                    "tick": 3,
                     "input_tokens": 120,
                     "output_tokens": 30,
                     "model": "model-used",

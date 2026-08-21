@@ -279,8 +279,7 @@ class ClusterSimulator:
         decision_time_ms = (perf_counter() - decision_started) * 1_000
         planner_finished_at = datetime.now(UTC)
         if trace_file is not None:
-            for usage in result.llm_usage:
-                append_usage(usage_path(trace_file), usage)
+            usage = list(result.llm_usage)
             debug_logger = getattr(self.planner, "debug_logger", None)
             events_path = getattr(debug_logger, "events_path", None)
             if events_path is not None:
@@ -302,14 +301,13 @@ class ClusterSimulator:
                         and koi_model
                         and not result.llm_usage
                     ):
-                        append_usage(
-                            usage_path(trace_file),
+                        usage.append(
                             LlmUsage(
                                 tick_number=event["tick"],
                                 input_tokens=event["prompt_tokens"],
                                 output_tokens=event["completion_tokens"],
                                 model=koi_model,
-                            ),
+                            )
                         )
                 self._koi_event_count = len(compiled_koi_events)
             from tandemn_system_data.clients import PlanStore
@@ -330,6 +328,9 @@ class ClusterSimulator:
                         ],
                     }
                 )
+            if plans:
+                for item in usage:
+                    append_usage(usage_path(trace_file), item)
             planned_job_ids = tuple(
                 action["job_id"] for plan in plans for action in plan["actions"]
             )

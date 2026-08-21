@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from trace import append_event
 from typing import Any, cast
@@ -25,7 +25,15 @@ def usage_path(trace_file: Path) -> Path:
 
 def append_usage(path: Path, usage: LlmUsage) -> None:
     """Append one normalized LLM usage record."""
-    append_event(path, asdict(usage))
+    append_event(
+        path,
+        {
+            "tick": usage.tick_number,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "model": usage.model,
+        },
+    )
 
 
 def from_openai_response(

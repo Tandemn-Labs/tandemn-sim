@@ -34,8 +34,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--parallel-simulators", type=int, default=5)
     parser.add_argument("--rank-timeout-seconds", type=float, default=330)
     parser.add_argument("--ticks", type=int)
-    parser.add_argument("--trace-root", type=Path)
-    parser.add_argument("--trace-run-id")
+    parser.add_argument("--trace-root", type=Path, default=ROOT / "outputs")
+    parser.add_argument("--trace-run-id", "--run-id", dest="trace_run_id", required=True)
     parser.add_argument("--koi-root", type=Path)
     parser.add_argument(
         "--koi-arg",
@@ -56,9 +56,6 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--parallel-simulators must be positive")
     if args.ticks is not None and args.ticks < 1:
         raise ValueError("--ticks must be positive")
-    if (args.trace_root is None) != (args.trace_run_id is None):
-        raise ValueError("--trace-root and --trace-run-id must be used together")
-
     from tandemn_system_data.clients import PostgresClient
 
     scenario = _fresh_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
