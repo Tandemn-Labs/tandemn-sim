@@ -102,6 +102,7 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         self.assertEqual(selected, {"waiting": candidate})
         self.assertEqual(usage, (LlmUsage(5, 60, 15, "model-used"),))
         self.assertEqual(discovery.call_args.kwargs["tick_number"], 5)
+        self.assertEqual(discovery.call_args.kwargs["iterations"], 2)
         self.assertEqual(
             payload["model_catalog"],
             [
@@ -117,6 +118,8 @@ class EvoxPlannerDriverTest(unittest.TestCase):
 
         plan = build_evox_plan(_store_job(), candidate, "fallback", policy)
         rank_config = plan["ladder"][0]["config"]
+        self.assertEqual(plan["tenant_id"], "tenant")
+        self.assertTrue(plan["ladder"][0]["rank_id"].startswith("rank_"))
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
 

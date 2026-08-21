@@ -16,6 +16,7 @@ dependencies = [
     "openevolve>=0.2.27",
     "ortools>=9.14",
     "pyyaml>=6.0,<7",
+    "skydiscover",
     "sqlalchemy>=2.0",
     "tandemn-store",
     "tandemn-orca",
@@ -36,6 +37,7 @@ dev = [
 ]
 
 [tool.uv.sources]
+skydiscover = { git = "https://github.com/skydiscover-ai/skydiscover.git", rev = "59643ef8e7aa9ae071e86028d9ba56849fad0d80" }
 tandemn-store = { path = "../tandemn-store", editable = true }
 tandemn-orca = { path = "../Tandemn-orca", editable = true }
 

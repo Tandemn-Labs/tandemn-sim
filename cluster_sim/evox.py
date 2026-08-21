@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import math
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -17,6 +17,7 @@ from typing import Any, Protocol, cast
 from llm_usage import LlmUsage, OpenAIUsageClient
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from rank_ids import rank_id
 from vram import (
     _HARDWARE_MEMORY_GIB,
     MODEL_ARCHITECTURES,
@@ -66,7 +67,6 @@ LAUNCH_FIELDS = (
     "block_size",
     "kvcache_dtype",
 )
-
 EVOX_SYSTEM_PROMPT = """You are evolving a deterministic GPU placement program
 online for the current simulator control tick.
 
@@ -409,7 +409,7 @@ class EvoxPlannerDriver:
         )
 
         model = _required_text(settings.get("model"), "model")
-        iterations = _positive_int(settings.get("iterations", 8), "iterations")
+        iterations = _positive_int(settings.get("iterations", 5), "iterations")
         output_dir = Path(
             _optional_text(settings.get("output_dir")) or "outputs/evox-online"
         )
@@ -530,6 +530,8 @@ class EvoxPlannerDriver:
             plan = self._build_place_plan(problem, candidate)
             verify_place_plan(plan, candidate, self.config_policy)
             reserve_vram_placement(candidate.target, candidate.gpu_count)
+            for field in ("tenant_id", "mechanism_id", "budget_ref", "rationale"):
+                plan.pop(field)
             actions.append(plan)
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
@@ -590,7 +592,7 @@ def build_evox_plan(
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": known.get("rank_id") or "rank_0",
+                "rank_id": rank_id(known),
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
                     **candidate.launch_config,
@@ -1029,12 +1031,10 @@ def run_evox_discovery(
     """Run SkyDiscover EvoX online for one frozen control-tick snapshot."""
     if iterations < 1:
         raise ValueError("iterations must be positive")
-    sibling_root = Path(__file__).resolve().parents[2] / "skydiscover"
-    if sibling_root.is_dir() and str(sibling_root) not in sys.path:
-        sys.path.insert(0, str(sibling_root))
     try:
         from skydiscover import run_discovery
         from skydiscover.config import Config
+        from skydiscover.llm.llm_pool import LLMPool
         from skydiscover.llm.openai import OpenAILLM
     except ImportError as error:
         raise RuntimeError(
@@ -1084,14 +1084,35 @@ def run_evox_discovery(
 
     for configured_model in config.llm.models:
         configured_model.init_client = TrackedOpenAILLM
-    result = run_discovery(
-        evaluator=evaluator,
-        initial_program=initial_program or EVOX_INITIAL_PROGRAM,
-        iterations=iterations,
-        config=config,
-        output_dir=str(output_dir),
-        cleanup=True,
-    )
+    original_availability_check = LLMPool.check_availability
+
+    async def check_availability(pool: Any, timeout: float = 15.0) -> bool:
+        try:
+            model = pool.models[0]
+            await asyncio.wait_for(
+                model.generate(
+                    "",
+                    [{"role": "user", "content": "ping"}],
+                    max_tokens=128,
+                ),
+                timeout=timeout,
+            )
+            return True
+        except Exception:
+            return False
+
+    LLMPool.check_availability = check_availability
+    try:
+        result = run_discovery(
+            evaluator=evaluator,
+            initial_program=initial_program or EVOX_INITIAL_PROGRAM,
+            iterations=iterations,
+            config=config,
+            output_dir=str(output_dir),
+            cleanup=True,
+        )
+    finally:
+        LLMPool.check_availability = original_availability_check
     return SimpleNamespace(
         best_solution=getattr(result, "best_solution", None),
         llm_usage=tuple(llm_usage),
