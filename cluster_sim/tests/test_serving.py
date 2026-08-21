@@ -737,6 +737,12 @@ class ServingInputTest(unittest.TestCase):
                 ],
                 "300",
             )
+            self.assertEqual(
+                rank_run.command[
+                    rank_run.command.index("timeout") : rank_run.command.index("python3")
+                ],
+                ("timeout", "--signal=TERM", "--kill-after=10s", "30s"),
+            )
 
     def test_rank_run_receives_per_start_deadline(self) -> None:
         """Give each started simulator its own wall-time budget."""
@@ -775,14 +781,17 @@ class ServingInputTest(unittest.TestCase):
             patch(
                 "serving.subprocess.run", side_effect=(crashed, crashed, completed)
             ) as run,
-            patch("serving.parse_rank_result", return_value=parsed) as parse,
+            patch(
+                "serving.parse_rank_result",
+                side_effect=(RuntimeError("ASTRA crash"), RuntimeError("ASTRA crash"), parsed),
+            ) as parse,
             patch("builtins.print") as printed,
         ):
             result = _run_rank(rank_run, 300)
 
         self.assertIs(result, parsed)
         self.assertEqual(run.call_count, 3)
-        parse.assert_called_once_with(rank_run, completed)
+        self.assertEqual(parse.call_count, 3)
         self.assertEqual(printed.call_count, 2)
 
     def test_rank_marks_astra_crash_after_retry_cap(self) -> None:
@@ -803,9 +812,9 @@ class ServingInputTest(unittest.TestCase):
             result = _run_rank(rank_run, 300)
 
         self.assertEqual(run.call_count, ASTRA_CRASH_RETRIES + 1)
-        self.assertEqual(printed.call_count, ASTRA_CRASH_RETRIES + 1)
+        self.assertEqual(printed.call_count, ASTRA_CRASH_RETRIES)
         self.assertEqual(result.status, "process_crash")
-        self.assertEqual(result.stderr, crashed.stderr)
+        self.assertIn(crashed.stderr, result.stderr)
 
     def test_rank_retries_timeout_with_fresh_deadline(self) -> None:
         """Give a timed-out subprocess fresh wall time before succeeding."""
@@ -836,7 +845,7 @@ class ServingInputTest(unittest.TestCase):
         )
 
     def test_rank_marks_timeout_after_retry_cap(self) -> None:
-        """Return a rank-local timeout instead of aborting the whole tick."""
+        """Return a rank-local process crash instead of aborting the whole tick."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
         rank_run = RankRun(
             deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
@@ -850,7 +859,7 @@ class ServingInputTest(unittest.TestCase):
             result = _run_rank(rank_run, 300)
 
         self.assertEqual(run.call_count, SIMULATION_RETRIES + 1)
-        self.assertEqual(result.status, "simulation_timeout")
+        self.assertEqual(result.status, "process_crash")
 
     def test_rank_preserves_wall_time_limit_without_retry(self) -> None:
         """Keep normal partial simulator results instead of replaying the tick."""
@@ -899,12 +908,49 @@ class ServingInputTest(unittest.TestCase):
         with (
             patch("serving.time", return_value=1_000),
             patch("serving.subprocess.run", side_effect=(crashed, completed)) as run,
-            patch("serving.parse_rank_result", return_value=parsed),
+            patch("serving.parse_rank_result", side_effect=(RuntimeError("MemoryModel crash"), parsed)),
         ):
             result = _run_rank(rank_run, 300)
 
         self.assertIs(result, parsed)
         self.assertEqual(run.call_count, 2)
+
+    def test_rank_retries_generic_parser_failure_before_succeeding(self) -> None:
+        """Retry any ordinary rank exception before failing only that rank."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        parsed = SimpleNamespace(status="completed")
+
+        with (
+            patch("serving.time", return_value=1_000),
+            patch("serving.subprocess.run", return_value=completed) as run,
+            patch("serving.parse_rank_result", side_effect=(RuntimeError("bad output"), parsed)),
+        ):
+            result = _run_rank(rank_run, 300)
+
+        self.assertIs(result, parsed)
+        self.assertEqual(run.call_count, 2)
+
+    def test_rank_does_not_retry_oom(self) -> None:
+        """Release deterministic memory failures immediately."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        completed = subprocess.CompletedProcess((), 0, "", "")
+        oom = RankResult(deployment, (), (), "", "", "oom")
+
+        with (
+            patch("serving.subprocess.run", return_value=completed) as run,
+            patch("serving.parse_rank_result", return_value=oom),
+        ):
+            result = _run_rank(rank_run)
+
+        self.assertIs(result, oom)
+        self.assertEqual(run.call_count, 1)
 
     def test_rank_marks_memory_bookkeeping_crash_after_retry_cap(self) -> None:
         """Keep an exhausted MemoryModel failure local to its rank."""
@@ -970,13 +1016,12 @@ class ServingInputTest(unittest.TestCase):
             )
             completed = subprocess.CompletedProcess((), 1, "", "unexpected failure")
 
-            with (
-                patch("serving.subprocess.run", return_value=completed),
-                self.assertRaisesRegex(RuntimeError, "unexpected failure"),
-            ):
-                _run_rank(rank_run)
+            with patch("serving.subprocess.run", return_value=completed):
+                result = _run_rank(rank_run)
 
             self.assertFalse(cleanup_dir.exists())
+
+        self.assertEqual(result.status, "process_crash")
 
     def test_parse_rank_result_reads_csv_and_final_metrics(self) -> None:
         """Read one completed row per request and one final metric line per replica."""
@@ -1129,7 +1174,7 @@ class ServingInputTest(unittest.TestCase):
             parse_rank_result(rank_run, warning_then_crash)
 
     def test_rank_marks_missing_profile_as_software_stack_failure(self) -> None:
-        """Return deterministic profile gaps to the planner without retrying them."""
+        """Retry deterministic profile gaps before returning rank-local failure."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
         rank_run = RankRun(
             deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
@@ -1144,7 +1189,7 @@ class ServingInputTest(unittest.TestCase):
         with patch("serving.subprocess.run", return_value=missing_profile) as run:
             result = _run_rank(rank_run)
 
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_count, SIMULATION_RETRIES + 1)
         self.assertEqual(result.status, "software_stack_failure")
 
     def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:

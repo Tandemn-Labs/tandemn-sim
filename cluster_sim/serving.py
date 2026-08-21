@@ -352,6 +352,7 @@ def build_rank_command(
     metrics_path: Path,
     run_name: str,
     request_count: int,
+    timeout_seconds: float = SERVING_WINDOW_SECONDS + 30,
 ) -> tuple[str, ...]:
     """Build one Docker command using paths visible inside LLMServingSim."""
     root = llmservingsim_root.resolve()
@@ -369,6 +370,10 @@ def build_rank_command(
         "-w",
         "/app/LLMServingSim",
         container,
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=10s",
+        f"{int(timeout_seconds)}s",
         "python3",
         "-m",
         "serving",
@@ -425,6 +430,7 @@ def prepare_rank_run(
             metrics_path,
             run_name,
             len(requests),
+            timeout_seconds,
         ),
         output_path,
         metrics_path,
@@ -474,43 +480,47 @@ def _run_rank(
                     command,
                     capture_output=True,
                     text=True,
-                    timeout=rank_run.timeout_seconds,
+                    timeout=rank_run.timeout_seconds + 15,
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
-                if attempt < SIMULATION_RETRIES:
-                    print(
-                        f"{rank_run.deployment.rank_name} simulation timeout "
-                        f"({attempt + 1}/{SIMULATION_RETRIES + 1})",
-                        flush=True,
-                    )
-                    continue
-                return RankResult(
+                failure = RankResult(
                     rank_run.deployment,
                     (),
                     (),
                     str(error.stdout or ""),
                     str(error.stderr or ""),
-                    "simulation_timeout",
-                )
-            output = f"{completed.stdout}\n{completed.stderr}"
-            if completed.returncode and _is_retryable_simulator_crash(output):
-                print(
-                    f"{rank_run.deployment.rank_name} simulator crash "
-                    f"({attempt + 1}/{SIMULATION_RETRIES + 1}): {output[-1_000:]}",
-                    flush=True,
-                )
-                if attempt < SIMULATION_RETRIES:
-                    continue
-                return RankResult(
-                    rank_run.deployment,
-                    (),
-                    (),
-                    completed.stdout,
-                    completed.stderr,
                     "process_crash",
                 )
-            return parse_rank_result(rank_run, completed)
+            else:
+                try:
+                    result = parse_rank_result(rank_run, completed)
+                except Exception as error:
+                    failure = RankResult(
+                        rank_run.deployment,
+                        (),
+                        (),
+                        completed.stdout,
+                        f"{completed.stderr}\n{error}",
+                        _failure_status(f"{completed.stdout}\n{completed.stderr}\n{error}"),
+                    )
+                else:
+                    if getattr(result, "status", "completed") in {
+                        "completed",
+                        "oom",
+                        "wall_time_limit",
+                    }:
+                        return result
+                    failure = result
+            if attempt == SIMULATION_RETRIES:
+                return failure
+            _clear_rank_outputs(rank_run)
+            print(
+                f"{rank_run.deployment.rank_name} simulator failure "
+                f"({attempt + 1}/{SIMULATION_RETRIES + 1}): "
+                f"{(failure.stderr or failure.stdout)[-1_000:]}",
+                flush=True,
+            )
     finally:
         if rank_run.cleanup_dir is not None and rank_run.cleanup_dir.exists():
             shutil.rmtree(rank_run.cleanup_dir)
@@ -610,14 +620,19 @@ def parse_rank_result(
     )
 
 
-def _is_retryable_simulator_crash(output: str) -> bool:
+def _failure_status(output: str) -> str:
     lowered = output.lower()
-    return "astra-sim exited unexpectedly" in lowered or (
-        "[memorymodel]" in lowered
-        and "tried to free" in lowered
-        and "only" in lowered
-        and "is used" in lowered
-    )
+    if _is_model_catalog_error(lowered):
+        return "model_catalog_invalid"
+    if _is_profile_error(lowered):
+        return "software_stack_failure"
+    return "process_crash"
+
+
+def _clear_rank_outputs(rank_run: RankRun) -> None:
+    for path in (rank_run.output_path, rank_run.metrics_path):
+        if path.is_file():
+            path.unlink()
 
 
 def _is_model_catalog_error(output: str) -> bool:
