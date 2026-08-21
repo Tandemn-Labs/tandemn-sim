@@ -202,9 +202,17 @@ class ScenarioTest(unittest.TestCase):
 
     def test_benchmark_azure_pools_use_cataloged_regions(self) -> None:
         """Keep Azure benchmark capacity aligned with the seeded catalog offerings."""
-        resource_map = json.loads(
-            (ROOT / "benchmarks/resource_map_benchmarking.jsonl").read_text()
-        )["resource_map"]
+        rows = [
+            json.loads(line)
+            for line in (
+                ROOT / "benchmarks/resource_map_benchmarking.jsonl"
+            ).read_text().splitlines()
+        ]
+        resource_map = next(
+            row["resource_map"]
+            for row in rows
+            if row["benchmark_id"] == "simulation_3h"
+        )
         regions = resource_map["clouds"]["azure"]["regions"]
 
         nd = regions["westus2"]["zones"]["1"]["network_fabrics"]["infiniband"][

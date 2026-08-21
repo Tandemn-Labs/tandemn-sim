@@ -28,7 +28,7 @@ spec:
     shared_prefix_length_avg: 300
     is_session_affinity: true
     priority_class: HIGH
-    max_concurrent_streaming: 1200
+    max_concurrent_streaming: 24
     target_p99_ttft_ms: 600
     target_p99_tpot_ms: 38
 workload:
@@ -54,8 +54,8 @@ workload:
     - name: profiling
       type: gamma
       duration: 29100
-      rate: 1.7
+      rate: 0.85
       smoothness: 0.078
-      concurrency: 1200
+      concurrency: 24
       rateRamp: 29100
       gracePeriod: 1200

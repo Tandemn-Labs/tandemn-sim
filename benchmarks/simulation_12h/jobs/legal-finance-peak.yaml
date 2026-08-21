@@ -21,14 +21,14 @@ spec:
     osl_token_min: 175
     osl_token_max: 2200
     osl_distribution_type: LogNormal
-    request_arrival_pattern: Bursty
+    request_arrival_pattern: Diurnal
     peak_to_mean_ratio: 3.5
     workload_prefix_concentration: 0
     multi_turn_ratio: 0
     shared_prefix_length_avg: 1
     is_session_affinity: false
     priority_class: HIGH
-    max_concurrent_streaming: 320
+    max_concurrent_streaming: 16
     target_p99_ttft_ms: 1000
     target_p99_tpot_ms: 45
 workload:
@@ -55,6 +55,7 @@ workload:
       type: gamma
       duration: 10800
       rate: 0.34
-      smoothness: 0.078
-      concurrency: 320
+      smoothness: 1.431
+      concurrency: 16
+      rateRamp: 10800
       gracePeriod: 1200

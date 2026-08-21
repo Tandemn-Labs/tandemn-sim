@@ -64,7 +64,7 @@ class BaselineUserSetupTest(unittest.TestCase):
         self.assertEqual(set(body), {"market", "clouds"})
         self.assertEqual(
             sum(pool.total_gpus for *_, pool in resource_map.iter_machine_pools()),
-            176,
+            200,
         )
 
     def test_koi_root_is_optional_only_at_parse_time(self) -> None:

@@ -105,6 +105,7 @@ class StaticSeedTest(unittest.TestCase):
                     model_catalog=ROOT / "benchmarks/model_catalogs.csv",
                     gpu_profiles=ROOT / "benchmarks/model_catalog_gpu_profiles.csv",
                     resource_map=ROOT / "benchmarks/resource_map_benchmarking.jsonl",
+                    benchmark_id="simulation_3h",
                 )
             )
 
@@ -113,13 +114,27 @@ class StaticSeedTest(unittest.TestCase):
             sum(
                 pool.total_gpus for *_, pool in inputs.resource_map.iter_machine_pools()
             ),
-            176,
+            200,
         )
 
     def test_uses_the_repository_catalog_snapshot_directory_by_default(self) -> None:
         self.assertEqual(
-            parse_args([]).catalog_dir,
+            parse_args(["--benchmark-id", "simulation_3h"]).catalog_dir,
             ROOT / "benchmarks/catalog-snapshots",
+        )
+
+    def test_selects_resource_map_by_benchmark_id(self) -> None:
+        _, resource_map = load_resource_map(
+            ROOT / "benchmarks/resource_map_benchmarking.jsonl",
+            "simulation_12h",
+        )
+
+        self.assertEqual(
+            sum(
+                pool.total_gpus
+                for *_, pool in resource_map.iter_machine_pools()
+            ),
+            400,
         )
 
     def test_rejects_catalog_without_a_benchmark_pool(self) -> None:
@@ -130,7 +145,12 @@ class StaticSeedTest(unittest.TestCase):
         aws_catalog["regions"] = [aws_catalog["regions"][0]]
 
         with self.assertRaisesRegex(ValueError, "does not cover"):
-            _validate_resource_map_coverage(resource_map, aws_catalog, _azure_catalog())
+            _validate_resource_map_coverage(
+                resource_map,
+                aws_catalog,
+                _azure_catalog(),
+                "simulation_3h",
+            )
 
     def test_rejects_wrong_catalog_version(self) -> None:
         catalog = _azure_catalog()

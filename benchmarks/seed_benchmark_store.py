@@ -28,6 +28,7 @@ from tandemn_system_data.models.model_catalog import ModelCatalog
 from tandemn_system_data.models.resource_map import ResourceMap
 
 BENCHMARKS = Path(__file__).resolve().parent
+DEFAULT_BENCHMARK_ID = "simulation_3h"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -104,16 +105,21 @@ def load_catalogs(catalog_path: Path, profiles_path: Path) -> list[ModelCatalog]
     return catalogs
 
 
-def load_resource_map(path: Path) -> tuple[str, ResourceMap]:
-    """Read the single benchmarking ResourceMap JSONL record."""
+def load_resource_map(
+    path: Path,
+    benchmark_id: str = DEFAULT_BENCHMARK_ID,
+) -> tuple[str, ResourceMap]:
+    """Read one benchmark's ResourceMap JSONL record."""
     rows = [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
         if line
     ]
-    if len(rows) != 1:
-        raise ValueError(f"{path} must contain exactly one JSONL record")
-    return str(rows[0]["user_id"]), ResourceMap.model_validate(rows[0]["resource_map"])
+    matches = [row for row in rows if row.get("benchmark_id") == benchmark_id]
+    if len(matches) != 1:
+        raise ValueError(f"{path} must contain one record for {benchmark_id}")
+    row = matches[0]
+    return str(row["user_id"]), ResourceMap.model_validate(row["resource_map"])
 
 
 def seed(args: argparse.Namespace) -> None:

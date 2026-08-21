@@ -15,7 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from scenario import load_scenario
+from scenario import _intensity, load_scenario
 
 
 class SimulationTwelveHourTest(unittest.TestCase):
@@ -106,6 +106,39 @@ class SimulationTwelveHourTest(unittest.TestCase):
                     self.assertEqual(phase["rateRamp"], phase["duration"])
                 else:
                     self.assertNotIn("rateRamp", phase)
+
+    def test_calibrated_load_envelope(self) -> None:
+        """Keep the long run representative rather than a saturation test."""
+        scenario = load_scenario(self.root / "benchmark.yaml")
+        online_intensity = sum(
+            _intensity(
+                float(phase["duration"]),
+                float(phase["rate"]),
+                float(phase.get("rateRamp", 0)),
+            )
+            for job in scenario.online_jobs
+            for phase in job.workload["phases"]
+        )
+        moderation = [
+            job
+            for job in scenario.online_jobs
+            if "-0-5" in job.name or "-420-2" in job.name
+        ]
+
+        self.assertAlmostEqual(online_intensity, 2_260_880.1)
+        self.assertEqual(len(moderation), 2)
+        for job in moderation:
+            phase = job.workload["phases"][0]
+            self.assertEqual(job.workload["features"]["max_concurrent_streaming"], 32)
+            self.assertEqual(phase["rate"], 28.0)
+            self.assertEqual(phase["concurrency"], 32)
+        self.assertLessEqual(
+            max(
+                job.workload["features"]["max_concurrent_streaming"]
+                for job in scenario.online_jobs
+            ),
+            96,
+        )
 
     def test_resources_match_the_frozen_overview(self) -> None:
         """Expose the declared 400-device heterogeneous fleet."""
