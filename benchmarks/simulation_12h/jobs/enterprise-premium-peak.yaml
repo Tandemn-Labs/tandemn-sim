@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_12hr-240-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_12hr-240-1
+  operation: base_service
+  start_at_offset_minutes: 240
+  stop_at_offset_minutes: 460
+spec:
+  user_id: tenant_enterprise_chat
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 1600
+    isl_token_min: 400
+    isl_token_max: 6000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 500
+    osl_token_min: 125
+    osl_token_max: 1600
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3.5
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 400
+    is_session_affinity: true
+    priority_class: HIGH
+    max_concurrent_streaming: 1000
+    target_p99_ttft_ms: 650
+    target_p99_tpot_ms: 42
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: Qwen/Qwen3-Next-80B-A3B-Thinking
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 300
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
+    dataset:
+      type: synthetic
+      entries: 1000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 13200
+      rate: 0.85
+      smoothness: 0.196
+      concurrency: 1000
+      gracePeriod: 1200

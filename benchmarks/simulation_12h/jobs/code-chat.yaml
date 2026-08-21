@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_12hr-180-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_12hr-180-2
+  operation: base_service
+  start_at_offset_minutes: 180
+  stop_at_offset_minutes: 420
+spec:
+  user_id: tenant_code_chat
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 2600
+    isl_token_min: 650
+    isl_token_max: 10000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 900
+    osl_token_min: 225
+    osl_token_max: 3200
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3.5
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 650
+    is_session_affinity: true
+    priority_class: STANDARD
+    max_concurrent_streaming: 800
+    target_p99_ttft_ms: 800
+    target_p99_tpot_ms: 42
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: meta-llama/Llama-3.3-70B-Instruct
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 120
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:meta-llama/Llama-3.3-70B-Instruct}
+    dataset:
+      type: synthetic
+      entries: 2000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 14400
+      rate: 4.0
+      smoothness: 0.974
+      concurrency: 800
+      gracePeriod: 1200

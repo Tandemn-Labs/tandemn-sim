@@ -1,0 +1,48 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_12hr-480-1
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_12hr-480-1
+  start_at_offset_minutes: 480
+  deadline_at_offset_minutes: 600
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 780
+spec:
+  user_id: tenant_safety_p0
+  optimization_goal: throughput
+  precision: fp16
+  features:
+    isl_token_avg: 2200
+    isl_token_min: 550
+    isl_token_max: 8000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 700
+    osl_token_min: 175
+    osl_token_max: 2500
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Constant
+    peak_to_mean_ratio: 1
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    total_token_budget: 46400000
+    priority_class: HIGH
+    deadline_hrs: 2
+    target_p99_ttft_ms: 8000
+    target_p99_tpot_ms: 100
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: p0_abuse_replay
+    model: meta-llama/Llama-3.3-70B-Instruct
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 16000
+    seed: 209
+    partitioning:
+      shard_count: 80
+      requests_per_shard: 200
+      max_in_flight_requests: 12

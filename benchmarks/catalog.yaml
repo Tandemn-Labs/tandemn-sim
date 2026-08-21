@@ -10,7 +10,7 @@ benchmarks:
     manifest: simulation_12h/benchmark.yaml
     environment: simulation
     duration_hours: 12
-    status: definition_only
+    status: executable
   simulation_24h:
     manifest: simulation_24h/benchmark.yaml
     environment: simulation
