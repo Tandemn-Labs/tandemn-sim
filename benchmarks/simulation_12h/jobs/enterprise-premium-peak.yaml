@@ -28,9 +28,9 @@ spec:
     shared_prefix_length_avg: 400
     is_session_affinity: true
     priority_class: HIGH
-    max_concurrent_streaming: 1000
-    target_p99_ttft_ms: 650
-    target_p99_tpot_ms: 42
+    max_concurrent_streaming: 16
+    target_p99_ttft_ms: 1000
+    target_p99_tpot_ms: 45
 workload:
   schemaVersion: '2.0'
   randomSeed: 101
@@ -54,7 +54,7 @@ workload:
     - name: profiling
       type: gamma
       duration: 13200
-      rate: 0.85
+      rate: 0.26
       smoothness: 0.196
-      concurrency: 1000
+      concurrency: 16
       gracePeriod: 1200

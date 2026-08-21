@@ -28,7 +28,7 @@ spec:
     shared_prefix_length_avg: 1
     is_session_affinity: true
     priority_class: STANDARD
-    max_concurrent_streaming: 480
+    max_concurrent_streaming: 16
     target_p99_ttft_ms: 2200
     target_p99_tpot_ms: 50
 workload:
@@ -56,5 +56,5 @@ workload:
       duration: 7200
       rate: 0.08
       smoothness: 0.584
-      concurrency: 480
+      concurrency: 16
       gracePeriod: 1200

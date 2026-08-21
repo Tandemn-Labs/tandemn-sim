@@ -54,8 +54,15 @@ STORE_ROOT = WORKSPACE_ROOT / "tandemn-store"
 CANONICAL_USER_ID = "usr_01KZSQ1M34PKS5XC9ZDR6DDSJ5"
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"
 AZURE_CATALOG_KEY = "azure-accelerated-hardware-v1"
-EXPECTED_POOL_COUNT = 8
-EXPECTED_GPU_COUNT = 176
+EXPECTED_RESOURCE_MAP_SHAPES = {
+    "simulation_3h": (10, 200),
+    "simulation_12h": (10, 400),
+    "simulation_24h": (10, 800),
+    "real_life_3h": (10, 192),
+    "real_3h_homogenous": (1, 128),
+    "real_life_12h": (10, 192),
+    "real_life_24h": (10, 192),
+}
 LOGGER = logging.getLogger(__name__)
 
 EXPECTED_COUNTS: tuple[tuple[str, type[Any], int], ...] = (
@@ -116,6 +123,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--resource-map",
         type=Path,
         default=BENCHMARKS / "resource_map_benchmarking.jsonl",
+    )
+    parser.add_argument(
+        "--benchmark-id",
+        choices=tuple(EXPECTED_RESOURCE_MAP_SHAPES),
+        required=True,
     )
     return parser.parse_args(argv)
 
@@ -213,6 +225,7 @@ def _validate_resource_map_coverage(
     resource_map: ResourceMap,
     aws_catalog: dict[str, Any],
     azure_catalog: dict[str, Any],
+    benchmark_id: str,
 ) -> None:
     catalogs = {
         "aws": _catalog_locations(aws_catalog, "aws"),
@@ -225,15 +238,20 @@ def _validate_resource_map_coverage(
         )
         if pool.total_gpus > 0
     ]
-    if len(pools) != EXPECTED_POOL_COUNT:
+    expected_pool_count, expected_gpu_count = EXPECTED_RESOURCE_MAP_SHAPES[benchmark_id]
+    if len(pools) != expected_pool_count:
         raise ValueError(
-            f"benchmark resource map must contain {EXPECTED_POOL_COUNT} non-empty pools"
+            f"{benchmark_id} resource map must contain "
+            f"{expected_pool_count} non-empty pools"
         )
-    if sum(pool.total_gpus for *_, pool in pools) != EXPECTED_GPU_COUNT:
+    if sum(pool.total_gpus for *_, pool in pools) != expected_gpu_count:
         raise ValueError(
-            f"benchmark resource map must contain {EXPECTED_GPU_COUNT} GPUs"
+            f"{benchmark_id} resource map must contain {expected_gpu_count} GPUs"
         )
     for cloud, region, zone, instance_type, _ in pools:
+        # RunPod MI300X capacity has no matching local hardware-catalog snapshot.
+        if cloud == "runpod":
+            continue
         if cloud not in catalogs:
             raise ValueError(f"unsupported benchmark cloud {cloud}")
         if (region, zone, instance_type) not in catalogs[cloud]:
@@ -266,7 +284,7 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
         if _checksum(path) != checksums[path.name]:
             raise ValueError(f"checksum mismatch for {path}")
 
-    user_id, resource_map = load_resource_map(args.resource_map)
+    user_id, resource_map = load_resource_map(args.resource_map, args.benchmark_id)
     if user_id != CANONICAL_USER_ID:
         raise ValueError(f"benchmark resource map user must be {CANONICAL_USER_ID}")
     catalogs = load_catalogs(args.model_catalog, args.gpu_profiles)
@@ -276,7 +294,12 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
     azure_catalog = _read_catalog(azure_path)
     _validate_catalog(aws_catalog, cloud="aws", catalog_key=AWS_CATALOG_KEY)
     _validate_catalog(azure_catalog, cloud="azure", catalog_key=AZURE_CATALOG_KEY)
-    _validate_resource_map_coverage(resource_map, aws_catalog, azure_catalog)
+    _validate_resource_map_coverage(
+        resource_map,
+        aws_catalog,
+        azure_catalog,
+        args.benchmark_id,
+    )
     return StaticInputs(catalogs, user_id, resource_map, aws_catalog, azure_catalog)
 
 
@@ -359,7 +382,10 @@ def main(argv: list[str] | None = None) -> None:
     reset_store()
     seed_static(inputs)
     verify_static_state(PostgresClient())
-    LOGGER.info("seeded 16 models, two hardware catalogs, and one 176-GPU resource map")
+    LOGGER.info(
+        "seeded 16 models, two hardware catalogs, and the %s resource map",
+        args.benchmark_id,
+    )
 
 
 if __name__ == "__main__":

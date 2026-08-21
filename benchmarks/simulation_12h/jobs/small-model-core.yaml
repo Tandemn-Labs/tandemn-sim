@@ -54,6 +54,6 @@ workload:
     - name: profiling
       type: constant
       duration: 43200
-      rate: 1.98
+      rate: 2.0
       concurrency: 8
       gracePeriod: 1200

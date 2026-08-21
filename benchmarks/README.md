@@ -84,7 +84,9 @@ This command destroys local Tandemn Store volumes, starts Postgres and MinIO,
 applies migrations, and seeds the shared benchmark state:
 
 ```bash
-uv run python benchmarks/benchmark_static_seed.py --full-reset
+uv run python benchmarks/benchmark_static_seed.py \
+  --full-reset \
+  --benchmark-id simulation_3h
 ```
 
 It verifies the snapshots before destroying anything, then seeds:
@@ -92,7 +94,7 @@ It verifies the snapshots before destroying anything, then seeds:
 ```text
 1 canonical benchmark user
 16 model catalogs
-1 canonical 176-GPU resource map
+1 canonical resource map selected by benchmark ID
 1 AWS hardware catalog
 1 Azure hardware catalog
 ```
@@ -126,7 +128,7 @@ The command prints one JSON identity object to stdout:
 ```
 
 Rerunning the same baseline and run ID reuses that user ID, deletes only that
-user's runtime rows, and restores its independent 176-GPU resource map. It
+user's runtime rows, and restores its independent 200-GPU simulation resource map. It
 does not alter another baseline user, shared model catalogs, or shared hardware
 catalogs.
 
