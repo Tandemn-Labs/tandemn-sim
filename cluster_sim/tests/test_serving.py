@@ -1128,6 +1128,25 @@ class ServingInputTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "tried to free"):
             parse_rank_result(rank_run, warning_then_crash)
 
+    def test_rank_marks_missing_profile_as_software_stack_failure(self) -> None:
+        """Return deterministic profile gaps to the planner without retrying them."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        rank_run = RankRun(
+            deployment, (), ("python3", "-m", "serving"), Path(), Path(), 0, 330
+        )
+        missing_profile = subprocess.CompletedProcess(
+            (),
+            1,
+            "",
+            "KeyError: Missing dense profile for layer=embedding on tp=1",
+        )
+
+        with patch("serving.subprocess.run", return_value=missing_profile) as run:
+            result = _run_rank(rank_run)
+
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(result.status, "software_stack_failure")
+
     def test_run_summary_rejects_missing_malformed_and_unknown_status(self) -> None:
         """Only LLMServingSim's two explicit terminal states are accepted."""
         for output in (

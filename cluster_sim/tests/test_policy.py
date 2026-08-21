@@ -57,6 +57,22 @@ class ConfigPolicyTest(unittest.TestCase):
         assert rule is not None
         self.assertEqual(rule.allowed_tp, (2,))
 
+    def test_a100_profiles_exclude_incomplete_tp_one(self) -> None:
+        """Keep TP1-only MoE profile bundles out of A100 placement choices."""
+        config_policy = policy.load_config_policy()
+
+        qwen = config_policy.rule_for(
+            "A100_80GB",
+            "Qwen/Qwen3-Next-80B-A3B-Thinking",
+        )
+        glm = config_policy.rule_for("A100_80GB", "zai-org/GLM-4.5-Air")
+
+        self.assertIsNotNone(qwen)
+        self.assertIsNotNone(glm)
+        assert qwen is not None and glm is not None
+        self.assertEqual(qwen.allowed_tp, (4, 8))
+        self.assertEqual(glm.allowed_tp, (4, 8))
+
     def test_accepts_one_and_supported_even_tp_degrees(self) -> None:
         """Allow no sharding or an explicitly supported even degree."""
         policy_text = """\
