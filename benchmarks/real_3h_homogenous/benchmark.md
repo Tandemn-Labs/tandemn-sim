@@ -2,7 +2,7 @@
 
 Benchmark ID: `real_3h_homogenous`
 
-Purpose: real-hardware enterprise workload replay on a homogeneous, on-demand L40S cluster. It preserves the simulation 3-hour benchmark's online and batch mix, timing, traffic patterns, seeds, SLO classes, quantization probes, and cache behavior so hardware and scheduling results remain directly comparable.
+Purpose: real-hardware enterprise workload replay on a homogeneous, on-demand L40S cluster. This manifest currently retains the pre-calibration simulation workload and must not be treated as a matched pair with the calibrated `simulation_3h` benchmark until its rates and campaign sizes are synchronized.
 
 Benchmark name: `KoiBench-Real-3h-OnDemand-L40S`
 
@@ -36,7 +36,7 @@ The fixed-placement envelope peaks at **119 GPUs**, leaving nine devices of clus
 
 ## Workload Compatibility
 
-The workload is the same 18 online services and 7 batch campaigns used by `simulation_3h`. Benchmark-specific job, service, campaign, and event IDs prevent cross-run collisions while unchanged seeds and phase definitions preserve comparison fidelity.
+The workload retains the same 18 online services and 7 batch campaign identities, timing, and seeds, but still uses the earlier rates and campaign sizes. Benchmark-specific IDs prevent cross-run collisions; direct simulation-versus-hardware comparison is disabled until this manifest adopts the calibrated profile.
 
 The L40S policy covers every model in the inherited workload. Large frontier models may span multiple eight-GPU nodes; no job may fall back to another accelerator type or market.
 

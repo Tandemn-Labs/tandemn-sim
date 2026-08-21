@@ -1,5 +1,7 @@
 """Test deterministic YAML workload compilation for the cluster simulator."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -7,6 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
@@ -43,10 +46,17 @@ class ScenarioTest(unittest.TestCase):
 
         self.assertEqual(requests, materialize_online_requests(job))
         self.assertTrue(requests)
-        self.assertTrue(all(job.starts_at_ns <= request.arrives_at_ns < job.stops_at_ns for request in requests))
+        self.assertTrue(
+            all(
+                job.starts_at_ns <= request.arrives_at_ns < job.stops_at_ns
+                for request in requests
+            )
+        )
 
         sliced = []
-        for start_ns in range(job.starts_at_ns, job.stops_at_ns, self.scenario.tick_duration_ns):
+        for start_ns in range(
+            job.starts_at_ns, job.stops_at_ns, self.scenario.tick_duration_ns
+        ):
             sliced.extend(
                 requests_in_tick(
                     requests,
@@ -90,6 +100,105 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual(len(probe), job.workload["requests_per_shard"])
         self.assertGreater(len({request.input_tokens for request in probe}), 1)
         self.assertGreater(len({request.output_tokens for request in probe}), 1)
+
+    def test_calibrated_load_envelope(self) -> None:
+        """Keep the paper workload challenging without restoring the overload floor."""
+        online_intensity = sum(
+            _intensity(
+                float(phase["duration"]),
+                float(phase["rate"]),
+                float(phase.get("rateRamp", 0)),
+            )
+            for job in self.scenario.online_jobs
+            for phase in job.workload["phases"]
+        )
+        moderation = {
+            job.name: job
+            for job in self.scenario.online_jobs
+            if "-0-4" in job.name or "-49-2" in job.name
+        }
+
+        self.assertAlmostEqual(online_intensity, 591_045.6)
+        self.assertEqual(len(moderation), 2)
+        for job in moderation.values():
+            self.assertEqual(job.workload["features"]["max_concurrent_streaming"], 32)
+            self.assertEqual(job.workload["phases"][0]["rate"], 28.0)
+            self.assertEqual(job.workload["phases"][0]["concurrency"], 32)
+
+        peak_minute = 70
+        active_at_peak = [
+            job
+            for job in self.scenario.online_jobs
+            if job.starts_at_ns <= peak_minute * 60_000_000_000 < job.stops_at_ns
+        ]
+        peak_concurrency = sum(
+            job.workload["features"]["max_concurrent_streaming"]
+            for job in active_at_peak
+        )
+        peak_rate = 0.0
+        for job in active_at_peak:
+            phase = job.workload["phases"][0]
+            rate = float(phase["rate"])
+            ramp = float(phase.get("rateRamp", 0))
+            elapsed_seconds = (
+                peak_minute * 60_000_000_000 - job.starts_at_ns
+            ) / 1_000_000_000
+            peak_rate += rate * min(elapsed_seconds / ramp, 1) if ramp else rate
+        self.assertEqual(peak_concurrency, 520)
+        self.assertAlmostEqual(peak_rate, 89.8295555556)
+
+        batch_documents = []
+        job_paths = (ROOT / "benchmarks/simulation_3h/jobs").glob("*.yaml")
+        for path in sorted(job_paths):
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if document["schedule"]["kind"] == "batch":
+                batch_documents.append(document)
+        expected_campaigns = {
+            "job-benchmark_timing_3hr-15-1": (7_200, 36),
+            "job-benchmark_timing_3hr-15-3": (9_000, 18),
+            "job-benchmark_timing_3hr-85-1": (6_000, 12),
+            "job-benchmark_timing_3hr-100-1": (4_000, 20),
+            "job-benchmark_timing_3hr-125-2": (4_000, 40),
+            "job-benchmark_timing_3hr-145-2": (3_200, 16),
+            "job-benchmark_timing_3hr-160-1": (12_000, 24),
+        }
+        self.assertEqual(
+            {
+                document["job_id"]: (
+                    document["workload"]["dataset"]["record_count"],
+                    document["workload"]["dataset"]["partitioning"]["shard_count"],
+                )
+                for document in batch_documents
+            },
+            expected_campaigns,
+        )
+        self.assertEqual(
+            sum(
+                document["workload"]["dataset"]["record_count"]
+                for document in batch_documents
+            ),
+            45_400,
+        )
+        self.assertEqual(
+            sum(
+                document["workload"]["dataset"]["partitioning"]["shard_count"]
+                for document in batch_documents
+            ),
+            166,
+        )
+        for document in batch_documents:
+            features = document["spec"]["features"]
+            dataset = document["workload"]["dataset"]
+            partitioning = dataset["partitioning"]
+            self.assertEqual(
+                dataset["record_count"],
+                partitioning["shard_count"] * partitioning["requests_per_shard"],
+            )
+            self.assertEqual(
+                features["total_token_budget"],
+                dataset["record_count"]
+                * (features["isl_token_avg"] + features["osl_token_avg"]),
+            )
 
     def test_benchmark_azure_pools_use_cataloged_regions(self) -> None:
         """Keep Azure benchmark capacity aligned with the seeded catalog offerings."""
