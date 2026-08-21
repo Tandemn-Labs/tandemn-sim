@@ -1,0 +1,59 @@
+schema_version: "resource-map/v1"
+
+resources:
+  - id: h100-sxm-80gb
+    accelerator: H100-SXM-80GB
+    total_devices: 80
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: h100_sxm
+    markets: {reserved: 64, on_demand: 16}
+    regions: {us-east: 32, eu-west: 16, apac: 32}
+
+  - id: a100-sxm-80gb
+    accelerator: A100-SXM-80GB
+    total_devices: 64
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: a100_sxm
+    markets: {reserved: 48, on_demand: 16}
+    regions: {us-east: 32, eu-west: 16, apac: 16}
+
+  - id: a100-pcie-40gb
+    accelerator: A100-PCIe-40GB
+    total_devices: 32
+    devices_per_node: 8
+    memory_gb: 40
+    aic_system: null
+    unsupported_reason: AIC 0.11 only defines the 80 GB A100 PCIe system
+    markets: {reserved: 16, on_demand: 16}
+    regions: {us-east: 16, eu-west: 16, apac: 0}
+
+  - id: a10g-24gb
+    accelerator: A10G-24GB
+    total_devices: 96
+    devices_per_node: 8
+    memory_gb: 24
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no A10G system model
+    markets: {reserved: 64, on_demand: 32}
+    regions: {us-east: 48, eu-west: 32, apac: 16}
+
+  - id: l40s-48gb
+    accelerator: L40S-48GB
+    total_devices: 80
+    devices_per_node: 8
+    memory_gb: 48
+    aic_system: l40s
+    markets: {reserved: 64, on_demand: 16}
+    regions: {us-east: 32, eu-west: 32, apac: 16}
+
+  - id: mi300x-192gb
+    accelerator: MI300X-192GB
+    total_devices: 48
+    devices_per_node: 8
+    memory_gb: 192
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no MI300X system model
+    markets: {reserved: 16, on_demand: 32}
+    regions: {us-east: 32, eu-west: 16, apac: 0}
