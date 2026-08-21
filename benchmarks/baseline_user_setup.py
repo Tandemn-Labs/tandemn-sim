@@ -46,6 +46,7 @@ BASELINES = (
     "cp_sat",
     "gpt_only",
     "openevolve",
+    "evox",
 )
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"
 AZURE_CATALOG_KEY = "azure-accelerated-hardware-v1"

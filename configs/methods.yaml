@@ -74,6 +74,14 @@ methods:
       iterations: 8
       backend: vllm
       default_optimization_goal: throughput
+  evox:
+    display_name: SkyDiscover EvoX online placement policy
+    status: implemented
+    settings:
+      model: gpt-5.6-luna
+      iterations: 5
+      backend: vllm
+      default_optimization_goal: throughput
   koi:
     display_name: Koi
     status: planned

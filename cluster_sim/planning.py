@@ -263,8 +263,25 @@ def _build_openevolve(context: PlannerContext) -> PlannerDriver:
         {
             "model": "gpt-5.6-luna",
             "max_tokens": 4096,
+            "iterations": 5,
+            "backend": "vllm",
+        },
+        context.postgres,
+    )
+
+
+def _build_evox(context: PlannerContext) -> PlannerDriver:
+    """Build the Store-backed SkyDiscover EvoX planner."""
+    from evox import EvoxPlannerDriver
+
+    return EvoxPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {
+            "model": "gpt-5.6-luna",
             "iterations": 8,
             "backend": "vllm",
+            "output_dir": f"outputs/evox-online/{context.user_id}",
         },
         context.postgres,
     )
@@ -279,6 +296,7 @@ PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "cp_sat": _build_cp_sat,
     "gpt_only": _build_gpt,
     "openevolve": _build_openevolve,
+    "evox": _build_evox,
 }
 
 
