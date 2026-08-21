@@ -667,7 +667,6 @@ class ClusterSimulator:
                 self._fail_oom(prepared.running, job.name, job_results)
             rank_failure_reasons = {
                 "process_crash": ReasonCode.PROCESS_CRASH,
-                "simulation_timeout": ReasonCode.PROCESS_CRASH,
                 "software_stack_failure": ReasonCode.SOFTWARE_STACK_RANK_FAILURE,
                 "model_catalog_invalid": ReasonCode.MODEL_CATALOG_INVALID,
             }

@@ -1396,7 +1396,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             stderr="",
         )
         timeout_result = SimpleNamespace(
-            status="simulation_timeout",
+            status="process_crash",
             deployment=timeout_rank_run.deployment,
             request_rows=(),
             completed_requests=(),
