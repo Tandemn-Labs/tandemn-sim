@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import json
 import math
+import signal
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -69,6 +70,8 @@ LAUNCH_FIELDS = (
 )
 EVOX_SYSTEM_PROMPT = """You are evolving a deterministic GPU placement program
 online for the current simulator control tick.
+
+Return a usable program within the strict five-minute planning budget.
 
 Improve only compute_placement(payload). The input uses schema
 tandemn-evox-placement/v1 and contains public static facts: jobs, each job's
@@ -254,6 +257,14 @@ class EvoxClient(Protocol):
     ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]: ...
 
 
+class EvoxDeadlineExceeded(TimeoutError):
+    """Carry partial usage when one online EvoX search exceeds five minutes."""
+
+    def __init__(self, llm_usage: tuple[LlmUsage, ...] = ()) -> None:
+        super().__init__("EvoX exceeded its five-minute planning budget")
+        self.llm_usage = llm_usage
+
+
 class OnlineSkyDiscoverEvoxClient:
     """Run one warm-started SkyDiscover EvoX search per control tick."""
 
@@ -290,24 +301,29 @@ class OnlineSkyDiscoverEvoxClient:
             f"{EVOX_SYSTEM_PROMPT}\n\nFrozen resolved model catalog for this tick:\n"
             f"{catalog_json}"
         )
-        result = run_evox_discovery(
-            evaluator.evaluate,
-            self.output_dir / f"tick-{self.tick_number:06d}",
-            model=self.model,
-            iterations=self.iterations,
-            initial_program=self.initial_program,
-            api_base=self.api_base,
-            system_prompt=system_prompt,
-            tick_number=tick_number,
-        )
-        best_solution = getattr(result, "best_solution", None)
-        if not isinstance(best_solution, str) or not best_solution:
-            raise RuntimeError("online EvoX returned no placement program")
+        try:
+            result = run_evox_discovery(
+                evaluator.evaluate,
+                self.output_dir / f"tick-{self.tick_number:06d}",
+                model=self.model,
+                iterations=self.iterations,
+                initial_program=self.initial_program,
+                api_base=self.api_base,
+                system_prompt=system_prompt,
+                tick_number=tick_number,
+            )
+            best_solution = getattr(result, "best_solution", None)
+            if not isinstance(best_solution, str) or not best_solution:
+                raise RuntimeError("online EvoX returned no placement program")
+            llm_usage = tuple(getattr(result, "llm_usage", ()))
+        except EvoxDeadlineExceeded as error:
+            best_solution = self.initial_program
+            llm_usage = error.llm_usage
         policy = load_policy_source(best_solution)
         selected = select_evox_placements(policy, problems, capacities)
         self.initial_program = best_solution
         self.tick_number += 1
-        return selected, tuple(getattr(result, "llm_usage", ()))
+        return selected, llm_usage
 
 
 class OnlineEvoxEvaluator:
@@ -1017,6 +1033,7 @@ def run_evox_discovery(
     api_base: str | None = None,
     system_prompt: str = EVOX_SYSTEM_PROMPT,
     tick_number: int = 0,
+    time_budget_seconds: float = 300,
 ) -> object:
     """Run SkyDiscover EvoX online for one frozen control-tick snapshot."""
     if iterations < 1:
@@ -1044,7 +1061,7 @@ def run_evox_discovery(
             "llm": {
                 "models": [model_config],
                 "max_tokens": 32_000,
-                "timeout": 600,
+                "timeout": 250,
             },
             "search": {
                 "type": "evox",
@@ -1092,6 +1109,14 @@ def run_evox_discovery(
             return False
 
     LLMPool.check_availability = check_availability
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def deadline_exceeded(_signum: int, _frame: object) -> None:
+        raise EvoxDeadlineExceeded(tuple(llm_usage))
+
+    signal.signal(signal.SIGALRM, deadline_exceeded)
+    signal.setitimer(signal.ITIMER_REAL, time_budget_seconds)
     try:
         result = run_discovery(
             evaluator=evaluator,
@@ -1102,6 +1127,10 @@ def run_evox_discovery(
             cleanup=True,
         )
     finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
         LLMPool.check_availability = original_availability_check
     return SimpleNamespace(
         best_solution=getattr(result, "best_solution", None),
