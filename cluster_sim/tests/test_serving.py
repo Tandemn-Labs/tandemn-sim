@@ -678,6 +678,47 @@ class ServingInputTest(unittest.TestCase):
 
         self.assertEqual(resolve_rank_hardware(deployment, catalog)["profile"], "H100")
 
+    def test_store_hardware_catalog_resolves_azure_mi300_profile(self) -> None:
+        """Map the Store MI300 label to Azure's MI300X accelerator facts."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment = replace(
+            deployment,
+            shape={
+                **deployment.shape,
+                "env": ["on_demand", "azure", "westus", "default", "MI300"],
+                "instance_type": "Standard_ND96isr_MI300X_v5",
+                "gpu_type": "MI300",
+            },
+        )
+        catalog = {
+            "regions": [
+                {
+                    "cloud": "azure",
+                    "region": "westus",
+                    "instance_types": [
+                        {
+                            "instance_type": "Standard_ND96isr_MI300X_v5",
+                            "accelerators": [
+                                {
+                                    "name": "MI300X",
+                                    "canonical_gpu_name": "MI300X",
+                                    "memory_mib_each": 196_608,
+                                    "gpu_bandwidth_gbps": 5_300,
+                                    "infinity_fabric_bandwidth_gbps": 1_024,
+                                }
+                            ],
+                            "network": {"network_cards": []},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        hardware = resolve_rank_hardware(deployment, catalog)
+
+        self.assertEqual(hardware["profile"], "MI300X")
+        self.assertEqual(hardware["memory_gb"], 192)
+
     def test_merges_aws_and_azure_catalogs(self) -> None:
         catalogs = (
             SimpleNamespace(catalog={"regions": [{"cloud": "aws", "region": "us-east-1", "instance_types": []}]}),
