@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -51,6 +52,8 @@ from serving import (
     resolve_rank_hardware,
     run_ranks,
 )
+
+LOGGER = logging.getLogger(__name__)
 from telemetry import (
     OUTCOME_METRICS,
     aggregate_job_metrics,
@@ -1415,6 +1418,8 @@ class ClusterSimulator:
 
     def _finish(self, running, finished_at: datetime | None = None) -> None:
         """Stop active chains and finish a job after simulated work is complete."""
+        from tandemn_system_data.clients.event_log import PostgresEventLog
+        from tandemn_system_data.models import Event
         from tandemn_system_data.models.enums import JobStatus, RankStatus
 
         for rank in running.ranks:
@@ -1423,18 +1428,38 @@ class ClusterSimulator:
                 RankStatus.STOPPED,
                 [RankStatus.LAUNCHING, RankStatus.RUNNING],
             )
-        self.jobs.transition(running.job.job_id, JobStatus.FINISHED, [JobStatus.RUNNING])
+        transitioned = self.jobs.transition(
+            running.job.job_id,
+            JobStatus.FINISHED,
+            [JobStatus.RUNNING],
+        )
+        batch_job = getattr(self, "_batch_jobs", {}).get(running.job.job_id)
+        deadline_slo_met = None
+        if transitioned and batch_job is not None:
+            finished_at = finished_at or self.clock.now()
+            deadline_at = self.clock.start + timedelta(
+                microseconds=batch_job.deadline_at_ns // 1_000
+            )
+            deadline_slo_met = finished_at <= deadline_at
+            try:
+                PostgresEventLog(self.postgres).append(
+                    Event(
+                        user_id=self.user_id,
+                        job_id=running.job.job_id,
+                        type="batch.outcome",
+                        payload_json={"deadline_met": deadline_slo_met},
+                    )
+                )
+            except Exception:
+                LOGGER.warning(
+                    "could not persist batch outcome for %s",
+                    running.job.job_id,
+                    exc_info=True,
+                )
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
             finished_at = finished_at or self.clock.now()
             self._trace_job_state(running.job.job_id, "FINISHED", finished_at, "completed")
-            batch_job = self._batch_jobs.get(running.job.job_id)
-            deadline_slo_met = None
-            if batch_job is not None:
-                deadline_at = self.clock.start + timedelta(
-                    microseconds=batch_job.deadline_at_ns // 1_000
-                )
-                deadline_slo_met = finished_at <= deadline_at
             self._ensure_online_offers_through(running.job.job_id, finished_at)
             request_outcome = self._terminal_request_outcome(running.job.job_id)
             append_event(
