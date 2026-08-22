@@ -46,6 +46,7 @@ BASELINES = (
     "cp_sat",
     "gpt_only",
     "openevolve",
+    "contextual_bandit",
     "evox",
 )
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"

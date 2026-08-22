@@ -63,7 +63,7 @@ uv run python -m tandemn_orca.scripts.aws_hardware_catalog \
   --output benchmarks/catalog-snapshots/aws.json
 
 uv run python -m tandemn_orca.scripts.azure_hardware_catalog \
-  --regions westus2 \
+  --regions westus2,westus \
   --output benchmarks/catalog-snapshots/azure.json
 
 (

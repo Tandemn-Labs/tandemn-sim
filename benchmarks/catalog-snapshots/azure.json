@@ -1,8 +1,8 @@
 {
   "catalog_version": "azure-accelerated-hardware-v1",
   "cloud": "azure",
-  "generated_at": "2026-08-20T07:15:58.560716Z",
-  "instance_type_count": 45,
+  "generated_at": "2026-08-21T23:56:01.353095Z",
+  "instance_type_count": 46,
   "instance_types": [
     {
       "accelerators": [
@@ -1371,8 +1371,7 @@
       },
       "supported_boot_modes": [],
       "supported_usage_classes": [
-        "on-demand",
-        "spot"
+        "on-demand"
       ],
       "vcpu": 48
     },
@@ -2197,8 +2196,7 @@
       },
       "supported_boot_modes": [],
       "supported_usage_classes": [
-        "on-demand",
-        "spot"
+        "on-demand"
       ],
       "vcpu": 96
     },
@@ -2558,6 +2556,100 @@
           "spot_usd_per_hour": null,
           "zone_id": "1",
           "zone_name": "1"
+        }
+      ],
+      "pricing": {
+        "capacity_reservation_usd_per_hour": null,
+        "on_demand_usd_per_hour": null
+      },
+      "storage": {
+        "ebs_bandwidth_mbps": null,
+        "ebs_iops": null,
+        "ebs_nvme_support": null,
+        "ebs_optimized_support": null,
+        "ebs_throughput_mbps": null,
+        "instance_storage_disks": [],
+        "instance_storage_encryption_support": null,
+        "instance_storage_nvme_support": null,
+        "instance_storage_supported": false,
+        "instance_storage_total_gb": 0,
+        "max_data_disks": 16,
+        "os_disk_size_mib": 1047552,
+        "premium_io_supported": true
+      },
+      "supported_boot_modes": [],
+      "supported_usage_classes": [
+        "on-demand",
+        "spot"
+      ],
+      "vcpu": 96
+    },
+    {
+      "accelerators": [
+        {
+          "canonical_gpu_name": "MI300X",
+          "count": 8,
+          "cuda_compute_capability": "NA",
+          "gpu_bandwidth_gbps": 5300,
+          "gpu_generation": "CDNA3",
+          "gpu_spec_source": "https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html",
+          "gpu_tflops_fp16": 1300,
+          "gpu_watts": 750,
+          "infinity_fabric_bandwidth_gbps": 1024,
+          "k8s_resource_name": "amd.com/gpu",
+          "kind": "gpu",
+          "memory_mib_each": 196608,
+          "memory_mib_total": 1572864,
+          "name": "MI300X",
+          "nvlink_bandwidth_gbps": "NA",
+          "pcie_bandwidth_gbps": 128,
+          "vendor": "amd"
+        }
+      ],
+      "architecture": [
+        "x64"
+      ],
+      "bare_metal": false,
+      "cloud": "azure",
+      "cpu_manufacturer": null,
+      "family": "standardNDISv5MI300XFamily",
+      "instance_type": "Standard_ND96isr_MI300X_v5",
+      "launch_capabilities": {
+        "efa_network_interface_profile": null,
+        "instance_store_policy": null,
+        "k8s_accelerator_resource_names": [
+          "amd.com/gpu"
+        ],
+        "recommended_efa_interfaces": 0,
+        "requires_amd_device_plugin": true,
+        "requires_neuron_device_plugin": false,
+        "requires_nvidia_device_plugin": false,
+        "supports_efa_nodeclass": false,
+        "supports_karpenter": false
+      },
+      "memory_mib": 1894400,
+      "network": {
+        "accelerated_networking_supported": true,
+        "efa_max_interfaces": 0,
+        "efa_supported": false,
+        "ena_srd_supported": false,
+        "ena_support": null,
+        "encryption_in_transit_supported": false,
+        "max_enis": 8,
+        "max_network_cards": null,
+        "network_cards": [],
+        "network_performance": null,
+        "rdma_supported": true
+      },
+      "offerings": [
+        {
+          "capacity_reservation_usd_per_hour": 62.853,
+          "location_type": "region",
+          "on_demand_usd_per_hour": 62.853,
+          "region": "westus",
+          "spot_usd_per_hour": null,
+          "zone_id": "default",
+          "zone_name": "default"
         }
       ],
       "pricing": {
@@ -4501,6 +4593,7 @@
     }
   ],
   "regions": [
+    "westus",
     "westus2"
   ],
   "source_skus": [
@@ -6040,7 +6133,7 @@
         },
         {
           "name": "vCPUsConstraintsAllowed",
-          "value": "1, 2, 4, 6, 8, 10, 12, 15, 16, 18, 20, 24, 28, 30, 32, 36, 40, 44, 45, 48, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144, 160, 176, 192, 208, 240, 288"
+          "value": "1, 2, 4, 6, 8, 10, 12, 15, 16, 18, 20, 24, 28, 30, 32, 36, 40, 44, 45, 48, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144, 160, 176, 192, 208, 240, 248, 288"
         },
         {
           "name": "vCPUsAvailable",
@@ -6244,7 +6337,7 @@
         },
         {
           "name": "vCPUsConstraintsAllowed",
-          "value": "1, 2, 4, 6, 8, 10, 12, 15, 16, 18, 20, 24, 28, 30, 32, 36, 40, 44, 45, 48, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144, 160, 176, 192, 208, 240, 288"
+          "value": "1, 2, 4, 6, 8, 10, 12, 15, 16, 18, 20, 24, 28, 30, 32, 36, 40, 44, 45, 48, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144, 160, 176, 192, 208, 240, 248, 288"
         },
         {
           "name": "vCPUsAvailable",
@@ -7004,7 +7097,7 @@
         },
         {
           "name": "LowPriorityCapable",
-          "value": "True"
+          "value": "False"
         },
         {
           "name": "PremiumIO",
@@ -8408,7 +8501,7 @@
         },
         {
           "name": "LowPriorityCapable",
-          "value": "True"
+          "value": "False"
         },
         {
           "name": "PremiumIO",
@@ -9235,6 +9328,142 @@
         }
       ],
       "size": "ND96isr_H100_v5",
+      "tier": "Standard"
+    },
+    {
+      "capabilities": [
+        {
+          "name": "MaxResourceVolumeMB",
+          "value": "1048576"
+        },
+        {
+          "name": "OSVhdSizeMB",
+          "value": "1047552"
+        },
+        {
+          "name": "vCPUs",
+          "value": "96"
+        },
+        {
+          "name": "MemoryPreservingMaintenanceSupported",
+          "value": "False"
+        },
+        {
+          "name": "HyperVGenerations",
+          "value": "V2"
+        },
+        {
+          "name": "DiskControllerTypes",
+          "value": "NVMe,SCSI"
+        },
+        {
+          "name": "SupportedEphemeralOSDiskPlacements",
+          "value": "CacheDisk,ResourceDisk"
+        },
+        {
+          "name": "MemoryGB",
+          "value": "1850"
+        },
+        {
+          "name": "MaxDataDiskCount",
+          "value": "16"
+        },
+        {
+          "name": "CpuArchitectureType",
+          "value": "x64"
+        },
+        {
+          "name": "LowPriorityCapable",
+          "value": "True"
+        },
+        {
+          "name": "PremiumIO",
+          "value": "True"
+        },
+        {
+          "name": "VMDeploymentTypes",
+          "value": "IaaS"
+        },
+        {
+          "name": "vCPUsConstraintsAllowed",
+          "value": "1, 2, 4, 6, 8, 10, 12, 15, 16, 18, 20, 24, 28, 30, 32, 36, 40, 44, 45, 48, 60, 64, 72, 80, 88, 96"
+        },
+        {
+          "name": "vCPUsAvailable",
+          "value": "96"
+        },
+        {
+          "name": "GPUs",
+          "value": "8"
+        },
+        {
+          "name": "vCPUsPerCore",
+          "value": "1"
+        },
+        {
+          "name": "CachedDiskBytes",
+          "value": "1099511627776"
+        },
+        {
+          "name": "UncachedDiskIOPS",
+          "value": "80000"
+        },
+        {
+          "name": "UncachedDiskBytesPerSecond",
+          "value": "1200000000"
+        },
+        {
+          "name": "NvmeDiskSizeInMiB",
+          "value": "29296875"
+        },
+        {
+          "name": "NvmeSizePerDiskInMiB",
+          "value": "3662109"
+        },
+        {
+          "name": "EphemeralOSDiskSupported",
+          "value": "True"
+        },
+        {
+          "name": "EncryptionAtHostSupported",
+          "value": "True"
+        },
+        {
+          "name": "CapacityReservationSupported",
+          "value": "False"
+        },
+        {
+          "name": "AcceleratedNetworkingEnabled",
+          "value": "True"
+        },
+        {
+          "name": "RdmaEnabled",
+          "value": "True"
+        },
+        {
+          "name": "MaxNetworkInterfaces",
+          "value": "8"
+        },
+        {
+          "name": "UltraSSDAvailable",
+          "value": "False"
+        }
+      ],
+      "family": "standardNDISv5MI300XFamily",
+      "locationInfo": [
+        {
+          "location": "westus",
+          "zoneDetails": [],
+          "zones": []
+        }
+      ],
+      "locations": [
+        "westus"
+      ],
+      "name": "Standard_ND96isr_MI300X_v5",
+      "resourceType": "virtualMachines",
+      "restrictions": [],
+      "size": "ND96isr_MI300X_v5",
       "tier": "Standard"
     },
     {

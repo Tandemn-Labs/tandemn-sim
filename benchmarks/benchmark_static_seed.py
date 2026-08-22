@@ -55,13 +55,13 @@ CANONICAL_USER_ID = "usr_01KZSQ1M34PKS5XC9ZDR6DDSJ5"
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"
 AZURE_CATALOG_KEY = "azure-accelerated-hardware-v1"
 EXPECTED_RESOURCE_MAP_SHAPES = {
-    "simulation_3h": (10, 200),
-    "simulation_12h": (10, 400),
-    "simulation_24h": (10, 800),
-    "real_life_3h": (10, 192),
+    "simulation_3h": (9, 200),
+    "simulation_12h": (9, 400),
+    "simulation_24h": (9, 800),
+    "real_life_3h": (9, 192),
     "real_3h_homogenous": (1, 128),
-    "real_life_12h": (10, 192),
-    "real_life_24h": (10, 192),
+    "real_life_12h": (9, 192),
+    "real_life_24h": (9, 192),
 }
 LOGGER = logging.getLogger(__name__)
 

@@ -62,7 +62,7 @@ def _azure_catalog() -> dict[str, object]:
     return {
         "catalog_version": AZURE_CATALOG_KEY,
         "cloud": "azure",
-        "instance_type_count": 2,
+        "instance_type_count": 3,
         "instance_types": [
             {
                 "instance_type": "Standard_ND96amsr_A100_v4",
@@ -73,6 +73,11 @@ def _azure_catalog() -> dict[str, object]:
                 "instance_type": "Standard_NC96ads_A100_v4",
                 "accelerators": [],
                 "offerings": [{"region": "westus2", "zone_name": "1"}],
+            },
+            {
+                "instance_type": "Standard_ND96isr_MI300X_v5",
+                "accelerators": [],
+                "offerings": [{"region": "westus", "zone_name": "default"}],
             },
         ],
     }
