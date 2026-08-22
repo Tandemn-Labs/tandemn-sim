@@ -1,0 +1,48 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_24hr-1020-2
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_24hr-1020-2
+  start_at_offset_minutes: 1020
+  deadline_at_offset_minutes: 1320
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 1560
+spec:
+  user_id: tenant_rlhf
+  optimization_goal: throughput
+  precision: fp16
+  features:
+    isl_token_avg: 1800
+    isl_token_min: 450
+    isl_token_max: 6000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 1000
+    osl_token_min: 250
+    osl_token_max: 4000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Constant
+    peak_to_mean_ratio: 1
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    total_token_budget: 100800000
+    priority_class: STANDARD
+    deadline_hrs: 5
+    target_p99_ttft_ms: 12000
+    target_p99_tpot_ms: 160
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: rlhf_label_generation
+    model: zai-org/GLM-4.5-Air
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 36000
+    seed: 219
+    partitioning:
+      shard_count: 180
+      requests_per_shard: 200
+      max_in_flight_requests: 4

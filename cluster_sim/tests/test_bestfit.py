@@ -25,7 +25,7 @@ from models import OnlineJob, Scenario
 from policy import VALID_TP_DEGREES, load_config_policy
 from serving import build_rank_cluster
 from tandemn_system_data.models import Plan
-from vram import ResourceTarget
+from vram import VRAM_REQUIREMENTS_GIB, ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 _SERVINGSIM_HARDWARE = {
@@ -121,6 +121,35 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                     _fits_capacity_bins(shapes, market_limits),
                     f"{hardware} exceeds market capacity at minute {offset}",
                 )
+
+    def test_simulation_mappings_match_jobs_models_and_resources(self) -> None:
+        """Cross-reference every simulation job with both static baselines."""
+        policy = load_config_policy()
+        for benchmark in ("simulation_3h", "simulation_12h", "simulation_24h"):
+            root = ROOT / "benchmarks" / benchmark
+            resources = {
+                resource["accelerator"]
+                for resource in yaml.safe_load(
+                    (root / "resources.yaml").read_text(encoding="utf-8")
+                )["resources"]
+            }
+            jobs = {}
+            for path in sorted((root / "jobs").glob("*.yaml")):
+                job = yaml.safe_load(path.read_text(encoding="utf-8"))
+                source = job["workload"].get("benchmark") or job["workload"]["dataset"]
+                jobs[job["job_id"]] = source["model"]
+
+            mappings = BEST_FIT_CONFIGURATIONS[benchmark]
+            self.assertEqual(set(mappings), set(jobs))
+            self.assertEqual(set(VRAM_REQUIREMENTS_GIB[benchmark]), set(jobs))
+            for job_id, model_id in jobs.items():
+                mapping = mappings[job_id]
+                hardware = mapping["hardware"]
+                self.assertIn(hardware, resources)
+                rule = policy.rule_for(hardware, model_id)
+                self.assertIsNotNone(rule, f"unsupported mapping for {job_id}")
+                assert rule is not None
+                self.assertIn(mapping["configuration"]["tp"], rule.allowed_tp)
 
     def test_waiting_jobs_exclude_terminal_jobs(self) -> None:
         """Defer a later mapped job without an action for a terminal job."""

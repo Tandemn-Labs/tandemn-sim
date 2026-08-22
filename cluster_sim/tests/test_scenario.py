@@ -118,7 +118,7 @@ class ScenarioTest(unittest.TestCase):
             if "-0-4" in job.name or "-49-2" in job.name
         }
 
-        self.assertAlmostEqual(online_intensity, 591_045.6)
+        self.assertAlmostEqual(online_intensity, 573_765.6)
         self.assertEqual(len(moderation), 2)
         for job in moderation.values():
             self.assertEqual(job.workload["features"]["max_concurrent_streaming"], 32)
@@ -145,7 +145,7 @@ class ScenarioTest(unittest.TestCase):
             ) / 1_000_000_000
             peak_rate += rate * min(elapsed_seconds / ramp, 1) if ramp else rate
         self.assertEqual(peak_concurrency, 520)
-        self.assertAlmostEqual(peak_rate, 89.8295555556)
+        self.assertAlmostEqual(peak_rate, 87.6256666667)
 
         batch_documents = []
         job_paths = (ROOT / "benchmarks/simulation_3h/jobs").glob("*.yaml")
@@ -204,9 +204,9 @@ class ScenarioTest(unittest.TestCase):
         """Keep Azure benchmark capacity aligned with the seeded catalog offerings."""
         rows = [
             json.loads(line)
-            for line in (
-                ROOT / "benchmarks/resource_map_benchmarking.jsonl"
-            ).read_text().splitlines()
+            for line in (ROOT / "benchmarks/resource_map_benchmarking.jsonl")
+            .read_text()
+            .splitlines()
         ]
         resource_map = next(
             row["resource_map"]

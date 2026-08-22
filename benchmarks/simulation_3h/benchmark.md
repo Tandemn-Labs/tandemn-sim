@@ -82,7 +82,7 @@ Overlap: `base_service` remains active, `additive_stream` adds demand to an exis
 
 Planner fairness: descriptions, trace names, human-readable tenant labels, and `input_source` are not exposed to planners. Every planner receives the same sanitized job features. Hardware placement and market preferences are deliberately absent from job inputs.
 
-Traffic: `max_concurrent_streaming` is the planner-facing service cap; the matching AIPerf phase `concurrency` is the client cap. AIPerf phase `rate` is the submitted request rate and is deliberately bounded by the capacity envelope. `request_arrival_rate` is omitted from the Orca payload so Orca remains in concurrency mode. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`.
+Traffic: `max_concurrent_streaming` is the planner-facing service cap; the matching AIPerf phase `concurrency` is the client cap. AIPerf phase `rate` is the submitted request rate and is deliberately bounded by the capacity envelope. `request_arrival_rate` is omitted from the Orca payload so Orca remains in concurrency mode. Patterns are limited to `Poisson`, `Constant`, `Bursty`, and `Diurnal`; every Diurnal gamma phase ramps across its full active window.
 
 Input modes: every online job uses `api_load_generator` to ping an OpenAI-compatible endpoint under its concurrency profile. Every batch campaign uses a finite `dataset` partitioned into required shards.
 
