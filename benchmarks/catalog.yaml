@@ -26,6 +26,11 @@ benchmarks:
     environment: real_hardware
     duration_hours: 3
     status: executable
+  15min_real:
+    manifest: 15min_real/benchmark.yaml
+    environment: real_hardware
+    duration_hours: 0.25
+    status: executable
   real_life_12h:
     manifest: real_life_12h/benchmark.yaml
     environment: real_hardware

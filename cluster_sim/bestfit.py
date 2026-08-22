@@ -23,6 +23,12 @@ BEST_FIT_CONFIGURATIONS: dict[
     str,
     dict[str, dict[str, object]],
 ] = {
+    "15min_real": {
+        "job-benchmark_timing_15min_real-0-1": {
+            "hardware": "L40S-48GB",
+            "configuration": {"tp": 8, "pp": 1, "dp": 3},
+        },
+    },
     "real_3h_homogenous": {
         "job-benchmark_timing_real_3hr_homogenous-0-1": {
             "hardware": "L40S-48GB",
@@ -1183,7 +1189,7 @@ class BestFitPlannerDriver:
             if used_vram_fallback:
                 reserve_vram_placement(target, tp * pp * dp)
             else:
-                _reserve(target, tp * pp * dp)
+                _reserve(target, tp * pp, dp)
             actions.append(
                 _place_action(
                     job_id,
@@ -1215,7 +1221,7 @@ def _mapped_placement(
     targets = _matching_targets(resources, hardware)
     feasible = []
     for target in targets:
-        footprint = _target_footprint(target, tp * pp * dp)
+        footprint = _target_footprint(target, tp * pp, dp)
         if footprint is None or footprint > _target_available(target):
             continue
         feasible.append(
@@ -1361,29 +1367,33 @@ def _target_available(target: ResourceTarget) -> int:
     return max(0, available)
 
 
-def _target_footprint(target: ResourceTarget, gpu_count: int) -> int | None:
+def _target_footprint(
+    target: ResourceTarget,
+    gpu_count: int,
+    replicas: int = 1,
+) -> int | None:
     """Translate mapped GPUs into the target's allocation unit."""
     if target.pool is None:
-        return gpu_count
+        return gpu_count * replicas
     allocation_kind = str(
         target.pool.get("allocation_kind")
         or target.pool.get("allocation_unit")
         or "instance"
     ).lower()
     if allocation_kind == "gpu":
-        return gpu_count
+        return gpu_count * replicas
     gpus_per_instance = _positive_int(
         target.pool.get("gpus_per_instance"),
         "gpus_per_instance",
     )
     if gpu_count > gpus_per_instance:
         return None
-    return gpus_per_instance
+    return gpus_per_instance * replicas
 
 
-def _reserve(target: ResourceTarget, gpu_count: int) -> None:
+def _reserve(target: ResourceTarget, gpu_count: int, replicas: int = 1) -> None:
     """Reserve a mapped placement before evaluating the next waiting job."""
-    footprint = _target_footprint(target, gpu_count)
+    footprint = _target_footprint(target, gpu_count, replicas)
     if footprint is None or footprint > _target_available(target):
         raise RuntimeError("selected best-fit placement no longer fits")
     target.environment["free"] = int(target.environment["free"]) - footprint

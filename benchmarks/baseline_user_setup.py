@@ -32,9 +32,9 @@ from tandemn_system_data.models._base import utc_now
 from tandemn_system_data.models.resource_map import ResourceMap
 
 if __package__:
-    from benchmarks.seed_benchmark_store import load_resource_map
+    from benchmarks.seed_benchmark_store import DEFAULT_BENCHMARK_ID, load_resource_map
 else:
-    from seed_benchmark_store import load_resource_map
+    from seed_benchmark_store import DEFAULT_BENCHMARK_ID, load_resource_map
 
 BENCHMARKS = Path(__file__).resolve().parent
 BASELINES = (
@@ -68,6 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=BENCHMARKS / "resource_map_benchmarking.jsonl",
     )
+    parser.add_argument("--benchmark-id", default=DEFAULT_BENCHMARK_ID)
     return parser.parse_args(argv)
 
 
@@ -216,7 +217,10 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args(argv)
     name = baseline_name(args.baseline, args.run_id)
-    canonical_user_id, resource_map = load_resource_map(args.resource_map)
+    canonical_user_id, resource_map = load_resource_map(
+        args.resource_map,
+        args.benchmark_id,
+    )
     client = PostgresClient()
     require_static_seed(client, canonical_user_id)
     user_id = reset_user(client, name=name, resource_map=resource_map)

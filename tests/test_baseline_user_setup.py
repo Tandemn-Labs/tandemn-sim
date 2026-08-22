@@ -71,6 +71,21 @@ class BaselineUserSetupTest(unittest.TestCase):
         args = parse_args(["--baseline", "koi", "--run-id", "run-1"])
 
         self.assertIsNone(args.koi_root)
+        self.assertEqual(args.benchmark_id, "simulation_3h")
+
+    def test_selects_the_run_resource_map(self) -> None:
+        args = parse_args(
+            [
+                "--baseline",
+                "bestfit",
+                "--run-id",
+                "run-1",
+                "--benchmark-id",
+                "15min_real",
+            ]
+        )
+
+        self.assertEqual(args.benchmark_id, "15min_real")
 
     @unittest.skipUnless(
         os.getenv("BASELINE_USER_SETUP_SMOKE") == "1",
