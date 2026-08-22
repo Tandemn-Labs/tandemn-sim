@@ -52,6 +52,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         simulator = object.__new__(ClusterSimulator)
         simulator.scenario = Scenario("trace-smoke", 1, 0, (), ())
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
 
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
@@ -760,9 +762,11 @@ class RunnerDataPlaneTest(unittest.TestCase):
         calls = []
         simulator = object.__new__(ClusterSimulator)
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
         simulator.jobs = SimpleNamespace(
             set_rank_status=lambda *args: calls.append(args),
-            transition=lambda *args: calls.append(args),
+            transition=lambda *args: calls.append(args) or True,
         )
         simulator._batch_jobs = {
             "job-a": BatchJob(
@@ -780,9 +784,12 @@ class RunnerDataPlaneTest(unittest.TestCase):
             ranks=(SimpleNamespace(rank_id="rank-1"),),
         )
 
+        outcomes = []
         with tempfile.TemporaryDirectory() as directory:
             simulator.trace_file = Path(directory) / "trace.jsonl"
-            simulator._finish(running)
+            with patch("tandemn_system_data.clients.event_log.PostgresEventLog") as event_log:
+                event_log.return_value.append.side_effect = outcomes.append
+                simulator._finish(running)
 
             event = json.loads(simulator.trace_file.read_text(encoding="utf-8").splitlines()[-1])
 
@@ -790,6 +797,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertTrue(event["deadline_slo_met"])
         self.assertEqual(event["deadline_outcome"], "met")
         self.assertEqual(len(calls), 2)
+        self.assertTrue(outcomes[0].payload_json["deadline_met"])
 
     def test_fail_oom_keeps_siblings_and_job_running(self) -> None:
         """Mark only the OOM rank failed so Koi can repair the job."""
