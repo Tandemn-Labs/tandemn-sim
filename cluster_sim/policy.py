@@ -126,6 +126,7 @@ _HARDWARE_ALIASES = {
     "h200-sxm-141gb": "h200",
     "l4-24gb": "l4",
     "l40s-48gb": "l40s",
+    "mi300": "mi300x",
     "mi300x-192gb": "mi300x",
 }
 

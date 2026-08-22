@@ -275,6 +275,7 @@ _HARDWARE_ALIASES = {
     "a10g-24gb": "a10g-24gb",
     "l40s": "l40s-48gb",
     "l40s-48gb": "l40s-48gb",
+    "mi300": "mi300x-192gb",
     "mi300x": "mi300x-192gb",
     "mi300x-192gb": "mi300x-192gb",
 }
