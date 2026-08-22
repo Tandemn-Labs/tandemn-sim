@@ -1,0 +1,11 @@
+schema_version: "resource-map/v1"
+
+resources:
+  - id: l40s-48gb
+    accelerator: L40S-48GB
+    total_devices: 24
+    devices_per_node: 8
+    memory_gb: 48
+    aic_system: l40s
+    markets: {on_demand: 24}
+    regions: {us-east: 24}

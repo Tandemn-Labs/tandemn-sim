@@ -28,6 +28,7 @@ The benchmark catalog currently includes:
 - 3-hour, 12-hour, and 24-hour simulation workloads.
 - 3-hour, 12-hour, and 24-hour real-hardware workload definitions.
 - `real_3h_homogenous`, an executable 3-hour benchmark for a homogeneous, on-demand L40S cluster.
+- `15min_real`, a 15-minute Orca smoke benchmark capped at 24 L40S GPUs.
 
 See `benchmarks/catalog.yaml` for the complete list and execution status of each benchmark. Experiment groups in `experiments/` combine benchmarks, scheduler methods, and metric suites for specific evaluations.
 

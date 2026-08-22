@@ -60,6 +60,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_24h": (9, 800),
     "real_life_3h": (9, 192),
     "real_3h_homogenous": (1, 128),
+    "15min_real": (1, 24),
     "real_life_12h": (9, 192),
     "real_life_24h": (9, 192),
 }

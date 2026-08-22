@@ -62,6 +62,7 @@ class VramPlannerDriverTest(unittest.TestCase):
                 "real_life_24h": 41,
                 "real_life_3h": 19,
                 "real_3h_homogenous": 25,
+                "15min_real": 1,
                 "simulation_12h": 37,
                 "simulation_24h": 48,
                 "simulation_3h": 25,
