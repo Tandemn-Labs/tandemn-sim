@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
+from rank_ids import rank_id
 from vram import (
     _HARDWARE_MEMORY_GIB,
     LAUNCH_FIELDS,
@@ -42,7 +43,6 @@ from vram import (
 )
 
 _FEATURE_COUNT = 11
-_COST_WEIGHT = 0.05
 _PRIORITY_LEVELS = {
     "BEST_EFFORT": 1,
     "LOW": 1,
@@ -146,12 +146,15 @@ class PlanStoreClient(Protocol):
 
 @dataclass(frozen=True)
 class _PendingObservation:
-    """Keep the action context until the simulator returns its first outcome."""
+    """Keep a placement context until Store exposes its outcome."""
 
     features: tuple[float, ...]
-    ttft_limit_ns: float | None
-    tpot_limit_ns: float | None
-    normalized_price: float
+    rank_id: str
+    window_start: datetime
+    required_tps: float | None
+    is_batch: bool
+    ttft_target_ms: float | None
+    tpot_target_ms: float | None
 
 
 class ContextualBanditPlannerDriver:
@@ -205,15 +208,17 @@ class ContextualBanditPlannerDriver:
     ) -> ContextualBanditPlannerDriver:
         """Build the baseline with the same Store clients as static planners."""
         from tandemn_system_data.clients import (
+            GpuMetricStore,
             JobStore,
             ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
         )
+        from tandemn_system_data.clients.event_log import PostgresEventLog
 
         postgres = postgres_client or PostgresClient()
-        return cls(
+        driver = cls(
             user_id=user_id,
             scenario=scenario,
             job_store=JobStore(postgres),
@@ -223,6 +228,10 @@ class ContextualBanditPlannerDriver:
             backend="vllm",
             config_policy=load_config_policy(),
         )
+        driver.metric_store = GpuMetricStore(postgres)
+        driver.event_log = PostgresEventLog(postgres)
+        driver._event_cursor: str | None = None
+        return driver
 
     def create_plans(
         self,
@@ -230,8 +239,9 @@ class ContextualBanditPlannerDriver:
         logical_time: datetime,
     ) -> PlannerResult:
         """Read one Store snapshot, persist one plan, and return its identity."""
-        del logical_time
         try:
+            self._observe_store_results(logical_time)
+            self._feedback_start = logical_time
             snapshot = self._read_store_snapshot()
             actions = self._build_actions(snapshot)
             if not actions:
@@ -261,6 +271,55 @@ class ContextualBanditPlannerDriver:
                 degraded=True,
                 error=repr(error),
             )
+
+    def _observe_store_results(self, logical_time: datetime) -> None:
+        """Learn only from this baseline's prior public Store outcomes."""
+        for event in self.event_log.read_after(
+            self._event_cursor,
+            types={"batch.outcome"},
+        ):
+            self._event_cursor = event.event_id
+            if event.user_id != self.user_id or event.job_id is None:
+                continue
+            observation = self._pending.get(event.job_id)
+            if observation is None or not observation.is_batch:
+                continue
+            self._observe_metrics(
+                event.job_id,
+                observation,
+                logical_time,
+                batch_deadline_met=event.payload_json.get("deadline_met") is True,
+            )
+
+        for job_id, observation in tuple(self._pending.items()):
+            if not observation.is_batch:
+                self._observe_metrics(job_id, observation, logical_time)
+
+    def _observe_metrics(
+        self,
+        job_id: str,
+        observation: _PendingObservation,
+        logical_time: datetime,
+        *,
+        batch_deadline_met: bool | None = None,
+    ) -> None:
+        """Aggregate one action's persisted rank telemetry into a reward."""
+        metrics = self.metric_store.rows_for_rank_window(
+            self.user_id,
+            job_id,
+            observation.rank_id,
+            observation.window_start,
+            logical_time,
+        )
+        if not metrics and batch_deadline_met is None:
+            return
+        self.observe_results(
+            job_id,
+            p99_ttft_ms=_worst_metric(metrics, "p99_ttft_ms"),
+            p99_tpot_ms=_worst_metric(metrics, "p99_tpot_ms"),
+            throughput_token_per_sec=_mean_rank_throughput(metrics),
+            batch_deadline_met=batch_deadline_met,
+        )
 
     def _read_store_snapshot(self) -> StoreSnapshot:
         """Freeze resources and canonical lifecycle groups for one tick."""
@@ -350,10 +409,6 @@ class ContextualBanditPlannerDriver:
             ]
             if not feasible:
                 continue
-            price_scale = max(
-                1.0,
-                *(candidate.price_per_hour for candidate in feasible),
-            )
             sampled_weight = self._sample_weight()
             ranked = []
             for candidate in feasible:
@@ -381,11 +436,15 @@ class ContextualBanditPlannerDriver:
                 remaining[key] -= candidate.footprint
             selected[problem.job_id] = candidate
             known = _known_job_fields(problem.store_job)
+            kind = getattr(known.get("kind"), "value", known.get("kind"))
             self._pending[problem.job_id] = _PendingObservation(
                 features=features,
-                ttft_limit_ns=_latency_limit_ns(known.get("target_p99_ttft_ms")),
-                tpot_limit_ns=_latency_limit_ns(known.get("target_p99_tpot_ms")),
-                normalized_price=candidate.price_per_hour / price_scale,
+                rank_id=rank_id(known),
+                window_start=self._feedback_start,
+                required_tps=_target_tps(known),
+                is_batch=kind == "batch",
+                ttft_target_ms=_number(known.get("target_p99_ttft_ms")),
+                tpot_target_ms=_number(known.get("target_p99_tpot_ms")),
             )
         return selected
 
@@ -401,43 +460,38 @@ class ContextualBanditPlannerDriver:
             candidate,
             model_catalogs,
             self.config_policy,
+            rank_name=self._pending[candidate.job_id].rank_id,
         )
 
     def observe_results(
         self,
         job_id: str,
-        results: Sequence[object],
-        tick_duration_ns: int,
-        offered_output_tokens: int,
-        is_batch: bool = False,
+        *,
+        p99_ttft_ms: float | None,
+        p99_tpot_ms: float | None,
+        throughput_token_per_sec: float | None,
         batch_deadline_met: bool | None = None,
     ) -> None:
-        """Update from online latency goodput or completed batch goodput."""
+        """Update from public Store latency, throughput, and deadline outcomes."""
         observation = self._pending.get(job_id)
-        if observation is None or tick_duration_ns <= 0 or offered_output_tokens <= 0:
+        if observation is None:
             return
-        if is_batch and batch_deadline_met is None:
+        if observation.is_batch and batch_deadline_met is None:
             return
         self._pending.pop(job_id)
-        qualified_tokens = 0.0
-        for result in results:
-            rows = getattr(result, "request_rows", ())
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    continue
-                if not is_batch and not _meets_latency_targets(row, observation):
-                    continue
-                output = _finite_nonnegative(row.get("output"))
-                if output is not None:
-                    qualified_tokens += output
-        if is_batch and not batch_deadline_met:
-            qualified_tokens = 0.0
-        qualified_fraction = min(1.0, qualified_tokens / offered_output_tokens)
-        reward = (
-            2 * qualified_fraction
-            - 1
-            - _COST_WEIGHT * observation.normalized_price
+        throughput_score = _throughput_score(
+            throughput_token_per_sec,
+            observation.required_tps,
         )
+        if observation.is_batch:
+            deadline_score = 1.0 if batch_deadline_met else -1.0
+            reward = 0.4 * throughput_score + 0.6 * deadline_score
+        else:
+            reward = (
+                0.4 * _latency_score(p99_ttft_ms, observation.ttft_target_ms)
+                + 0.4 * _latency_score(p99_tpot_ms, observation.tpot_target_ms)
+                + 0.2 * throughput_score
+            )
         _rank_one_update(
             self._precision,
             self._reward_weight,
@@ -600,6 +654,8 @@ def build_contextual_bandit_plan(
     candidate: PlacementCandidate,
     model_catalogs: Mapping[str, Mapping[str, Any]],
     config_policy: ConfigPolicy,
+    *,
+    rank_name: str | None = None,
 ) -> dict[str, object]:
     """Return one complete contextual-bandit placement plan."""
     known = _known_job_fields(store_job)
@@ -618,17 +674,13 @@ def build_contextual_bandit_plan(
     return {
         "job_id": candidate.job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": known.get("rank_id") or "rank_0",
+                "rank_id": rank_name or rank_id(known),
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
                     **launch_config,
@@ -661,13 +713,9 @@ def verify_place_plan(
     required_plan_keys = {
         "job_id",
         "type",
-        "tenant_id",
         "target_tps",
         "target_p99_ttft_ms",
         "target_p99_tpot_ms",
-        "mechanism_id",
-        "budget_ref",
-        "rationale",
         "ladder",
     }
     if set(plan) != required_plan_keys:
@@ -788,26 +836,37 @@ def _tightness(value: object) -> float:
     return 0.0 if target is None or target == 0 else min(1.0, 1_000 / target)
 
 
-def _latency_limit_ns(value: object) -> float | None:
-    """Convert an optional Store millisecond latency target to nanoseconds."""
-    target = _finite_nonnegative(value)
-    return None if target is None or target == 0 else target * 1_000_000
+def _latency_score(observed: float | None, target: float | None) -> float:
+    """Score lower latency against one required p99 target."""
+    if observed is None or target is None or target <= 0:
+        return -1.0
+    return max(-1.0, min(1.0, 1 - observed / target))
 
 
-def _meets_latency_targets(
-    row: Mapping[str, object],
-    observation: _PendingObservation,
-) -> bool:
-    """Require every latency target available for the placed job."""
-    ttft = _finite_nonnegative(row.get("TTFT"))
-    tpot = _finite_nonnegative(row.get("TPOT"))
-    ttft_ok = observation.ttft_limit_ns is None or (
-        ttft is not None and ttft <= observation.ttft_limit_ns
-    )
-    tpot_ok = observation.tpot_limit_ns is None or (
-        tpot is not None and tpot <= observation.tpot_limit_ns
-    )
-    return ttft_ok and tpot_ok
+def _throughput_score(observed: float | None, required: float | None) -> float:
+    """Score delivered output throughput against one required rate."""
+    if observed is None or required is None or required <= 0:
+        return -1.0
+    return max(-1.0, min(1.0, observed / required - 1))
+
+
+def _worst_metric(metrics: Sequence[object], field: str) -> float | None:
+    """Return the worst finite rank value across one Store telemetry window."""
+    values = [_finite_nonnegative(getattr(metric, field, None)) for metric in metrics]
+    present = [value for value in values if value is not None]
+    return None if not present else max(present)
+
+
+def _mean_rank_throughput(metrics: Sequence[object]) -> float | None:
+    """Average one rank's per-timestamp throughput without GPU-row double counting."""
+    by_timestamp: dict[object, float] = {}
+    for metric in metrics:
+        value = _finite_nonnegative(getattr(metric, "throughput_token_per_sec", None))
+        if value is None:
+            continue
+        timestamp = getattr(metric, "ts", None)
+        by_timestamp[timestamp] = max(by_timestamp.get(timestamp, 0.0), value)
+    return None if not by_timestamp else sum(by_timestamp.values()) / len(by_timestamp)
 
 
 def _finite_nonnegative(value: object) -> float | None:

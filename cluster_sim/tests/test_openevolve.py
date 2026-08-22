@@ -160,6 +160,22 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             ],
         )
 
+    def test_resource_payload_resolves_store_mi300_memory(self) -> None:
+        """Accept the MI300 spelling used by Store resource maps and profiles."""
+        payload = _resource_prompt_payload(
+            {
+                "reserved|runpod|AU|default|MI300": {
+                    "gpu_type": "MI300",
+                    "pools": [],
+                }
+            }
+        )
+
+        self.assertEqual(
+            payload["reserved|runpod|AU|default|MI300"]["gpu_memory_gib"],
+            192.0,
+        )
+
     def test_driver_excludes_terminal_jobs(self) -> None:
         """Own lifecycle actions without acting on terminal jobs."""
         driver = _driver()

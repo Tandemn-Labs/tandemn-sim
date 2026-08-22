@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from contextual_bandit import (
     ContextualBanditPlannerDriver,
     PlacementCandidate,
     StoreSnapshot,
+    _PendingObservation,
     build_contextual_bandit_plan,
     verify_place_plan,
 )
@@ -110,9 +112,79 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         config = plan["ladder"][0]["config"]
         self.assertEqual(config["max_num_seq"], 256)
         self.assertEqual(config["count"], 1)
+        self.assertNotIn("tenant_id", plan)
+        self.assertNotIn("mechanism_id", plan)
+        self.assertNotIn("budget_ref", plan)
+        self.assertNotIn("rationale", plan)
+        self.assertTrue(plan["ladder"][0]["rank_id"].startswith("rank_"))
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
         verify_place_plan(plan, candidate, catalogs, policy)
+
+    def test_pending_rank_id_matches_the_placement_plan(self) -> None:
+        """Query Store telemetry using the rank identity Orca materializes."""
+        candidate = _candidate()
+        driver = _reward_driver()
+        driver.config_policy = load_config_policy()
+        driver._pending["job"] = _observation(
+            datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        problem = SimpleNamespace(store_job=_store_job("job"))
+
+        plan = driver._build_place_plan(problem, candidate, _catalogs())
+
+        self.assertEqual(
+            plan["ladder"][0]["rank_id"],
+            driver._pending["job"].rank_id,
+        )
+
+    def test_online_reward_uses_store_aggregate_metrics(self) -> None:
+        """Learn one weighted online reward from public rank metrics."""
+        driver = _reward_driver()
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        driver._pending["job"] = _observation(now)
+        driver.event_log = SimpleNamespace(read_after=lambda *_args, **_kwargs: ())
+        driver._event_cursor = None
+        driver.metric_store = SimpleNamespace(
+            rows_for_rank_window=lambda *_args: (
+                SimpleNamespace(
+                    ts=now,
+                    p99_ttft_ms=250.0,
+                    p99_tpot_ms=25.0,
+                    throughput_token_per_sec=150.0,
+                ),
+            )
+        )
+
+        driver._observe_store_results(now)
+
+        self.assertEqual(driver.observation_count, 1)
+        self.assertAlmostEqual(driver.last_reward, 0.5)
+        self.assertNotIn("job", driver._pending)
+
+    def test_batch_reward_prioritizes_deadline(self) -> None:
+        """Keep deadline success positive and deadline misses negative."""
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        driver = _reward_driver()
+        driver._pending["met"] = _observation(now, is_batch=True)
+        driver.observe_results(
+            "met",
+            p99_ttft_ms=None,
+            p99_tpot_ms=None,
+            throughput_token_per_sec=100.0,
+            batch_deadline_met=True,
+        )
+        self.assertAlmostEqual(driver.last_reward, 0.6)
+
+        driver._pending["missed"] = _observation(now, is_batch=True)
+        driver.observe_results(
+            "missed",
+            p99_ttft_ms=None,
+            p99_tpot_ms=None,
+            throughput_token_per_sec=100.0,
+            batch_deadline_met=False,
+        )
+        self.assertAlmostEqual(driver.last_reward, -0.6)
 
 
 def _store_job(job_id: str) -> dict[str, object]:
@@ -122,6 +194,38 @@ def _store_job(job_id: str) -> dict[str, object]:
         "user_id": "tenant",
         "spec_json": {"model_id": MODEL_ID},
     }
+
+
+def _reward_driver() -> ContextualBanditPlannerDriver:
+    """Build only the Thompson state needed for reward observations."""
+    driver = object.__new__(ContextualBanditPlannerDriver)
+    driver._precision = [
+        [1.0 if row == column else 0.0 for column in range(11)]
+        for row in range(11)
+    ]
+    driver._reward_weight = [0.0] * 11
+    driver._pending = {}
+    driver.user_id = "user"
+    driver.observation_count = 0
+    driver.last_reward = None
+    return driver
+
+
+def _observation(
+    now: datetime,
+    *,
+    is_batch: bool = False,
+) -> _PendingObservation:
+    """Return one public action context with unit throughput target."""
+    return _PendingObservation(
+        features=(1.0,) * 11,
+        rank_id="rank_test",
+        window_start=now,
+        required_tps=100.0,
+        is_batch=is_batch,
+        ttft_target_ms=500.0,
+        tpot_target_ms=50.0,
+    )
 
 
 def _launch_config() -> dict[str, object]:
@@ -146,6 +250,30 @@ def _launch_config() -> dict[str, object]:
         "block_size": 16,
         "kvcache_dtype": "auto",
     }
+
+
+def _candidate() -> PlacementCandidate:
+    """Return one policy-compliant L40S candidate."""
+    return PlacementCandidate(
+        candidate_id="candidate",
+        job_id="job",
+        target=ResourceTarget(
+            environment_key="reserved|aws|us-east|use1-az1|L40S",
+            environment={},
+            pool=None,
+            gpu_type="L40S",
+            instance_type=None,
+        ),
+        tp=1,
+        pp=1,
+        dp=1,
+        footprint=1,
+        memory_gib=48.0,
+        required_vram_gib=1.0,
+        model_weight_gib=1.0,
+        kv_demand=0.0,
+        price_per_hour=1.0,
+    )
 
 
 def _catalogs() -> dict[str, dict[str, object]]:

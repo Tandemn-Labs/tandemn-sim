@@ -270,6 +270,17 @@ def _build_openevolve(context: PlannerContext) -> PlannerDriver:
     )
 
 
+def _build_contextual_bandit(context: PlannerContext) -> PlannerDriver:
+    """Build the Store-feedback contextual Thompson-sampling baseline."""
+    from contextual_bandit import ContextualBanditPlannerDriver
+
+    return ContextualBanditPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        context.postgres,
+    )
+
+
 def _build_evox(context: PlannerContext) -> PlannerDriver:
     """Build the Store-backed SkyDiscover EvoX planner."""
     from evox import EvoxPlannerDriver
@@ -296,6 +307,7 @@ PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "cp_sat": _build_cp_sat,
     "gpt_only": _build_gpt,
     "openevolve": _build_openevolve,
+    "contextual_bandit": _build_contextual_bandit,
     "evox": _build_evox,
 }
 
