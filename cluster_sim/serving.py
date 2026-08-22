@@ -256,6 +256,9 @@ def resolve_rank_hardware(
     shape = deployment.shape
     _, cloud, region, _, gpu_type = shape["env"]
     instance_type = shape["instance_type"]
+    profile = PROFILE_ALIASES.get(gpu_type)
+    if profile is None:
+        raise ValueError(f"no LLMServingSim profile alias for {gpu_type}")
     regions = list(catalog["regions"])
     for region_catalog in sorted(
         regions,
@@ -267,14 +270,13 @@ def resolve_rank_hardware(
             if instance["instance_type"] != instance_type:
                 continue
             for accelerator in instance["accelerators"]:
-                if _gpu_name(gpu_type) not in {
+                expected_gpu_names = {_gpu_name(gpu_type), _gpu_name(profile)}
+                accelerator_names = {
                     _gpu_name(accelerator.get("name")),
                     _gpu_name(accelerator.get("canonical_gpu_name")),
-                }:
+                }
+                if expected_gpu_names.isdisjoint(accelerator_names):
                     continue
-                profile = PROFILE_ALIASES.get(gpu_type)
-                if profile is None:
-                    raise ValueError(f"no LLMServingSim profile alias for {gpu_type}")
                 link = (
                     accelerator.get("infinity_fabric_bandwidth_gbps")
                     or accelerator.get("nvlink_bandwidth_gbps")

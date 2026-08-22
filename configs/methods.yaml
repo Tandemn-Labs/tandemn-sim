@@ -50,9 +50,12 @@ methods:
   helix:
     display_name: Helix + frozen admission/queue/batch wrapper
     status: planned
-  contextual_bo:
-    display_name: Contextual BO/bandit
-    status: planned
+  contextual_bandit:
+    display_name: Contextual Thompson sampler
+    status: implemented
+    settings:
+      online_reward: "0.4*ttft + 0.4*tpot + 0.2*throughput"
+      batch_reward: "0.4*throughput + 0.6*deadline"
   gpt_only:
     display_name: GPT-only placement + common safety checks
     status: implemented
