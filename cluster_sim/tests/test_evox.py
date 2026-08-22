@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from evox import (
     EVOX_INITIAL_PROGRAM,
+    EvoxDeadlineExceeded,
     EvoxPlannerDriver,
     OnlineSkyDiscoverEvoxClient,
     StoreSnapshot,
@@ -22,6 +24,7 @@ from evox import (
     build_evox_plan,
     build_placement_problems,
     capacity_limits,
+    run_evox_discovery,
 )
 from llm_usage import LlmUsage
 from policy import load_config_policy
@@ -125,6 +128,65 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         self.assertTrue(plan["ladder"][0]["rank_id"].startswith("rank_"))
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
+
+    def test_timeout_uses_previous_valid_program(self) -> None:
+        """Return a placement from the warm-start program after the deadline."""
+        policy = load_config_policy()
+        resources = _resources()
+        problems = build_placement_problems(
+            (_store_job(),), resources, "test", {}, policy, _catalogs()
+        )
+        capacities = capacity_limits(resources)
+        usage = LlmUsage(5, 60, 15, "model-used")
+        client = OnlineSkyDiscoverEvoxClient(
+            model="model-test",
+            iterations=2,
+            output_dir=Path("outputs/test-evox"),
+        )
+
+        with patch(
+            "evox.run_evox_discovery",
+            side_effect=EvoxDeadlineExceeded((usage,)),
+        ):
+            selected, actual_usage = client.select(5, problems, capacities)
+
+        self.assertEqual(selected, {"waiting": problems[0].candidates[0]})
+        self.assertEqual(actual_usage, (usage,))
+        self.assertEqual(client.initial_program, EVOX_INITIAL_PROGRAM)
+        self.assertEqual(client.tick_number, 1)
+
+    def test_discovery_enforces_total_and_request_timeouts(self) -> None:
+        """Interrupt discovery at its wall budget while allowing long LLM calls."""
+        captured = {}
+
+        class Config:
+            @staticmethod
+            def from_dict(value):
+                captured.update(value)
+                return SimpleNamespace(llm=SimpleNamespace(models=[]))
+
+        class LLMPool:
+            async def check_availability(self):
+                return True
+
+        def run_discovery(**_kwargs):
+            time.sleep(1)
+
+        modules = {
+            "skydiscover": SimpleNamespace(run_discovery=run_discovery),
+            "skydiscover.config": SimpleNamespace(Config=Config),
+            "skydiscover.llm.llm_pool": SimpleNamespace(LLMPool=LLMPool),
+            "skydiscover.llm.openai": SimpleNamespace(OpenAILLM=object),
+        }
+        with patch.dict(sys.modules, modules):
+            with self.assertRaises(EvoxDeadlineExceeded):
+                run_evox_discovery(
+                    lambda _path: {},
+                    Path("outputs/test-evox"),
+                    time_budget_seconds=0.01,
+                )
+
+        self.assertEqual(captured["llm"]["timeout"], 250)
 
 
 def _store_job() -> dict[str, object]:
