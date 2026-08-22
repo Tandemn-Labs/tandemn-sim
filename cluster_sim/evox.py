@@ -530,8 +530,6 @@ class EvoxPlannerDriver:
             plan = self._build_place_plan(problem, candidate)
             verify_place_plan(plan, candidate, self.config_policy)
             reserve_vram_placement(candidate.target, candidate.gpu_count)
-            for field in ("tenant_id", "mechanism_id", "budget_ref", "rationale"):
-                plan.pop(field)
             actions.append(plan)
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
@@ -582,13 +580,9 @@ def build_evox_plan(
     return {
         "job_id": candidate.job_id,
         "type": "place",
-        "tenant_id": known.get("tenant_id") or store_job.get("user_id"),
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
-        "mechanism_id": known.get("mechanism_id"),
-        "budget_ref": known.get("budget_ref"),
-        "rationale": known.get("rationale"),
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
@@ -808,13 +802,9 @@ def verify_place_plan(
     required_plan_keys = {
         "job_id",
         "type",
-        "tenant_id",
         "target_tps",
         "target_p99_ttft_ms",
         "target_p99_tpot_ms",
-        "mechanism_id",
-        "budget_ref",
-        "rationale",
         "ladder",
     }
     if set(plan) != required_plan_keys:

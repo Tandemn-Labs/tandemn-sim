@@ -118,7 +118,10 @@ class EvoxPlannerDriverTest(unittest.TestCase):
 
         plan = build_evox_plan(_store_job(), candidate, "fallback", policy)
         rank_config = plan["ladder"][0]["config"]
-        self.assertEqual(plan["tenant_id"], "tenant")
+        self.assertNotIn("tenant_id", plan)
+        self.assertNotIn("mechanism_id", plan)
+        self.assertNotIn("budget_ref", plan)
+        self.assertNotIn("rationale", plan)
         self.assertTrue(plan["ladder"][0]["rank_id"].startswith("rank_"))
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
