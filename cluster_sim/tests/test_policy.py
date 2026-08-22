@@ -38,6 +38,15 @@ class ConfigPolicyTest(unittest.TestCase):
         assert rule is not None
         self.assertTrue(set(rule.allowed_tp) <= policy.VALID_TP_DEGREES)
 
+    def test_store_mi300_alias_uses_mi300x_policy(self) -> None:
+        """Match Store's MI300 profile name to the MI300X policy section."""
+        rule = policy.load_config_policy().rule_for(
+            "MI300",
+            "meta-llama/Llama-3.2-1B-Instruct",
+        )
+
+        self.assertIsNotNone(rule)
+
     def test_mixtral_a10g_excludes_unprofiled_tp_one(self) -> None:
         """Keep Mixtral off A10G TP one until ServingSim has that profile."""
         rule = policy.load_config_policy().rule_for(

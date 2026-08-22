@@ -96,6 +96,8 @@ class KoiPlannerDriverTest(unittest.TestCase):
                 "cp_sat",
                 "gpt_only",
                 "openevolve",
+                "contextual_bandit",
+                "evox",
             },
         )
 
