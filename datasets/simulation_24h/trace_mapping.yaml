@@ -1,0 +1,96 @@
+schema_version: traffic-analysis/v1
+
+sources:
+  AZ-CONV: ../simulation_3h/raw_datasets/azure_llm/AzureLLMInferenceTrace_conv_1week.csv
+  AZ-CODE: ../simulation_3h/raw_datasets/azure_llm/AzureLLMInferenceTrace_code_1week.csv
+  BURST: ../simulation_3h/raw_datasets/burstgpt/BurstGPT_3.csv
+  BAIL-CODER: ../simulation_3h/raw_datasets/bailian/qwen_coder_blksz_16.jsonl
+  BAIL-TOB: ../simulation_3h/raw_datasets/bailian/qwen_traceB_blksz_16.jsonl
+  BAIL-THINK: ../simulation_3h/raw_datasets/bailian/qwen_thinking_blksz_16.jsonl
+  RAG: ../simulation_3h/raw_datasets/ragpulse/0_trace.jsonl
+  WEKA: ../simulation_3h/raw_datasets/weka_agents/premium_agents_kimi_normalized.csv
+  MOON-CONV: ../simulation_3h/raw_datasets/mooncake/conversation_trace.jsonl
+  SWISS: ../simulation_3h/raw_datasets/swissai/swissai_serving_trace.jsonl
+
+jobs:
+  - {job_id: job-benchmark_timing_24hr-0-1, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-1}
+  - {job_id: job-benchmark_timing_24hr-0-2, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-2}
+  - {job_id: job-benchmark_timing_24hr-0-3, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-690-1}
+  - {job_id: job-benchmark_timing_24hr-0-4, source: BURST,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-3,
+     variant: gpt4_conversation}
+  - {job_id: job-benchmark_timing_24hr-0-5, source: BAIL-CODER,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-4}
+  - {job_id: job-benchmark_timing_24hr-0-6, source: BURST,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-5,
+     variant: short_api}
+  - {job_id: job-benchmark_timing_24hr-0-7, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-0-1}
+  - {job_id: job-benchmark_timing_24hr-0-8, source: RAG,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-25-4,
+     variant: generation}
+  - {job_id: job-benchmark_timing_24hr-300-1, source: RAG,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-25-1,
+     variant: generation}
+  - {job_id: job-benchmark_timing_24hr-300-2, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-135-2}
+  - {job_id: job-benchmark_timing_24hr-420-1, source: AZ-CODE,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-180-1}
+  - {job_id: job-benchmark_timing_24hr-420-2, source: BAIL-CODER,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-180-2}
+  - {job_id: job-benchmark_timing_24hr-540-1, source: BAIL-TOB,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-240-1}
+  - {job_id: job-benchmark_timing_24hr-540-2, source: RAG,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-25-3,
+     variant: generation}
+  - {job_id: job-benchmark_timing_24hr-540-3, source: SWISS,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-240-2}
+  - {job_id: job-benchmark_timing_24hr-690-1, source: MOON-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-330-1}
+  - {job_id: job-benchmark_timing_24hr-840-1, source: BURST,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-420-1,
+     variant: api}
+  - {job_id: job-benchmark_timing_24hr-840-2, source: BURST,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-420-2,
+     variant: api, reuse_window_from: job-benchmark_timing_24hr-840-1}
+  - {job_id: job-benchmark_timing_24hr-930-2, source: WEKA,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-510-1}
+  - {job_id: job-benchmark_timing_24hr-960-2, source: BURST,
+     reference_benchmark: simulation_3h,
+     reference_job_id: job-benchmark_timing_3hr-100-2,
+     variant: safety_api}
+  - {job_id: job-benchmark_timing_24hr-1080-1, source: WEKA,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-510-1}
+  - {job_id: job-benchmark_timing_24hr-1080-2, source: BAIL-THINK,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-510-2}
+  - {job_id: job-benchmark_timing_24hr-1200-1, source: AZ-CONV,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-690-1}
+  - {job_id: job-benchmark_timing_24hr-1200-2, source: RAG,
+     reference_benchmark: simulation_12h,
+     reference_job_id: job-benchmark_timing_12hr-25-1,
+     variant: generation}

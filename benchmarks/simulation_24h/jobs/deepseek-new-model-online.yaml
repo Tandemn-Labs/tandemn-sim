@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_24hr-930-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_24hr-930-2
+  operation: base_service
+  start_at_offset_minutes: 930
+  stop_at_offset_minutes: 1140
+spec:
+  user_id: tenant_agents_premium
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 1400
+    isl_token_min: 350
+    isl_token_max: 4096
+    isl_distribution_type: LogNormal
+    osl_token_avg: 3800
+    osl_token_min: 950
+    osl_token_max: 12000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: true
+    priority_class: HIGH
+    max_concurrent_streaming: 16
+    target_p99_ttft_ms: 2600
+    target_p99_tpot_ms: 50
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: deepseek-ai/DeepSeek-V3
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 120
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:deepseek-ai/DeepSeek-V3}
+    dataset:
+      type: synthetic
+      entries: 2000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 12600
+      rate: 0.059
+      smoothness: 0.203
+      concurrency: 16
+      gracePeriod: 1200

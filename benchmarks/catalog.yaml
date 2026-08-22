@@ -15,7 +15,7 @@ benchmarks:
     manifest: simulation_24h/benchmark.yaml
     environment: simulation
     duration_hours: 24
-    status: definition_only
+    status: executable
   real_life_3h:
     manifest: real_life_3h/benchmark.yaml
     environment: real_hardware

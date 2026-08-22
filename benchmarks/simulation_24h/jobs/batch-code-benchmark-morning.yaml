@@ -1,0 +1,48 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_24hr-180-2
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_24hr-180-2
+  start_at_offset_minutes: 180
+  deadline_at_offset_minutes: 540
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 1560
+spec:
+  user_id: tenant_code_eval
+  optimization_goal: throughput
+  precision: fp16
+  features:
+    isl_token_avg: 2500
+    isl_token_min: 625
+    isl_token_max: 10000
+    isl_distribution_type: LogNormal
+    osl_token_avg: 900
+    osl_token_min: 225
+    osl_token_max: 3000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Constant
+    peak_to_mean_ratio: 1
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    total_token_budget: 340000000
+    priority_class: STANDARD
+    deadline_hrs: 6
+    target_p99_ttft_ms: 10000
+    target_p99_tpot_ms: 120
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: code_benchmark_morning
+    model: Qwen/Qwen2.5-Coder-32B-Instruct
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 100000
+    seed: 211
+    partitioning:
+      shard_count: 200
+      requests_per_shard: 500
+      max_in_flight_requests: 16

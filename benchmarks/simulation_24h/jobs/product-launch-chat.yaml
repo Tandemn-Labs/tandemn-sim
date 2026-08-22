@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_24hr-840-1
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_24hr-840-1
+  operation: additive_stream
+  start_at_offset_minutes: 840
+  stop_at_offset_minutes: 920
+spec:
+  user_id: tenant_chat_free
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 850
+    isl_token_min: 212
+    isl_token_max: 2200
+    isl_distribution_type: LogNormal
+    osl_token_avg: 280
+    osl_token_min: 70
+    osl_token_max: 650
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 3.5
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 212
+    is_session_affinity: true
+    priority_class: STANDARD
+    max_concurrent_streaming: 64
+    target_p99_ttft_ms: 650
+    target_p99_tpot_ms: 50
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 101
+  benchmark:
+    model: mistralai/Mixtral-8x7B-Instruct-v0.1
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 120
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:mistralai/Mixtral-8x7B-Instruct-v0.1}
+    dataset:
+      type: synthetic
+      entries: 2000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 4800
+      rate: 3.0
+      smoothness: 0.001
+      concurrency: 64
+      gracePeriod: 1200

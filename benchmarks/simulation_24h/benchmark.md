@@ -20,7 +20,7 @@ Regions: `us-east`, `eu-west`, `apac`
 
 Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`
 
-Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`, `BAAI/bge-reranker-v2-m3`
+Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`
 
 Model precision: `fp16`
 
@@ -50,6 +50,12 @@ Maximum provisioned capacity: **800 GPUs**. This is the paper-scale simulation f
 
 Network caps: 400 Gbps RDMA between H100/A100-SXM/MI300X nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
 
+## Capacity Envelope
+
+Online phases reuse the calibrated production-trace classes from the executable 3- and 12-hour benchmarks. Every online driver is tied to its raw dataset and reference profile in [`datasets/simulation_24h/trace_mapping.yaml`](../../datasets/simulation_24h/trace_mapping.yaml). Concurrency remains an in-flight ceiling: routine services use 8-64 streams, the code peak uses 96, and moderation uses 28 requests/s with a 32-stream cap. The maximum overlap is **624 online streams**.
+
+Traffic calibration follows the same conversion: Constant maps to AIPerf `constant`, Poisson to `poisson`, and Bursty or Diurnal to `gamma`; gamma smoothness comes from the matched trace class, and Diurnal phases ramp across their full active window.
+
 Inactive in this manifest: Inferentia2 and Trainium2.
 
 
@@ -77,7 +83,7 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Drain: after minute 1440, no new work arrives. A 120-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 
-Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expanded shards**.
+Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expanded shards**, and **1,426,000 batch records**.
 
 ## T+00:00 - All persistent online APIs warm
 
@@ -108,7 +114,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  17000,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  700,
                                                             "target_p99_tpot_ms":  55
                                                         }
@@ -119,7 +125,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "free_chat_us",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  17000,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -156,7 +162,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  10000,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  750,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -167,7 +173,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "free_chat_eu",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  10000,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -204,7 +210,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  9000,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  800,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -215,7 +221,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "free_chat_apac",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  9000,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  103
                                       },
                      "output_target":  {
@@ -252,7 +258,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  300,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  1300,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  600,
                                                             "target_p99_tpot_ms":  38
                                                         }
@@ -263,7 +269,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "premium_chat_us",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  1300,
+                                          "max_concurrent_streaming":  24,
                                           "seed":  104
                                       },
                      "output_target":  {
@@ -300,7 +306,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  6000,
+                                                            "max_concurrent_streaming":  32,
                                                             "target_p99_ttft_ms":  180,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -311,7 +317,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "code_autocomplete_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  6000,
+                                          "max_concurrent_streaming":  32,
                                           "seed":  105
                                       },
                      "output_target":  {
@@ -348,7 +354,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  36000,
+                                                            "max_concurrent_streaming":  32,
                                                             "target_p99_ttft_ms":  100,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -359,7 +365,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "moderation_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  36000,
+                                          "max_concurrent_streaming":  32,
                                           "seed":  106
                                       },
                      "output_target":  {
@@ -389,8 +395,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "osl_token_min":  16,
                                                             "osl_token_max":  128,
                                                             "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Constant",
-                                                            "peak_to_mean_ratio":  1,
+                                                            "request_arrival_pattern":  "Diurnal",
+                                                            "peak_to_mean_ratio":  2,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
@@ -406,8 +412,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "small_model_chat",
-                                          "request_arrival_pattern":  "Constant",
-                                          "request_rate_per_second":  2,
+                                          "request_arrival_pattern":  "Diurnal",
+                                          "request_rate_per_second":  2.6,
                                           "max_concurrent_streaming":  8,
                                           "seed":  107
                                       },
@@ -424,39 +430,39 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                   }
                  },
                  {
-                     "user_id":  "tenant_search_rerank",
+                     "user_id":  "tenant_support",
                      "kind":  "online",
                      "spec_json":  {
-                                       "model_id":  "BAAI/bge-reranker-v2-m3",
+                                       "model_id":  "mistralai/Mixtral-8x7B-Instruct-v0.1",
                                        "precision":  "fp16",
                                        "job_features":  {
-                                                            "isl_token_avg":  512,
-                                                            "isl_token_min":  128,
-                                                            "isl_token_max":  2048,
+                                                            "isl_token_avg":  1400,
+                                                            "isl_token_min":  350,
+                                                            "isl_token_max":  6000,
                                                             "isl_distribution_type":  "LogNormal",
-                                                            "osl_token_avg":  1,
-                                                            "osl_token_min":  1,
-                                                            "osl_token_max":  1,
-                                                            "osl_distribution_type":  "Constant",
+                                                            "osl_token_avg":  350,
+                                                            "osl_token_min":  87,
+                                                            "osl_token_max":  1000,
+                                                            "osl_distribution_type":  "LogNormal",
                                                             "request_arrival_pattern":  "Bursty",
                                                             "peak_to_mean_ratio":  3.5,
-                                                            "workload_prefix_concentration":  0,
-                                                            "multi_turn_ratio":  0,
-                                                            "shared_prefix_length_avg":  1,
-                                                            "is_session_affinity":  false,
+                                                            "workload_prefix_concentration":  0.5,
+                                                            "multi_turn_ratio":  0.3,
+                                                            "shared_prefix_length_avg":  350,
+                                                            "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  15000,
-                                                            "target_p99_ttft_ms":  160,
-                                                            "target_p99_tpot_ms":  1
+                                                            "max_concurrent_streaming":  64,
+                                                            "target_p99_ttft_ms":  700,
+                                                            "target_p99_tpot_ms":  50
                                                         }
                                    },
                      "input_source":  {
                                           "type":  "api_load_generator",
                                           "protocol":  "openai_compatible_http",
-                                          "endpoint":  "/v1/rerank",
-                                          "prompt_dataset_id":  "rerank_us",
+                                          "endpoint":  "/v1/chat/completions",
+                                          "prompt_dataset_id":  "support_assistant",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  15000,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  108
                                       },
                      "output_target":  {
@@ -1172,7 +1178,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  2500,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  8000,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  1500,
                                                             "target_p99_tpot_ms":  55
                                                         }
@@ -1183,7 +1189,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "eu_rag_ramp",
                                           "request_arrival_pattern":  "Poisson",
-                                          "max_concurrent_streaming":  8000,
+                                          "max_concurrent_streaming":  24,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1220,7 +1226,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  375,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  2400,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  500,
                                                             "target_p99_tpot_ms":  42
                                                         }
@@ -1231,7 +1237,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "eu_enterprise_chat",
                                           "request_arrival_pattern":  "Diurnal",
-                                          "max_concurrent_streaming":  2400,
+                                          "max_concurrent_streaming":  24,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -1281,7 +1287,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  26000,
+                                                            "max_concurrent_streaming":  96,
                                                             "target_p99_ttft_ms":  160,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -1292,7 +1298,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "code_peak_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  26000,
+                                          "max_concurrent_streaming":  96,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1329,7 +1335,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  650,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  900,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  800,
                                                             "target_p99_tpot_ms":  42
                                                         }
@@ -1340,7 +1346,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "code_chat_peak",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  900,
+                                          "max_concurrent_streaming":  24,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -1390,7 +1396,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  400,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  1200,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  650,
                                                             "target_p99_tpot_ms":  42
                                                         }
@@ -1401,7 +1407,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "enterprise_premium_peak",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  1200,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1431,14 +1437,14 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "osl_token_min":  75,
                                                             "osl_token_max":  1000,
                                                             "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3.5,
+                                                            "request_arrival_pattern":  "Poisson",
+                                                            "peak_to_mean_ratio":  2,
                                                             "workload_prefix_concentration":  0.5,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1750,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  3500,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  1300,
                                                             "target_p99_tpot_ms":  55
                                                         }
@@ -1448,8 +1454,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "docs_qa_peak",
-                                          "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  3500,
+                                          "request_arrival_pattern":  "Poisson",
+                                          "max_concurrent_streaming":  24,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -1479,14 +1485,14 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "osl_token_min":  175,
                                                             "osl_token_max":  2200,
                                                             "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3.5,
+                                                            "request_arrival_pattern":  "Diurnal",
+                                                            "peak_to_mean_ratio":  2,
                                                             "workload_prefix_concentration":  0,
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  360,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  1000,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -1496,8 +1502,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "legal_finance_peak",
-                                          "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  360,
+                                          "request_arrival_pattern":  "Diurnal",
+                                          "max_concurrent_streaming":  16,
                                           "seed":  103
                                       },
                      "output_target":  {
@@ -1609,7 +1615,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  4000,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  1600,
+                                                            "max_concurrent_streaming":  8,
                                                             "target_p99_ttft_ms":  1800,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -1620,7 +1626,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "rag_lunch_long_input_burst",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  1600,
+                                          "max_concurrent_streaming":  8,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1781,7 +1787,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  212,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  56000,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  650,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -1792,7 +1798,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "product_launch_chat",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  56000,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1829,7 +1835,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  120000,
+                                                            "max_concurrent_streaming":  32,
                                                             "target_p99_ttft_ms":  90,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -1840,7 +1846,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "launch_moderation",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  120000,
+                                          "max_concurrent_streaming":  32,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -1939,7 +1945,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  180,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  2600,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -1950,7 +1956,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "deepseek_new_model_online",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  180,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -2049,7 +2055,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  3800,
+                                                            "max_concurrent_streaming":  32,
                                                             "target_p99_ttft_ms":  350,
                                                             "target_p99_tpot_ms":  40
                                                         }
@@ -2060,7 +2066,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "p0_safety_live_day",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  3800,
+                                          "max_concurrent_streaming":  32,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -2221,7 +2227,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  540,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  2500,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -2232,7 +2238,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "agent_wave_kimi_evening",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  540,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -2269,7 +2275,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  560,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  2200,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -2280,7 +2286,7 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "agent_wave_glm_evening",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  560,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -2385,14 +2391,14 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "osl_token_min":  75,
                                                             "osl_token_max":  700,
                                                             "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3.5,
+                                                            "request_arrival_pattern":  "Diurnal",
+                                                            "peak_to_mean_ratio":  2,
                                                             "workload_prefix_concentration":  0.5,
                                                             "multi_turn_ratio":  0.7,
                                                             "shared_prefix_length_avg":  225,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  26000,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  800,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -2402,8 +2408,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "apac_chat_peak",
-                                          "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  26000,
+                                          "request_arrival_pattern":  "Diurnal",
+                                          "max_concurrent_streaming":  64,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -2433,14 +2439,14 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                                             "osl_token_min":  55,
                                                             "osl_token_max":  700,
                                                             "osl_distribution_type":  "LogNormal",
-                                                            "request_arrival_pattern":  "Bursty",
-                                                            "peak_to_mean_ratio":  3.5,
+                                                            "request_arrival_pattern":  "Poisson",
+                                                            "peak_to_mean_ratio":  2,
                                                             "workload_prefix_concentration":  0.5,
                                                             "multi_turn_ratio":  0.3,
                                                             "shared_prefix_length_avg":  2250,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  5200,
+                                                            "max_concurrent_streaming":  24,
                                                             "target_p99_ttft_ms":  1700,
                                                             "target_p99_tpot_ms":  60
                                                         }
@@ -2450,8 +2456,8 @@ Exact manifest counts: **24 online jobs**, **24 batch campaigns**, **4,704 expan
                                           "protocol":  "openai_compatible_http",
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "apac_rag_peak",
-                                          "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  5200,
+                                          "request_arrival_pattern":  "Poisson",
+                                          "max_concurrent_streaming":  24,
                                           "seed":  102
                                       },
                      "output_target":  {

@@ -56,5 +56,6 @@ workload:
       duration: 7200
       rate: 0.9
       smoothness: 0.733
+      rateRamp: 7200
       concurrency: 24
       gracePeriod: 180
