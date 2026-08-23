@@ -45,6 +45,31 @@ class EvoxPlannerDriverTest(unittest.TestCase):
 
         self.assertEqual(driver._build_actions(snapshot), [])
 
+    def test_no_winner_keeps_running_and_defers_remaining_jobs(self) -> None:
+        """Emit a safe complete plan when EvoX produces no valid placement."""
+        driver = object.__new__(EvoxPlannerDriver)
+        driver.benchmark_name = "test"
+        driver.benchmark_job_ids = {}
+        driver.config_policy = load_config_policy()
+        driver._select_placements = lambda problems, capacities: {}
+        snapshot = StoreSnapshot(
+            _resources(),
+            ({"job_id": "running"},),
+            (_store_job(),),
+            ({"job_id": "paused"},),
+            (),
+            _catalogs(),
+        )
+
+        self.assertEqual(
+            driver._build_actions(snapshot),
+            [
+                {"job_id": "running", "type": "keep"},
+                {"job_id": "waiting", "type": "defer"},
+                {"job_id": "paused", "type": "defer"},
+            ],
+        )
+
     def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
         """Freeze Store model catalogs with the jobs and resources for one tick."""
         requested = []
@@ -130,8 +155,8 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)
 
-    def test_timeout_uses_previous_valid_program(self) -> None:
-        """Return a placement from the warm-start program after the deadline."""
+    def test_timeout_without_valid_program_returns_no_placements(self) -> None:
+        """Let the driver keep running jobs and defer the rest after timeout."""
         policy = load_config_policy()
         resources = _resources()
         problems = build_placement_problems(
@@ -151,7 +176,7 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         ):
             selected, actual_usage = client.select(5, problems, capacities)
 
-        self.assertEqual(selected, {"waiting": problems[0].candidates[0]})
+        self.assertEqual(selected, {})
         self.assertEqual(actual_usage, (usage,))
         self.assertEqual(client.initial_program, EVOX_INITIAL_PROGRAM)
         self.assertEqual(client.tick_number, 1)
