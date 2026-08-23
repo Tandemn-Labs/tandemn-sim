@@ -21,10 +21,10 @@ benchmarks:
     environment: real_hardware
     duration_hours: 3
     status: definition_only
-  real_3h_homogenous:
-    manifest: real_3h_homogenous/benchmark.yaml
-    environment: real_hardware
-    duration_hours: 3
+  simulation_12h_homogenous:
+    manifest: simulation_12h_homogenous/benchmark.yaml
+    environment: simulation
+    duration_hours: 12
     status: executable
   15min_real:
     manifest: 15min_real/benchmark.yaml

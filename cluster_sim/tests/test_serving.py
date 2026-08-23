@@ -577,6 +577,17 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["instances"][0]["fp"], "fp16")
         self.assertEqual(cluster["nodes"][0]["instances"][0]["dtype"], "float16")
 
+    def test_rank_cluster_prefers_policy_precision(self) -> None:
+        """Use the placement policy when catalog weight storage differs."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment.shape.update({"precision": "bf16", "weight_dtype": "float16"})
+
+        cluster = build_rank_cluster(deployment, self.hardware)
+
+        instance = cluster["nodes"][0]["instances"][0]
+        self.assertEqual(instance["fp"], "bf16")
+        self.assertEqual(instance["dtype"], "bfloat16")
+
     def test_rank_deployment_uses_canonical_per_replica_gpu_count(self) -> None:
         """Use Koi/Orca's stored count for every simulated replica."""
         shape = {**self.ranks[0].shape_json, "count": 2, "tp": 2, "pp": 1, "dp": 4}
