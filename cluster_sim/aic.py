@@ -27,6 +27,7 @@ _AIC_SYSTEM_ALIASES = {
     "h100-sxm-80gb": "h100_sxm",
     "h100_sxm": "h100_sxm",
     "a100": "a100_sxm",
+    "a100-80gb": "a100_sxm",
     "a100-sxm": "a100_sxm",
     "a100-sxm-80gb": "a100_sxm",
     "a100_sxm": "a100_sxm",
