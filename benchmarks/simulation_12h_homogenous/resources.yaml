@@ -1,0 +1,12 @@
+schema_version: "resource-map/v1"
+
+resources:
+  - id: h100-sxm-80gb
+    accelerator: H100-SXM-80GB
+    total_devices: 400
+    devices_per_node: 8
+    allocation_kind: gpu
+    memory_gb: 80
+    aic_system: h100_sxm
+    markets: {on_demand: 400}
+    regions: {us-east: 400}

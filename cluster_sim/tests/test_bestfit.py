@@ -47,7 +47,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 "real_life_12h": 32,
                 "real_life_24h": 41,
                 "real_life_3h": 19,
-                "real_3h_homogenous": 25,
+                "simulation_12h_homogenous": 37,
                 "15min_real": 1,
                 "simulation_12h": 37,
                 "simulation_24h": 48,
@@ -126,7 +126,12 @@ class BestFitPlannerDriverTest(unittest.TestCase):
     def test_simulation_mappings_match_jobs_models_and_resources(self) -> None:
         """Cross-reference every simulation job with both static baselines."""
         policy = load_config_policy()
-        for benchmark in ("simulation_3h", "simulation_12h", "simulation_24h"):
+        for benchmark in (
+            "simulation_3h",
+            "simulation_12h",
+            "simulation_12h_homogenous",
+            "simulation_24h",
+        ):
             root = ROOT / "benchmarks" / benchmark
             resources = {
                 resource["accelerator"]
