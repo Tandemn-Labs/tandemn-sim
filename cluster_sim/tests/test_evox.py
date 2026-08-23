@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -155,6 +156,32 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         self.assertEqual(client.initial_program, EVOX_INITIAL_PROGRAM)
         self.assertEqual(client.tick_number, 1)
 
+    def test_timeout_uses_best_valid_program_from_current_tick(self) -> None:
+        """Keep a validated same-tick program when discovery reaches its deadline."""
+        policy = load_config_policy()
+        resources = _resources()
+        problems = build_placement_problems(
+            (_store_job(),), resources, "test", {}, policy, _catalogs()
+        )
+        capacities = capacity_limits(resources)
+        client = OnlineSkyDiscoverEvoxClient("model-test", 2, Path("outputs/test-evox"))
+        evolved = EVOX_INITIAL_PROGRAM.replace(
+            "chosen = {}", "chosen = {}\n    # validated same-tick winner"
+        )
+
+        def timeout_after_valid(evaluator, *_args, **_kwargs):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "program.py"
+                path.write_text(evolved, encoding="utf-8")
+                evaluator(path)
+            raise EvoxDeadlineExceeded
+
+        with patch("evox.run_evox_discovery", side_effect=timeout_after_valid):
+            selected, _ = client.select(5, problems, capacities)
+
+        self.assertEqual(selected, {"waiting": problems[0].candidates[0]})
+        self.assertEqual(client.initial_program, evolved)
+
     def test_discovery_enforces_total_and_request_timeouts(self) -> None:
         """Interrupt discovery at its wall budget while allowing long LLM calls."""
         captured = {}
@@ -170,7 +197,10 @@ class EvoxPlannerDriverTest(unittest.TestCase):
                 return True
 
         def run_discovery(**_kwargs):
-            time.sleep(1)
+            try:
+                time.sleep(1)
+            except Exception:
+                return SimpleNamespace(best_solution=EVOX_INITIAL_PROGRAM)
 
         modules = {
             "skydiscover": SimpleNamespace(run_discovery=run_discovery),
