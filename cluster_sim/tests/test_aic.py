@@ -189,6 +189,30 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
         Plan(user_id="tenant", actions=[placed])
 
+    def test_azure_a100_80gb_is_an_aic_candidate(self) -> None:
+        """Map Store's cloud-neutral A100 80 GB label to AIC's A100 system."""
+        client = FakeAicClient(throughput={"a100_sxm": 200})
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|azure|westus2|1|A100_80GB": {
+                    "gpu_type": "A100_80GB",
+                    "total": 8,
+                    "free": 8,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job({"job_id": "job_1"}),),
+            paused_jobs=(),
+            finished_jobs=(),
+        )
+
+        actions = _driver((_job("job_1"),), client)._build_actions(snapshot)
+
+        self.assertEqual(actions[0]["type"], "place")
+        self.assertEqual(client.requests[0].system, "a100_sxm")
+        self.assertEqual(actions[0]["ladder"][0]["env"][1], "azure")
+
     def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
         """Keep DP in replica count rather than one ServingSim rank shape."""
         client = FakeAicClient(tp=2, dp=3)
