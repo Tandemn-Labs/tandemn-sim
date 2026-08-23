@@ -265,6 +265,19 @@ class EvoxDeadlineExceeded(TimeoutError):
         self.llm_usage = llm_usage
 
 
+class _EvoxDeadlineSignal(BaseException):
+    """Escape SkyDiscover immediately when the wall-clock budget expires.
+
+    This deliberately inherits directly from ``BaseException``. SkyDiscover
+    catches ``Exception`` around LLM calls, retries, evaluations, and whole
+    iterations; raising a normal timeout there converts the deadline into a
+    failed attempt and lets another iteration start after the one-shot alarm
+    has fired. This private signal crosses those recovery boundaries, is
+    converted back to public ``EvoxDeadlineExceeded`` at our integration
+    boundary, and must never be used for ordinary errors.
+    """
+
+
 class OnlineSkyDiscoverEvoxClient:
     """Run one warm-started SkyDiscover EvoX search per control tick."""
 
@@ -317,7 +330,7 @@ class OnlineSkyDiscoverEvoxClient:
                 raise RuntimeError("online EvoX returned no placement program")
             llm_usage = tuple(getattr(result, "llm_usage", ()))
         except EvoxDeadlineExceeded as error:
-            best_solution = self.initial_program
+            best_solution = evaluator.best_solution or self.initial_program
             llm_usage = error.llm_usage
         policy = load_policy_source(best_solution)
         selected = select_evox_placements(policy, problems, capacities)
@@ -337,6 +350,8 @@ class OnlineEvoxEvaluator:
         """Freeze the current tick throughout one online evolution run."""
         self.problems = tuple(problems)
         self.capacities = dict(capacities)
+        self.best_solution: str | None = None
+        self.best_score = -math.inf
 
     def evaluate(self, program_path: str) -> dict[str, object]:
         """Return a larger-is-better score after strict plan verification."""
@@ -366,7 +381,7 @@ class OnlineEvoxEvaluator:
         tie_break = 0.0
         if selected:
             tie_break = 1 / (1 + price) + 1 / (1_000 * (1 + footprint))
-        return {
+        metrics = {
             "combined_score": float(2 * priority_score + tie_break),
             "feasible": 1.0,
             "admitted_jobs": float(len(selected)),
@@ -374,6 +389,10 @@ class OnlineEvoxEvaluator:
             "hourly_price": float(price),
             "gpu_footprint": float(footprint),
         }
+        if metrics["combined_score"] > self.best_score:
+            self.best_score = metrics["combined_score"]
+            self.best_solution = Path(program_path).read_text(encoding="utf-8")
+        return metrics
 
 
 class EvoxPlannerDriver:
@@ -1113,19 +1132,22 @@ def run_evox_discovery(
     previous_timer = signal.getitimer(signal.ITIMER_REAL)
 
     def deadline_exceeded(_signum: int, _frame: object) -> None:
-        raise EvoxDeadlineExceeded(tuple(llm_usage))
+        raise _EvoxDeadlineSignal
 
     signal.signal(signal.SIGALRM, deadline_exceeded)
     signal.setitimer(signal.ITIMER_REAL, time_budget_seconds)
     try:
-        result = run_discovery(
-            evaluator=evaluator,
-            initial_program=initial_program or EVOX_INITIAL_PROGRAM,
-            iterations=iterations,
-            config=config,
-            output_dir=str(output_dir),
-            cleanup=True,
-        )
+        try:
+            result = run_discovery(
+                evaluator=evaluator,
+                initial_program=initial_program or EVOX_INITIAL_PROGRAM,
+                iterations=iterations,
+                config=config,
+                output_dir=str(output_dir),
+                cleanup=True,
+            )
+        except _EvoxDeadlineSignal:
+            raise EvoxDeadlineExceeded(tuple(llm_usage)) from None
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
