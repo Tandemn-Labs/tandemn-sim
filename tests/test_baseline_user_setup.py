@@ -68,10 +68,23 @@ class BaselineUserSetupTest(unittest.TestCase):
         )
 
     def test_koi_root_is_optional_only_at_parse_time(self) -> None:
-        args = parse_args(["--baseline", "koi", "--run-id", "run-1"])
+        args = parse_args(
+            [
+                "--baseline",
+                "koi",
+                "--run-id",
+                "run-1",
+                "--benchmark-id",
+                "simulation_3h",
+            ]
+        )
 
         self.assertIsNone(args.koi_root)
         self.assertEqual(args.benchmark_id, "simulation_3h")
+
+    def test_benchmark_id_is_required(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(["--baseline", "bestfit", "--run-id", "run-1"])
 
     def test_selects_the_run_resource_map(self) -> None:
         args = parse_args(

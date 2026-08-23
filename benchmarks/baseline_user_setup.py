@@ -32,9 +32,9 @@ from tandemn_system_data.models._base import utc_now
 from tandemn_system_data.models.resource_map import ResourceMap
 
 if __package__:
-    from benchmarks.seed_benchmark_store import DEFAULT_BENCHMARK_ID, load_resource_map
+    from benchmarks.seed_benchmark_store import load_resource_map
 else:
-    from seed_benchmark_store import DEFAULT_BENCHMARK_ID, load_resource_map
+    from seed_benchmark_store import load_resource_map
 
 BENCHMARKS = Path(__file__).resolve().parent
 BASELINES = (
@@ -68,7 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=BENCHMARKS / "resource_map_benchmarking.jsonl",
     )
-    parser.add_argument("--benchmark-id", default=DEFAULT_BENCHMARK_ID)
+    parser.add_argument("--benchmark-id", required=True)
     return parser.parse_args(argv)
 
 

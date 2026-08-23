@@ -109,7 +109,8 @@ Create one isolated user per planner/run pair after static seeding:
 ```bash
 uv run python benchmarks/baseline_user_setup.py \
   --baseline bestfit \
-  --run-id 20260820T000000Z
+  --run-id 20260820T000000Z \
+  --benchmark-id simulation_3h
 ```
 
 Koi additionally imports its fixed causal graph for that user:
@@ -118,6 +119,7 @@ Koi additionally imports its fixed causal graph for that user:
 uv run python benchmarks/baseline_user_setup.py \
   --baseline koi \
   --run-id 20260820T000000Z \
+  --benchmark-id simulation_3h \
   --koi-root ../koi
 ```
 
@@ -128,7 +130,7 @@ The command prints one JSON identity object to stdout:
 ```
 
 Rerunning the same baseline and run ID reuses that user ID, deletes only that
-user's runtime rows, and restores its independent 200-GPU simulation resource map. It
+user's runtime rows, and restores its independent selected benchmark resource map. It
 does not alter another baseline user, shared model catalogs, or shared hardware
 catalogs.
 
