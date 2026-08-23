@@ -325,13 +325,14 @@ class OnlineSkyDiscoverEvoxClient:
                 system_prompt=system_prompt,
                 tick_number=tick_number,
             )
-            best_solution = getattr(result, "best_solution", None)
-            if not isinstance(best_solution, str) or not best_solution:
-                raise RuntimeError("online EvoX returned no placement program")
             llm_usage = tuple(getattr(result, "llm_usage", ()))
+            best_solution = getattr(result, "best_solution", None)
         except EvoxDeadlineExceeded as error:
-            best_solution = evaluator.best_solution or self.initial_program
+            best_solution = evaluator.best_solution
             llm_usage = error.llm_usage
+        if not isinstance(best_solution, str) or not best_solution:
+            self.tick_number += 1
+            return {}, llm_usage
         policy = load_policy_source(best_solution)
         selected = select_evox_placements(policy, problems, capacities)
         self.initial_program = best_solution
