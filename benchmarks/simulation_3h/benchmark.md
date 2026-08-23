@@ -6,8 +6,6 @@ Purpose: calibrated capacity-pressure benchmark for Koi/Tandemn scheduler compar
 
 Benchmark name: `KoiBench-3h-Calibrated-Mixed`
 
-Compatibility: this calibration currently applies only to `simulation_3h`. The `real_3h_homogenous` workload still carries the pre-calibration rates and campaign sizes and must not be treated as a matched simulation/hardware pair until the same profile is propagated there.
-
 Horizon: 180 minutes
 
 Tick: 5 minutes

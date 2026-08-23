@@ -1,0 +1,48 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_12hr_homogenous-300-1
+schedule:
+  enabled: true
+  kind: batch
+  driver: external_mock_data
+  campaign_id: campaign-benchmark_timing_12hr_homogenous-300-1
+  start_at_offset_minutes: 300
+  deadline_at_offset_minutes: 420
+  completion_policy: stop_when_complete
+  hard_stop_at_offset_minutes: 780
+spec:
+  user_id: tenant_engine_canary
+  optimization_goal: throughput
+  precision: bf16
+  features:
+    isl_token_avg: 4000
+    isl_token_min: 1000
+    isl_token_max: 15184
+    isl_distribution_type: LogNormal
+    osl_token_avg: 400
+    osl_token_min: 100
+    osl_token_max: 1200
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Constant
+    peak_to_mean_ratio: 1
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    total_token_budget: 140800000
+    priority_class: HIGH
+    deadline_hrs: 2
+    target_p99_ttft_ms: 8000
+    target_p99_tpot_ms: 120
+workload:
+  schema_version: batch-dataset/v1
+  dataset:
+    id: engine_regression_probe
+    model: microsoft/phi-4
+    endpoint: /v1/chat/completions
+    request_format: chat
+    record_count: 32000
+    seed: 207
+    partitioning:
+      shard_count: 64
+      requests_per_shard: 500
+      max_in_flight_requests: 16

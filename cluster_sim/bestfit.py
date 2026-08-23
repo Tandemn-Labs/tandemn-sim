@@ -29,106 +29,154 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 8, "pp": 1, "dp": 3},
         },
     },
-    "real_3h_homogenous": {
-        "job-benchmark_timing_real_3hr_homogenous-0-1": {
-            "hardware": "L40S-48GB",
+    "simulation_12h_homogenous": {
+        "job-benchmark_timing_12hr_homogenous-0-1": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-0-2": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-0-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_12hr_homogenous-0-3": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-0-3": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-0-4": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-0-4": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-0-5": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-0-5": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-7-1": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-0-6": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-7-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        "job-benchmark_timing_12hr_homogenous-10-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_3hr_homogenous-7-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-15-1": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-10-2": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
-        "job-benchmark_timing_real_3hr_homogenous-15-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
+        "job-benchmark_timing_12hr_homogenous-10-3": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 2, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-32-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
+        "job-benchmark_timing_12hr_homogenous-25-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-32-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
+        "job-benchmark_timing_12hr_homogenous-25-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-49-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-49-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-67-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 8, "pp": 2, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-67-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-67-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 4, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-85-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_homogenous-100-1": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-25-3": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_3hr_homogenous-100-2": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-25-4": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-45-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 2, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-90-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_12hr_homogenous-90-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 3, "dp": 2},
+        },
+        "job-benchmark_timing_12hr_homogenous-135-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-135-2": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_3hr_homogenous-125-1": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-180-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 16},
+        },
+        "job-benchmark_timing_12hr_homogenous-180-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 4},
+        },
+        "job-benchmark_timing_12hr_homogenous-240-1": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
-        "job-benchmark_timing_real_3hr_homogenous-125-2": {
-            "hardware": "L40S-48GB",
+        "job-benchmark_timing_12hr_homogenous-240-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_12hr_homogenous-300-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 2, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-330-1": {
+            "hardware": "H100-SXM-80GB",
             "configuration": {"tp": 4, "pp": 1, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-145-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
+        "job-benchmark_timing_12hr_homogenous-375-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 4},
         },
-        "job-benchmark_timing_real_3hr_homogenous-145-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 8, "pp": 2, "dp": 1},
+        "job-benchmark_timing_12hr_homogenous-420-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 40},
         },
-        "job-benchmark_timing_real_3hr_homogenous-160-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 4, "pp": 1, "dp": 4},
+        "job-benchmark_timing_12hr_homogenous-420-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 16},
+        },
+        "job-benchmark_timing_12hr_homogenous-465-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 1},
+        },
+        "job-benchmark_timing_12hr_homogenous-480-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_12hr_homogenous-510-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 3},
+        },
+        "job-benchmark_timing_12hr_homogenous-510-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-570-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 2},
+        },
+        "job-benchmark_timing_12hr_homogenous-570-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 8},
+        },
+        "job-benchmark_timing_12hr_homogenous-630-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 4, "pp": 1, "dp": 12},
+        },
+        "job-benchmark_timing_12hr_homogenous-630-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 16},
+        },
+        "job-benchmark_timing_12hr_homogenous-690-1": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 2, "pp": 1, "dp": 16},
+        },
+        "job-benchmark_timing_12hr_homogenous-690-2": {
+            "hardware": "H100-SXM-80GB",
+            "configuration": {"tp": 8, "pp": 2, "dp": 4},
         },
     },
     "real_life_12h": {
