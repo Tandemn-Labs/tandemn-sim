@@ -33,7 +33,7 @@ Maximum provisioned capacity: **400 on-demand H100 GPUs**. The complete fleet is
 | `H100-SXM-80GB` | 8 GPUs, NVSwitch | 50 | 400 | 400 |
 
 All nodes are in `us-east` with 400 Gbps RDMA. There is no reserved capacity, heterogeneous fallback, or inter-region placement.
-GPUs are scheduled individually; TP/PP groups may span p5 nodes over EFA.
+Each p5.48xlarge is an eight-GPU allocation unit; TP/PP groups must fit within one node.
 
 ## Capacity Envelope
 

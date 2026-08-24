@@ -20,6 +20,8 @@ from policy import load_config_policy
 from scenario import load_scenario
 from vram import MODEL_ARCHITECTURES, VRAM_REQUIREMENTS_GIB
 
+from benchmarks.seed_benchmark_store import load_resource_map
+
 
 class SimulationTwelveHourHomogenousTest(unittest.TestCase):
     """Keep the 12-hour simulation executable and H100-only."""
@@ -79,14 +81,28 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
         self.assertEqual(resource["accelerator"], "H100-SXM-80GB")
         self.assertEqual(resource["total_devices"], 400)
         self.assertEqual(resource["devices_per_node"], 8)
-        self.assertEqual(resource["allocation_kind"], "gpu")
+        self.assertNotIn("allocation_kind", resource)
         self.assertEqual(resource["markets"], {"on_demand": 400})
         self.assertEqual(resource["regions"], {"us-east": 400})
         pool = self.store_resource_map["clouds"]["aws"]["regions"]["us-east-1"][
             "zones"
         ]["us-east-1a"]["network_fabrics"]["efa"]["machine_pools"]["p5.48xlarge"]
+        self.assertEqual(pool["total_instances"], 50)
+        self.assertEqual(pool["gpus_per_instance"], 8)
         self.assertEqual(pool["total_instances"] * pool["gpus_per_instance"], 400)
-        self.assertEqual(pool["allocation_kind"], "gpu")
+        self.assertNotIn("allocation_kind", pool)
+
+    def test_store_loads_the_instance_granular_resource_map(self) -> None:
+        """Keep the executable benchmark compatible with Store's pool schema."""
+        _, resource_map = load_resource_map(
+            ROOT / "benchmarks" / "resource_map_benchmarking.jsonl",
+            "simulation_12h_homogenous",
+        )
+        _, _, _, _, _, _, pool = next(resource_map.iter_machine_pools())
+
+        self.assertEqual(pool.total_instances, 50)
+        self.assertEqual(pool.gpus_per_instance, 8)
+        self.assertEqual(pool.total_gpus, 400)
 
     def test_models_fit_context_policy_and_h100_memory(self) -> None:
         """Reject unsupported contexts, precisions, and per-replica shapes."""
@@ -156,8 +172,7 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
                 partitioning = dataset["partitioning"]
                 self.assertEqual(
                     dataset["record_count"],
-                    partitioning["shard_count"]
-                    * partitioning["requests_per_shard"],
+                    partitioning["shard_count"] * partitioning["requests_per_shard"],
                     job_id,
                 )
                 self.assertEqual(
@@ -177,9 +192,9 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
             architecture = MODEL_ARCHITECTURES[model_id]
             weight_bytes = 1 if rule.precision == "bf16-fp8" else 2
             weight_gib = architecture.parameter_count * weight_bytes / 2**30
-            replica_vram_gib = weight_gib + (
-                requirements[job_id] - weight_gib
-            ) / configuration["dp"]
+            replica_vram_gib = (
+                weight_gib + (requirements[job_id] - weight_gib) / configuration["dp"]
+            )
             usable_vram_gib = (
                 configuration["tp"]
                 * configuration["pp"]

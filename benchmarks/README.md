@@ -1,8 +1,9 @@
-# Benchmark Store Setup
+# Simulation Benchmark Runbook
 
-This is the one-time local setup for the shared benchmark Store. It creates
-the global model and hardware state once, then creates isolated users for each
-planner baseline.
+This runbook creates the shared Store state, one isolated Store user per
+planner, and one standalone simulation process per baseline. It is terminal
+and session-manager agnostic: run commands one at a time wherever you manage
+long-lived processes.
 
 ## Checkout Layout
 
@@ -78,6 +79,28 @@ Copy these three files unchanged to another machine, then run
 `sha256sum --check SHA256SUMS` from that machine's `catalog-snapshots/`
 directory before static seeding.
 
+## Simulation Benchmarks
+
+The executable simulation benchmark IDs and their resource-map capacities are:
+
+| Benchmark | Duration | Pools | GPUs |
+| --- | ---: | ---: | ---: |
+| `simulation_3h` | 3 hours | 9 | 200 |
+| `simulation_12h` | 12 hours | 9 | 400 |
+| `simulation_24h` | 24 hours | 9 | 800 |
+
+All baseline users must receive the same resource map as the simulation they
+run. The following values must always match:
+
+```text
+benchmark_static_seed.py --benchmark-id X
+baseline_user_setup.py  --benchmark-id X
+cluster_sim/cli.py      --benchmark X
+```
+
+`baseline_user_setup.py` requires `--benchmark-id`; it must never infer a
+benchmark from a default.
+
 ## Static Seed
 
 This command destroys local Tandemn Store volumes, starts Postgres and MinIO,
@@ -86,8 +109,11 @@ applies migrations, and seeds the shared benchmark state:
 ```bash
 uv run python benchmarks/benchmark_static_seed.py \
   --full-reset \
-  --benchmark-id simulation_3h
+  --benchmark-id simulation_12h
 ```
+
+Use `simulation_3h`, `simulation_12h`, or `simulation_24h` consistently for
+the entire campaign; this example uses `simulation_12h`.
 
 It verifies the snapshots before destroying anything, then seeds:
 
@@ -102,6 +128,10 @@ It verifies the snapshots before destroying anything, then seeds:
 It exits nonzero if the catalog checksum, expected catalog identity, resource
 pool coverage, or final Store counts are wrong.
 
+`--full-reset` destroys the local Store volumes. Stop every simulation process
+using that Store before running it. Do not change a resource map beneath a
+running simulation; stop it and restart with a fresh baseline user instead.
+
 ## Baseline Users
 
 Create one isolated user per planner/run pair after static seeding:
@@ -110,7 +140,7 @@ Create one isolated user per planner/run pair after static seeding:
 uv run python benchmarks/baseline_user_setup.py \
   --baseline bestfit \
   --run-id 20260820T000000Z \
-  --benchmark-id simulation_3h
+  --benchmark-id simulation_12h
 ```
 
 Koi additionally imports its fixed causal graph for that user:
@@ -119,7 +149,7 @@ Koi additionally imports its fixed causal graph for that user:
 uv run python benchmarks/baseline_user_setup.py \
   --baseline koi \
   --run-id 20260820T000000Z \
-  --benchmark-id simulation_3h \
+  --benchmark-id simulation_12h \
   --koi-root ../koi
 ```
 
@@ -134,7 +164,7 @@ user's runtime rows, and restores its independent selected benchmark resource ma
 does not alter another baseline user, shared model catalogs, or shared hardware
 catalogs.
 
-Valid baselines are:
+Create users one by one for these registered baselines:
 
 ```text
 koi
@@ -146,7 +176,132 @@ prism
 cp_sat
 gpt_only
 openevolve
+contextual_bandit
+evox
 ```
 
-ServingSim launch commands and per-user runtime locking are documented with
-the launcher once that step is implemented.
+The command prints the Store user ID required by the simulator:
+
+```json
+{"baseline": "bestfit", "run_id": "20260820T000000Z", "user_id": "usr_..."}
+```
+
+## Verify Capacity
+
+Before launching a baseline, verify its isolated resource map. Replace
+`<USER_ID>` with the ID printed by `baseline_user_setup.py`.
+
+```bash
+docker exec tandemn-postgres psql -X -U tandemn -d tandemn -P pager=off -c "
+WITH pools AS (
+  SELECT r.user_id, pool
+  FROM resource_maps r
+  CROSS JOIN LATERAL jsonb_path_query(
+    r.pools_json,
+    '$.clouds.**.machine_pools.*'
+  ) AS pool
+)
+SELECT
+  u.name,
+  count(*) AS pools,
+  sum(
+    (pool->>'total_instances')::int *
+    (pool->>'gpus_per_instance')::int
+  ) AS total_gpus
+FROM users u
+JOIN pools ON pools.user_id = u.user_id
+WHERE u.user_id = '<USER_ID>'
+GROUP BY u.name;
+"
+```
+
+The result must have nine pools and the GPU count in the simulation benchmark
+table above. A 12-hour or 24-hour baseline reporting 200 GPUs is incorrect and
+must not be launched.
+
+## Service Check
+
+The static seed starts Postgres and MinIO. Confirm Store and ServingSim before
+starting any simulation:
+
+```bash
+docker compose -f ../tandemn-store/docker-compose.yml ps
+docker exec tandemn-postgres pg_isready -U tandemn -d tandemn
+docker start servingsim_docker
+docker exec servingsim_docker python3 -m serving --help >/dev/null
+```
+
+## Run One Baseline
+
+Run this command once per prepared baseline. Replace every angle-bracket value
+manually; no shell variables or process-manager commands are required.
+
+```bash
+uv run python cluster_sim/cli.py \
+  --benchmark <simulation_3h|simulation_12h|simulation_24h> \
+  --user-id <USER_ID> \
+  --planner <BASELINE> \
+  --logical-epoch 2026-08-22T00:00:00+00:00 \
+  --run-name <BENCHMARK>-<BASELINE>-<RUN_ID> \
+  --llmservingsim-root ../tandemn-LLMServingSim \
+  --container servingsim_docker \
+  --parallel-simulators <WORKER_COUNT> \
+  --rank-timeout-seconds 330 \
+  --trace-root traces/<RUN_ID> \
+  --trace-run-id <BENCHMARK>-<BASELINE>-<RUN_ID>
+```
+
+Use a unique trace root and run ID for every retry. Do not overwrite traces
+from an invalid or interrupted run.
+
+### Baseline Requirements
+
+| Baseline | Additional simulator arguments | External requirement |
+| --- | --- | --- |
+| `koi` | `--koi-root ../koi --koi-arg=--run-id=<RUN_ID> --koi-arg=--log-dir=logs/koi --koi-arg=--trace=no-llm` | OpenAI-compatible Koi credentials |
+| `dynamo_aic` | None | Local AIConfigurator data |
+| `bestfit` | None | None |
+| `vram` | None | None |
+| `edf` | None | None |
+| `prism` | None | None |
+| `cp_sat` | None | OR-Tools installed by `uv sync` |
+| `gpt_only` | None | `OPENAI_MODEL` and OpenAI-compatible credentials |
+| `openevolve` | None | OpenAI-compatible credentials |
+| `contextual_bandit` | None | None |
+| `evox` | None | SkyDiscover and OpenAI-compatible credentials |
+
+LLMServingSim uses local precomputed profiles for these benchmarks. A Hugging
+Face token is not required for ordinary simulation runs.
+
+## Optional Two-Tick Preflight
+
+Before a long run, use a separate prepared baseline user and add this argument
+to the simulator command:
+
+```bash
+--ticks 2
+```
+
+Do not continue that preflight user as the final benchmark. A tick-limited run
+finishes its submitted jobs; create a fresh baseline user with the same
+benchmark ID for the full run.
+
+## Results
+
+The common trace and LLM usage files are written to:
+
+```text
+traces/<RUN_ID>/simulation/<BENCHMARK>/<BASELINE>/<TRACE_RUN_ID>.jsonl
+traces/<RUN_ID>/simulation/<BENCHMARK>/<BASELINE>/<TRACE_RUN_ID>.llm-usage.jsonl
+```
+
+Koi also writes native diagnostics under:
+
+```text
+logs/koi/<RUN_ID>/runner.log
+logs/koi/<RUN_ID>/events.jsonl
+```
+
+A full run ends with a `run_finished` event whose termination reason is
+`SIMULATION_HARD_STOP`. Inspect the trace for `PROFILE_UNAVAILABLE` and
+`PROCESS_CRASH`; do not treat a run containing either as a clean comparison.
