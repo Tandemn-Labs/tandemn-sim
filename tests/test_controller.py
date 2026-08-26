@@ -12,6 +12,7 @@ import yaml
 
 from data_generation.controller import (
     ROOT,
+    aiperf_command,
     build_aiperf_config,
     find_job,
     run_job,
@@ -59,6 +60,71 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("schedule", config)
         self.assertNotIn("spec", config)
 
+    def test_build_config_overrides_endpoint_url(self) -> None:
+        path = find_job("job-benchmark_timing_3hr-0-1")
+
+        default = build_aiperf_config(path)
+        overridden = build_aiperf_config(
+            path,
+            endpoint_url="http://127.0.0.1:28001",
+            session_header="X-Tandemn-Session-ID",
+        )
+
+        self.assertEqual(
+            default["benchmark"]["endpoint"]["url"], "http://localhost:8000"
+        )
+        self.assertEqual(
+            overridden["benchmark"]["endpoint"]["url"],
+            "http://127.0.0.1:28001",
+        )
+        self.assertEqual(
+            overridden["benchmark"]["endpoint"]["sessionHeader"],
+            "X-Tandemn-Session-ID",
+        )
+
+    def test_build_config_materializes_multi_turn_ratio(self) -> None:
+        config = build_aiperf_config(find_job("job-benchmark_timing_3hr-0-1"))
+
+        self.assertEqual(
+            config["benchmark"]["dataset"]["turns"],
+            {
+                "points": [
+                    {"value": 1, "weight": 30.0},
+                    {"value": 4, "weight": 70.0},
+                ]
+            },
+        )
+
+    def test_build_config_keeps_single_turn_jobs_single_turn(self) -> None:
+        config = build_aiperf_config(
+            ROOT / "benchmarks" / "15min_real" / "jobs" / "code-chat.yaml"
+        )
+
+        self.assertEqual(config["benchmark"]["dataset"]["turns"], 1)
+
+    def test_aiperf_command_adds_artifacts_and_headers(self) -> None:
+        command = aiperf_command(
+            Path("aiperf.yaml"),
+            headers={"X-First": "one", "X-Second": "two"},
+            artifact_dir=Path("artifacts"),
+        )
+
+        self.assertEqual(
+            command,
+            (
+                "aiperf",
+                "profile",
+                "--config",
+                "aiperf.yaml",
+                "--output-artifact-dir",
+                "artifacts",
+                "-H",
+                "X-First:one",
+                "-H",
+                "X-Second:two",
+            ),
+        )
+
     def test_build_config_materializes_ranking_passage_tokens(self) -> None:
         path = find_job("job-benchmark_timing_3hr-7-2")
 
@@ -101,7 +167,10 @@ class ControllerTests(unittest.TestCase):
                 if document["schedule"]["driver"] != "aiperf":
                     continue
                 with self.subTest(job_id=document["job_id"]):
-                    config = build_aiperf_config(job_path)
+                    config = build_aiperf_config(
+                        job_path,
+                        session_header="X-Tandemn-Session-ID",
+                    )
                     path.write_text(yaml.safe_dump(config), encoding="utf-8")
                     completed = subprocess.run(
                         ("aiperf", "config", "validate", str(path)),

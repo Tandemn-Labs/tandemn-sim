@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 controller = "data_generation.controller:main"
+real-scenario = "data_generation.real_scenario:main"
 
 [dependency-groups]
 agentic = [
@@ -39,7 +40,7 @@ dev = [
 [tool.uv.sources]
 skydiscover = { git = "https://github.com/skydiscover-ai/skydiscover.git", rev = "59643ef8e7aa9ae071e86028d9ba56849fad0d80" }
 tandemn-store = { path = "../tandemn-store", editable = true }
-tandemn-orca = { path = "../Tandemn-orca", editable = true }
+tandemn-orca = { path = "../tandemn-system", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -55,3 +56,7 @@ select = ["B", "E", "F", "I", "UP"]
 python_version = "3.12"
 files = ["src"]
 strict = true
+
+[[tool.mypy.overrides]]
+module = ["tandemn_orca.*", "tandemn_system_data.*"]
+ignore_missing_imports = true
