@@ -32,7 +32,12 @@ def find_job(job_id: str) -> Path:
     return matches[0]
 
 
-def build_aiperf_config(job_path: Path) -> dict[str, Any]:
+def build_aiperf_config(
+    job_path: Path,
+    *,
+    endpoint_url: str | None = None,
+    session_header: str | None = None,
+) -> dict[str, Any]:
     """Build the AIPerf config embedded in one benchmark job."""
     document = _load_yaml(job_path)
     job_id = _text(document.get("job_id"), f"job_id in {job_path}")
@@ -55,12 +60,35 @@ def build_aiperf_config(job_path: Path) -> dict[str, Any]:
         benchmark.get("endpoint"),
         f"AIPerf endpoint for {job_id}",
     )
-    if "url" not in endpoint and "urls" not in endpoint:
+    if endpoint_url is not None:
+        endpoint["url"] = endpoint_url
+        endpoint.pop("urls", None)
+    elif "url" not in endpoint and "urls" not in endpoint:
         endpoint["url"] = "http://localhost:8000"
+    if session_header is not None:
+        endpoint["sessionHeader"] = session_header
     dataset = _mapping(
         benchmark.get("dataset"),
         f"AIPerf dataset for {job_id}",
     )
+
+    multi_turn_ratio = _nonnegative_number(
+        features.get("multi_turn_ratio"),
+        f"multi-turn ratio for {job_id}",
+    )
+    if multi_turn_ratio > 1:
+        raise ValueError(f"multi-turn ratio for {job_id} must be at most 1")
+    if multi_turn_ratio == 0:
+        dataset["turns"] = 1
+    elif multi_turn_ratio == 1:
+        dataset["turns"] = 4
+    else:
+        dataset["turns"] = {
+            "points": [
+                {"value": 1, "weight": round(100 * (1 - multi_turn_ratio), 10)},
+                {"value": 4, "weight": round(100 * multi_turn_ratio, 10)},
+            ]
+        }
 
     rankings = dataset.get("rankings")
     if isinstance(rankings, dict):
@@ -79,6 +107,21 @@ def build_aiperf_config(job_path: Path) -> dict[str, Any]:
     return workload
 
 
+def aiperf_command(
+    config_path: Path,
+    *,
+    headers: Mapping[str, str] | None = None,
+    artifact_dir: Path | None = None,
+) -> tuple[str, ...]:
+    """Build the AIPerf profile command for a rendered config."""
+    command = ["aiperf", "profile", "--config", str(config_path)]
+    if artifact_dir is not None:
+        command.extend(("--output-artifact-dir", str(artifact_dir)))
+    for name, value in (headers or {}).items():
+        command.extend(("-H", f"{name}:{value}"))
+    return tuple(command)
+
+
 def run_job(job_id: str) -> int:
     """Start AIPerf for one benchmark job and return its exit code."""
     config = build_aiperf_config(find_job(job_id))
@@ -89,7 +132,7 @@ def run_job(job_id: str) -> int:
             encoding="utf-8",
         )
         completed = subprocess.run(
-            ("aiperf", "profile", "--config", str(config_path)),
+            aiperf_command(config_path),
             check=False,
         )
     return completed.returncode
