@@ -2,7 +2,7 @@
 
 Benchmark ID: `simulation_12h_homogenous`
 
-Purpose: calibrated Koi/Tandemn workload replay on a homogeneous 400-GPU H100 simulation fleet. This 12-hour trace has persistent online APIs, regional traffic identities, deadline batch campaigns, a canary/regression probe, quantization profiling, a product-launch burst, a P0 incident, and frontier/MoE arrivals without turning routine services into a saturation test.
+Purpose: calibrated Koi/Tandemn workload replay on a homogeneous 400-GPU H100 simulation fleet. This second calibration preserves persistent online APIs, regional traffic identities, deadline batch campaigns, canary and quantization probes, a product-launch burst, a P0 incident, and frontier/MoE arrivals while avoiding the prior universal SLO and deadline floor.
 
 Benchmark name: `KoiBench-Sim-12h-OnDemand-H100`
 
@@ -37,9 +37,9 @@ Each p5.48xlarge is an eight-GPU allocation unit; TP/PP groups must fit within o
 
 ## Capacity Envelope
 
-Online concurrency is an in-flight request ceiling, not a user-population count. The 12-hour services use the calibrated 3-hour traffic tiers: persistent chat and support are tens of streams, burst peaks are at most 96 streams, and moderation remains at 28 requests/s with a 32-stream cap. At the overlap peak, the benchmark declares at most **552 online streams** and approximately **77.0 mean requests/s**.
+Online concurrency is an in-flight request ceiling, not a user-population count. Persistent chat and support remain at tens of streams, burst peaks are at most 64 streams, and each moderation workload runs at 12 requests/s with a 16-stream cap. At the overlap peak, the benchmark declares at most **504 online streams** and approximately **43.9 mean requests/s**. The executable online population falls from roughly 2.26 million to **1.43 million requests** while preserving every workload identity, release wave, and SLO target.
 
-Memory-safe preferred placements peak at **286 GPUs** while batch campaigns meet their deadlines. If every batch misses and remains allocated until its hard stop, requested placements peak at **472 GPUs**; admission remains capped by the 400-GPU fleet, so excess work queues.
+Logical TP/PP/DP counts in the preferred-placement map still peak at **286 GPUs** while campaigns meet deadlines and **472 GPUs** if every campaign remains until hard stop. These are logical counts, not node-rounded p5 allocation footprints; physical instance accounting and unsupported multi-node shapes remain separate harness constraints.
 
 ## Simulation Independence Gate
 
@@ -52,7 +52,7 @@ Dispatch: releases occur at their exact offset. A job arrival triggers the admis
 
 Online lifecycle: `active_start_at_offset_minutes` and `active_end_at_offset_minutes` define a half-open traffic window. `duration_minutes` is retained only as a consistency check. At the end offset the load generator stops new requests, drains in-flight requests, and the executor records `terminal_at`.
 
-Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `shard_count` is expanded deterministically because `expansion_policy` is `required`. `requests_per_shard` fixes campaign size. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
+Batch lifecycle: `deadline_at_offset_minutes` is an absolute offset from benchmark start. `record_count` fixes campaign size, while `requests_per_shard` fixes the representative probe and `shard_count` preserves their exact product. Runtime `started_at`, `completed_at`, and `terminal_at` are produced by the executor, not authored in the job definition.
 
 Overlap: `base_service` remains active, `additive_stream` adds demand to an existing service, and `replace_service` identifies a model/service replacement. Overlap is intentional and additive unless explicitly marked as replacement.
 
@@ -66,7 +66,7 @@ Input modes: every online job uses `api_load_generator` to ping an OpenAI-compat
 
 Drain: after minute 720, no new work arrives. A 60-minute drain period records batch tardiness and in-flight completion; work unfinished at its deadline is a miss.
 
-Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expanded shards**.
+Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **796 expanded shards**, and **187,700 batch records**.
 
 ## T+00:00 - Always-on APIs across three regions
 
@@ -289,7 +289,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  32,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  100,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -300,7 +300,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "moderation_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  32,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  105
                                       },
                      "output_target":  {
@@ -398,7 +398,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  108000000,
+                                                            "total_token_budget":  54000000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  7.8333,
                                                             "target_p99_ttft_ms":  10000,
@@ -409,7 +409,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "nightly_eval_llama70b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  180,
+                                          "shard_count":  90,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -420,7 +420,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  10,
                                       "deadline_at_offset_minutes":  480,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-10-1",
-                                      "shard_count":  180,
+                                      "shard_count":  90,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -447,7 +447,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  96000000,
+                                                            "total_token_budget":  48000000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  7.8333,
                                                             "target_p99_ttft_ms":  10000,
@@ -458,7 +458,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "nightly_eval_qwen72b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  160,
+                                          "shard_count":  80,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -469,7 +469,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  10,
                                       "deadline_at_offset_minutes":  480,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-10-2",
-                                      "shard_count":  160,
+                                      "shard_count":  80,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -496,7 +496,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  120000000,
+                                                            "total_token_budget":  60000000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  5.8333,
                                                             "target_p99_ttft_ms":  8000,
@@ -507,7 +507,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "nightly_eval_phi4",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  120,
+                                          "shard_count":  60,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
@@ -518,7 +518,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  10,
                                       "deadline_at_offset_minutes":  360,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-10-3",
-                                      "shard_count":  120,
+                                      "shard_count":  60,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -764,7 +764,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  229600000,
+                                                            "total_token_budget":  114800000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  6.25,
                                                             "target_p99_ttft_ms":  12000,
@@ -775,7 +775,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "document_refresh",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  160,
+                                          "shard_count":  80,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
@@ -786,7 +786,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  45,
                                       "deadline_at_offset_minutes":  420,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-45-2",
-                                      "shard_count":  160,
+                                      "shard_count":  80,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -826,7 +826,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  129600000,
+                                                            "total_token_budget":  64800000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  9.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -837,7 +837,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "synthetic_teacher_llama70b",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  180,
+                                          "shard_count":  90,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -848,7 +848,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  90,
                                       "deadline_at_offset_minutes":  660,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-90-1",
-                                      "shard_count":  180,
+                                      "shard_count":  90,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -875,7 +875,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  60480000,
+                                                            "total_token_budget":  30240000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  3.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -886,7 +886,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "quant_probe_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  80,
+                                          "shard_count":  40,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
@@ -897,7 +897,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  90,
                                       "deadline_at_offset_minutes":  300,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-90-2",
-                                      "shard_count":  80,
+                                      "shard_count":  40,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1047,7 +1047,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  96,
+                                                            "max_concurrent_streaming":  64,
                                                             "target_p99_ttft_ms":  160,
                                                             "target_p99_tpot_ms":  45
                                                         }
@@ -1058,7 +1058,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "code_peak_us",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  96,
+                                          "max_concurrent_streaming":  64,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1264,7 +1264,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  140800000,
+                                                            "total_token_budget":  70400000,
                                                             "priority_class":  "HIGH",
                                                             "deadline_hrs":  2,
                                                             "target_p99_ttft_ms":  8000,
@@ -1275,7 +1275,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "engine_regression_probe",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  64,
+                                          "shard_count":  32,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
@@ -1286,7 +1286,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  300,
                                       "deadline_at_offset_minutes":  420,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-300-1",
-                                      "shard_count":  64,
+                                      "shard_count":  32,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1387,7 +1387,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  154800000,
+                                                            "total_token_budget":  77400000,
                                                             "priority_class":  "HIGH",
                                                             "deadline_hrs":  3.75,
                                                             "target_p99_ttft_ms":  10000,
@@ -1398,7 +1398,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "legal_audit",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  90,
+                                          "shard_count":  45,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -1409,7 +1409,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  375,
                                       "deadline_at_offset_minutes":  600,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-375-1",
-                                      "shard_count":  90,
+                                      "shard_count":  45,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1450,7 +1450,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "shared_prefix_length_avg":  212,
                                                             "is_session_affinity":  true,
                                                             "priority_class":  "STANDARD",
-                                                            "max_concurrent_streaming":  64,
+                                                            "max_concurrent_streaming":  48,
                                                             "target_p99_ttft_ms":  650,
                                                             "target_p99_tpot_ms":  50
                                                         }
@@ -1461,7 +1461,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "product_launch_chat",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  64,
+                                          "max_concurrent_streaming":  48,
                                           "seed":  101
                                       },
                      "output_target":  {
@@ -1498,7 +1498,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
                                                             "priority_class":  "HIGH",
-                                                            "max_concurrent_streaming":  32,
+                                                            "max_concurrent_streaming":  16,
                                                             "target_p99_ttft_ms":  90,
                                                             "target_p99_tpot_ms":  30
                                                         }
@@ -1509,7 +1509,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "endpoint":  "/v1/chat/completions",
                                           "prompt_dataset_id":  "launch_moderation",
                                           "request_arrival_pattern":  "Bursty",
-                                          "max_concurrent_streaming":  32,
+                                          "max_concurrent_streaming":  16,
                                           "seed":  102
                                       },
                      "output_target":  {
@@ -1620,7 +1620,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  46400000,
+                                                            "total_token_budget":  23200000,
                                                             "priority_class":  "HIGH",
                                                             "deadline_hrs":  2,
                                                             "target_p99_ttft_ms":  8000,
@@ -1631,7 +1631,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "p0_abuse_replay",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  80,
+                                          "shard_count":  40,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -1642,7 +1642,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  480,
                                       "deadline_at_offset_minutes":  600,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-480-1",
-                                      "shard_count":  80,
+                                      "shard_count":  40,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1791,7 +1791,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  105600000,
+                                                            "total_token_budget":  52800000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  2.1667,
                                                             "target_p99_ttft_ms":  10000,
@@ -1802,7 +1802,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "moe_eval_qwen3",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  96,
+                                          "shard_count":  48,
                                           "requests_per_shard":  500
                                       },
                      "output_target":  {
@@ -1813,7 +1813,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  570,
                                       "deadline_at_offset_minutes":  700,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-570-1",
-                                      "shard_count":  96,
+                                      "shard_count":  48,
                                       "requests_per_shard":  500,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1840,7 +1840,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  232400000,
+                                                            "total_token_budget":  116200000,
                                                             "priority_class":  "STANDARD",
                                                             "deadline_hrs":  2.1667,
                                                             "target_p99_ttft_ms":  10000,
@@ -1851,7 +1851,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "long_context_benchmark",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  70,
+                                          "shard_count":  35,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
@@ -1862,7 +1862,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  570,
                                       "deadline_at_offset_minutes":  700,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-570-2",
-                                      "shard_count":  70,
+                                      "shard_count":  35,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1902,7 +1902,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  310400000,
+                                                            "total_token_budget":  155200000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  1.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -1913,7 +1913,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "reports_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  160,
+                                          "shard_count":  80,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
@@ -1924,7 +1924,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  630,
                                       "deadline_at_offset_minutes":  720,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-630-1",
-                                      "shard_count":  160,
+                                      "shard_count":  80,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -1951,7 +1951,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  202800000,
+                                                            "total_token_budget":  101400000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  1.5,
                                                             "target_p99_ttft_ms":  8000,
@@ -1962,7 +1962,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "transcript_summary_12h",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  120,
+                                          "shard_count":  60,
                                           "requests_per_shard":  100
                                       },
                      "output_target":  {
@@ -1973,7 +1973,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  630,
                                       "deadline_at_offset_minutes":  720,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-630-2",
-                                      "shard_count":  120,
+                                      "shard_count":  60,
                                       "requests_per_shard":  100,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
@@ -2061,7 +2061,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                                             "multi_turn_ratio":  0,
                                                             "shared_prefix_length_avg":  1,
                                                             "is_session_affinity":  false,
-                                                            "total_token_budget":  12800000,
+                                                            "total_token_budget":  6400000,
                                                             "priority_class":  "LOW",
                                                             "deadline_hrs":  0.5,
                                                             "target_p99_ttft_ms":  12000,
@@ -2072,7 +2072,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                           "type":  "dataset",
                                           "dataset_id":  "heldout_deepseek_probe",
                                           "partitioning":  "fixed_shards",
-                                          "shard_count":  32,
+                                          "shard_count":  16,
                                           "requests_per_shard":  200
                                       },
                      "output_target":  {
@@ -2083,7 +2083,7 @@ Exact manifest counts: **23 online jobs**, **14 batch campaigns**, **1,592 expan
                                       "release_at_offset_minutes":  690,
                                       "deadline_at_offset_minutes":  720,
                                       "campaign_id":  "campaign-benchmark_timing_12hr_homogenous-690-2",
-                                      "shard_count":  32,
+                                      "shard_count":  16,
                                       "requests_per_shard":  200,
                                       "expansion_policy":  "required",
                                       "checkpointable":  true
