@@ -18,7 +18,7 @@ from typing import BinaryIO, Protocol, TextIO
 import yaml
 from tandemn_orca.scripts.endpoint import check_ready, resolve_endpoint
 from tandemn_system_data.clients import JobStore, PostgresClient
-from tandemn_system_data.models import JobStatus
+from tandemn_system_data.models import JobStatus, ReasonCode
 
 from data_generation.controller import (
     BENCHMARKS_ROOT,
@@ -79,6 +79,8 @@ class StoreView(Protocol):
 
     def list_jobs(self, user_ids: Sequence[str]) -> Sequence[StoreJob]: ...
 
+    def finish_job(self, job_id: str, finish_reason: str | None = None) -> bool: ...
+
 
 class PostgresStoreView:
     """Read canonical jobs from tandemn-store."""
@@ -99,6 +101,17 @@ class PostgresStoreView:
                     )
                 )
         return tuple(jobs)
+
+    def finish_job(self, job_id: str, finish_reason: str | None = None) -> bool:
+        """Finish a running Store job after its AIPerf workload exits."""
+        return bool(
+            self._jobs.transition(
+                job_id,
+                JobStatus.FINISHED,
+                [JobStatus.RUNNING],
+                finish_reason=finish_reason,
+            )
+        )
 
 
 @dataclass
@@ -205,7 +218,7 @@ def run_scenario(
                 if job.state in TERMINAL_STATES:
                     continue
                 if job.state == State.LOADING:
-                    _poll_process(job, events)
+                    _poll_process(job, store, events)
                     continue
                 if (
                     job.state == State.WAIT_READY
@@ -308,7 +321,7 @@ def _launch(
     _transition(job, State.LOADING, f"AIPerf started against {endpoint}", events)
 
 
-def _poll_process(job: TrackedJob, events: TextIO) -> None:
+def _poll_process(job: TrackedJob, store: StoreView, events: TextIO) -> None:
     """Record a completed AIPerf process."""
     if job.process is None:
         raise RuntimeError("LOADING job has no AIPerf process")
@@ -318,6 +331,10 @@ def _poll_process(job: TrackedJob, events: TextIO) -> None:
     if job.log_file is not None:
         job.log_file.close()
         job.log_file = None
+    if job.store_job_id is None:
+        raise RuntimeError("LOADING job has no Store job ID")
+    finish_reason = None if exit_code == 0 else ReasonCode.PROCESS_CRASH
+    store.finish_job(job.store_job_id, finish_reason)
     state = State.DONE if exit_code == 0 else State.FAILED
     _transition(job, state, f"AIPerf exited with code {exit_code}", events, exit_code)
 
