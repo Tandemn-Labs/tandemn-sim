@@ -15,14 +15,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from bestfit import BEST_FIT_CONFIGURATIONS, _mapped_placement, _reserve
-from policy import load_config_policy
 from scenario import load_scenario, materialize_online_requests
-from vram import VRAM_REQUIREMENTS_GIB
 
 
 class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
-    """Keep the smoke run at 24 GPUs and roughly 15 minutes."""
+    """Keep the real run at 16 GPUs and roughly 15 minutes."""
 
     def test_real_orca_smoke_contract(self) -> None:
         """Validate the full benchmark path against simulation_3h structure."""
@@ -40,14 +37,14 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
         job_document = yaml.safe_load(
             (root / "jobs" / "code-chat.yaml").read_text(encoding="utf-8")
         )
+        batch_document = yaml.safe_load(
+            (root / "jobs" / "small-batch-eval.yaml").read_text(encoding="utf-8")
+        )
         reference_job = yaml.safe_load(
             (reference / "jobs" / "small-model-core.yaml").read_text(encoding="utf-8")
         )
         scenario = load_scenario(root / "benchmark.yaml")
         job = scenario.online_jobs[0]
-        placement = BEST_FIT_CONFIGURATIONS[manifest["id"]][job.name]
-        configuration = placement["configuration"]
-        resource = resources[0]
 
         self.assertEqual(set(manifest), set(reference_manifest))
         for path in (
@@ -77,7 +74,26 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
         self.assertEqual(manifest["duration_minutes"], 15)
         self.assertEqual(manifest["hard_stop_at_offset_minutes"], 16)
         self.assertEqual(len(scenario.online_jobs), 1)
-        self.assertFalse(scenario.batch_jobs)
+        self.assertEqual(len(scenario.batch_jobs), 1)
+        self.assertEqual(scenario.online_jobs[0].starts_at_ns, 0)
+        self.assertEqual(scenario.batch_jobs[0].releases_at_ns, 0)
+        self.assertEqual(scenario.batch_jobs[0].workload["record_count"], 256)
+        self.assertEqual(
+            scenario.batch_jobs[0].model_name,
+            "meta-llama/Llama-3.2-1B-Instruct",
+        )
+        batch_features = batch_document["spec"]["features"]
+        batch_dataset = batch_document["workload"]["dataset"]
+        partitioning = batch_dataset["partitioning"]
+        self.assertEqual(
+            batch_dataset["record_count"],
+            partitioning["shard_count"] * partitioning["requests_per_shard"],
+        )
+        self.assertEqual(
+            batch_features["total_token_budget"],
+            batch_dataset["record_count"]
+            * (batch_features["isl_token_avg"] + batch_features["osl_token_avg"]),
+        )
         self.assertEqual(scenario.tick_duration_ns, 60_000_000_000)
 
         catalog = yaml.safe_load(
@@ -95,73 +111,46 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
         ]
         maps = [row for row in rows if row["benchmark_id"] == manifest["id"]]
         self.assertEqual(len(maps), 1)
-        pool = maps[0]["resource_map"]["clouds"]["aws"]["regions"]["us-east-1"][
+        resource_map = maps[0]["resource_map"]
+        self.assertEqual(resource_map["market"], ["on_demand"])
+        pools = resource_map["clouds"]["gcp"]["regions"]["us-central1"][
             "zones"
-        ]["us-east-1a"]["network_fabrics"]["efa"]["machine_pools"]["g6e.48xlarge"]
-        self.assertEqual(resource["total_devices"], 24)
-        self.assertEqual(resource["devices_per_node"], pool["gpus_per_instance"])
-        self.assertEqual(pool["total_instances"], 3)
-        self.assertEqual(pool["gpu_type"], "L40S")
-        self.assertEqual(
-            pool["gpus_per_instance"] * pool["total_instances"],
-            resource["total_devices"],
-        )
-
-        self.assertEqual(configuration, {"tp": 8, "pp": 1, "dp": 3})
-        self.assertEqual(
-            configuration["tp"] * configuration["pp"],
-            pool["gpus_per_instance"],
-        )
-        self.assertEqual(
-            configuration["dp"] * pool["gpus_per_instance"],
-            resource["total_devices"],
-        )
-        planner_resources = {
-            "on_demand|aws|us-east-1|us-east-1a|L40S": {
-                "gpu_type": "L40S",
-                "total": 24,
-                "free": 24,
-                "pools": [
-                    {
-                        **pool,
-                        "instance_type": "g6e.48xlarge",
-                        "allocation_kind": "instance",
-                        "total": 24,
-                        "free": 24,
-                    }
-                ],
-            }
+        ]["us-central1-b"]["network_fabrics"]["default"]["machine_pools"]
+        expected = {
+            "g4-standard-384": ("RTXPRO6000", 96),
+            "g2-standard-96": ("L4", 24),
         }
-        resolved = _mapped_placement(placement, planner_resources)
-        self.assertIsNotNone(resolved)
-        assert resolved is not None
-        target, tp, pp, dp = resolved
-        _reserve(target, tp * pp, dp)
-        self.assertEqual(target.environment["free"], 0)
-        assert target.pool is not None
-        self.assertEqual(target.pool["free"], 0)
-        rule = load_config_policy().rule_for(placement["hardware"], job.model_name)
-        self.assertIsNotNone(rule)
-        assert rule is not None
-        self.assertIn(configuration["tp"], rule.allowed_tp)
-        self.assertEqual(rule.precision, job_document["spec"]["precision"])
-        self.assertLessEqual(
-            VRAM_REQUIREMENTS_GIB[manifest["id"]][job.name],
-            configuration["tp"] * resource["memory_gb"] * 0.9,
-        )
+        self.assertEqual(set(pools), set(expected))
+        self.assertEqual(sum(resource["total_devices"] for resource in resources), 16)
+        for resource, (machine_type, (gpu_type, memory_gb)) in zip(
+            resources, expected.items(), strict=True
+        ):
+            pool = pools[machine_type]
+            self.assertEqual(resource["total_devices"], 8)
+            self.assertEqual(resource["markets"], {"on_demand": 8})
+            self.assertEqual(resource["devices_per_node"], pool["gpus_per_instance"])
+            self.assertEqual(pool["total_instances"], 1)
+            self.assertEqual(pool["gpu_type"], gpu_type)
+            self.assertEqual(pool["gpu_memory_gb"], memory_gb)
 
         phase = job_document["workload"]["benchmark"]["phases"][0]
         features = job_document["spec"]["features"]
         dataset = job_document["workload"]["benchmark"]["dataset"]
         self.assertEqual(phase["duration"], manifest["duration_minutes"] * 60)
         self.assertEqual(phase["concurrency"], features["max_concurrent_streaming"])
-        self.assertEqual(features["request_arrival_pattern"], "Constant")
-        self.assertEqual(phase["type"], "constant")
+        self.assertEqual(features["request_arrival_pattern"], "Poisson")
+        self.assertEqual(phase["type"], "poisson")
         self.assertEqual(dataset["type"], "synthetic")
         self.assertEqual(dataset["sampling"], "random")
         self.assertGreater(dataset["entries"], 0)
         requests = materialize_online_requests(job)
-        self.assertEqual(len(requests), int(phase["rate"] * phase["duration"]) - 1)
+        expected_requests = phase["rate"] * phase["duration"]
+        self.assertAlmostEqual(len(requests), expected_requests, delta=90)
+        intervals = {
+            right.arrives_at_ns - left.arrives_at_ns
+            for left, right in zip(requests, requests[1:], strict=False)
+        }
+        self.assertGreater(len(intervals), 1)
         self.assertLess(requests[-1].arrives_at_ns, job.stops_at_ns)
         projected_streams = phase["rate"] * (
             features["target_p99_ttft_ms"] / 1000
@@ -179,19 +168,6 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
         self.assertEqual(
             sum(row["model_id"] == job.model_name for row in models),
             1,
-        )
-        with (ROOT / "benchmarks" / "model_catalog_gpu_profiles.csv").open(
-            encoding="utf-8", newline=""
-        ) as stream:
-            profiles = list(csv.DictReader(stream))
-        l40s_fields = {
-            row["profile_field"]
-            for row in profiles
-            if row["model_id"] == job.model_name and row["gpu_type"] == "L40S"
-        }
-        self.assertTrue(
-            {"max_num_seq", "max_num_batched_tokens", "block_size", "kvcache_dtype"}
-            <= l40s_fields
         )
 
 

@@ -28,6 +28,10 @@ BEST_FIT_CONFIGURATIONS: dict[
             "hardware": "L40S-48GB",
             "configuration": {"tp": 8, "pp": 1, "dp": 3},
         },
+        "job-benchmark_timing_15min_real-0-2": {
+            "hardware": "L4-24GB",
+            "configuration": {"tp": 1, "pp": 1, "dp": 1},
+        },
     },
     "simulation_12h_homogenous": {
         "job-benchmark_timing_12hr_homogenous-0-1": {

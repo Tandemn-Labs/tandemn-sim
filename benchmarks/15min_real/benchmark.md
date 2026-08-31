@@ -1,21 +1,22 @@
-# Real 15-minute, 24-GPU Orca smoke benchmark
+# Real 15-minute, 16-GPU Orca benchmark
 
 Benchmark ID: `15min_real`
 
-Purpose: cheaply validate the real Store, planner, Orca, Kubernetes, vLLM, and
-AIPerf path before running the 128+ GPU benchmarks.
+Purpose: validate the real Store, planner, Orca, Kubernetes, vLLM, and AIPerf
+path against a representative heterogeneous test fleet.
 
-- Fleet: three on-demand `g6e.48xlarge` nodes, 24 L40S GPUs total.
-- Workload: one `Qwen/Qwen2.5-Coder-32B-Instruct` streaming service.
-- Placement: TP8, PP1, DP3; three replicas consume three 8-GPU nodes.
-- Traffic: 5 requests/second at concurrency 48 for 15 minutes.
+- Fleet: one on-demand GCP `g4-standard-384` node with 8 RTX PRO 6000
+  Blackwell 96GB GPUs and one `g2-standard-96` node with 8 L4 24GB GPUs.
+- Workload: one `Qwen/Qwen2.5-Coder-32B-Instruct` streaming service and one
+  256-record `meta-llama/Llama-3.2-1B-Instruct` batch evaluation, both at T=0.
+- Traffic: Poisson arrivals averaging 0.5 requests/second at concurrency 8 for
+  15 minutes.
 - Shutdown: stop new requests at minute 15 and hard-stop after one drain minute.
 
 Provision the fleet and cache the container/model before starting the measured
-window. Using the repository's frozen AWS price, the 15-minute fleet cost is
-about $22.60; provisioning and shutdown time are additional.
+window. Provisioning and shutdown time are additional.
 
-Seed and clone the matching 24-GPU Store map with:
+Seed and clone the matching 16-GPU Store map with:
 
 ```bash
 uv run python benchmarks/benchmark_static_seed.py \
