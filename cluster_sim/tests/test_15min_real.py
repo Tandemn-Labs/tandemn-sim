@@ -113,16 +113,19 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
         self.assertEqual(len(maps), 1)
         resource_map = maps[0]["resource_map"]
         self.assertEqual(resource_map["market"], ["on_demand"])
-        pools = resource_map["clouds"]["gcp"]["regions"]["us-central1"][
-            "zones"
-        ]["us-central1-b"]["network_fabrics"]["default"]["machine_pools"]
+        fabric = resource_map["clouds"]["gcp"]["regions"]["central-1"]["zones"][
+            "default"
+        ]["network_fabrics"]["tcpip"]
+        self.assertEqual(fabric["fabric_type"], "tcpip")
+        self.assertFalse(fabric["gpu_direct_rdma"])
+        pools = fabric["machine_pools"]
         expected = {
-            "g4-standard-384": ("RTXPRO6000", 96),
-            "g2-standard-96": ("L4", 24),
+            "g4-standard-384": ("RTXPRO6000", 96, 35.99944),
+            "g2-standard-96": ("L4", 24, 8.003330784),
         }
         self.assertEqual(set(pools), set(expected))
         self.assertEqual(sum(resource["total_devices"] for resource in resources), 16)
-        for resource, (machine_type, (gpu_type, memory_gb)) in zip(
+        for resource, (machine_type, (gpu_type, memory_gb, hourly_price)) in zip(
             resources, expected.items(), strict=True
         ):
             pool = pools[machine_type]
@@ -132,6 +135,7 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
             self.assertEqual(pool["total_instances"], 1)
             self.assertEqual(pool["gpu_type"], gpu_type)
             self.assertEqual(pool["gpu_memory_gb"], memory_gb)
+            self.assertEqual(pool["price_per_instance_hour"], hourly_price)
 
         phase = job_document["workload"]["benchmark"]["phases"][0]
         features = job_document["spec"]["features"]

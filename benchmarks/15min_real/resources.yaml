@@ -9,7 +9,7 @@ resources:
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTX PRO 6000 Blackwell system model
     markets: {on_demand: 8}
-    regions: {us-central1: 8}
+    regions: {central-1: 8}
 
   - id: l4-24gb
     accelerator: L4-24GB
@@ -19,4 +19,4 @@ resources:
     aic_system: null
     unsupported_reason: AIC 0.11 has no L4 system model
     markets: {on_demand: 8}
-    regions: {us-central1: 8}
+    regions: {central-1: 8}
