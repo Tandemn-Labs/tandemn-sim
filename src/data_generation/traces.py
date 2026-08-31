@@ -8,20 +8,25 @@ This module deliberately observes experiments without controlling them.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 from tandemn_system_data.clients import (
     CausalGraphStore,
     EvidenceStore,
+    GpuMetricStore,
     JobStore,
     ResourceMapStore,
 )
 from tandemn_system_data.clients.event_log import PostgresEventLog
 from tandemn_system_data.models.event import Event
+from tandemn_system_data.models.gpu_metric import GpuMetric, gpu_metric_to_metrics
 from tandemn_system_data.models.rank import Rank
+
+from data_generation.trace_telemetry import rank_trajectories
 
 DEFAULT_COLLECTION_INTERVAL_SECONDS = 60
 DEFAULT_TICK_HOLDBACK_SECONDS = 60
@@ -98,6 +103,115 @@ class TraceTick:
         )
 
 
+@dataclass(frozen=True)
+class AIPerfRequest:
+    """One terminal AIPerf request record normalized for trace aggregation."""
+
+    request_id: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    cancelled_at: datetime | None
+    failed: bool
+    cancelled: bool
+    ttft_ms: float | None
+    tpot_ms: float | None
+    latency_ms: float | None
+    input_length: int | None
+    output_tokens: int | None
+
+    @property
+    def completed(self) -> bool:
+        """Return whether AIPerf recorded a successful terminal response."""
+        return self.ended_at is not None and not self.failed and not self.cancelled
+
+
+@dataclass(frozen=True)
+class AIPerfSummary:
+    """Client-observed request outcomes and latency distribution for one window."""
+
+    attempted_request_count: int
+    completed_request_count: int
+    failed_request_count: int
+    cancelled_request_count: int
+    mean_ttft_ms: float | None
+    p90_ttft_ms: float | None
+    p99_ttft_ms: float | None
+    mean_tpot_ms: float | None
+    p90_tpot_ms: float | None
+    p99_tpot_ms: float | None
+    mean_latency_ms: float | None
+    p90_latency_ms: float | None
+    p99_latency_ms: float | None
+    output_tokens: int
+    ttft_pass_count: int
+    tpot_pass_count: int
+    slo_pass_count: int
+    qualified_output_tokens: int
+
+
+def summarize_aiperf(
+    records: tuple[AIPerfRequest, ...],
+    *,
+    ttft_target_ms: float | None,
+    tpot_target_ms: float | None,
+) -> AIPerfSummary:
+    """Summarize completed AIPerf records using AIPerf's linear percentiles.
+
+    Failed and cancelled requests remain visible in their own counts but never
+    contribute latency distributions or SLO-qualified output tokens. AIPerf
+    calls its per-output-token metric ``inter_token_latency``; this is the
+    TPOT metric used by the benchmark and trace.
+    """
+    completed = tuple(record for record in records if record.completed)
+    ttft = tuple(record.ttft_ms for record in completed if record.ttft_ms is not None)
+    tpot = tuple(record.tpot_ms for record in completed if record.tpot_ms is not None)
+    latency = tuple(
+        record.latency_ms for record in completed if record.latency_ms is not None
+    )
+    ttft_pass = 0
+    tpot_pass = 0
+    slo_pass = 0
+    qualified_tokens = 0
+    for record in completed:
+        passed_ttft = (
+            ttft_target_ms is not None
+            and record.ttft_ms is not None
+            and record.ttft_ms <= ttft_target_ms
+        )
+        passed_tpot = (
+            tpot_target_ms is not None
+            and record.tpot_ms is not None
+            and record.tpot_ms <= tpot_target_ms
+        )
+        ttft_pass += int(passed_ttft)
+        tpot_pass += int(passed_tpot)
+        if passed_ttft and passed_tpot:
+            slo_pass += 1
+            qualified_tokens += record.output_tokens or 0
+    return AIPerfSummary(
+        attempted_request_count=sum(
+            record.started_at is not None for record in records
+        ),
+        completed_request_count=len(completed),
+        failed_request_count=sum(record.failed for record in records),
+        cancelled_request_count=sum(record.cancelled for record in records),
+        mean_ttft_ms=_mean(ttft),
+        p90_ttft_ms=_percentile(ttft, 0.9),
+        p99_ttft_ms=_percentile(ttft, 0.99),
+        mean_tpot_ms=_mean(tpot),
+        p90_tpot_ms=_percentile(tpot, 0.9),
+        p99_tpot_ms=_percentile(tpot, 0.99),
+        mean_latency_ms=_mean(latency),
+        p90_latency_ms=_percentile(latency, 0.9),
+        p99_latency_ms=_percentile(latency, 0.99),
+        output_tokens=sum(record.output_tokens or 0 for record in completed),
+        ttft_pass_count=ttft_pass,
+        tpot_pass_count=tpot_pass,
+        slo_pass_count=slo_pass,
+        qualified_output_tokens=qualified_tokens,
+    )
+
+
 class RealTraceCollector:
     """Manage a trace file and fixed collection schedule for one benchmark run.
 
@@ -147,6 +261,11 @@ class RealTraceCollector:
         self._rank_updated_at: dict[str, datetime] = {}
         self._resource_version: int | None = None
         self._evidence_digests: dict[str, str] = {}
+        self._aiperf_offsets: dict[str, int] = {}
+        self._aiperf_tails: dict[str, bytes] = {}
+        self._aiperf_request_ids: dict[str, set[str]] = {}
+        self._aiperf_records_by_window: dict[tuple[int, str], list[AIPerfRequest]] = {}
+        self._gpu_metric_ids: set[str] = set()
 
     def start_run(self, started_at: datetime) -> None:
         """Create the trace file and record immutable run collection settings."""
@@ -297,6 +416,139 @@ class RealTraceCollector:
         ]
         return finalized
 
+    def read_aiperf_records(self, authored_job_id: str) -> tuple[AIPerfRequest, ...]:
+        """Read newly flushed complete AIPerf JSONL records for one bound job.
+
+        AIPerf writes records asynchronously, so an incomplete final line stays
+        buffered until a later read. The byte offset advances to end-of-file;
+        the retained fragment is prepended to the next append. Request IDs make
+        repeated exported records harmless.
+        """
+        path = self.job_binding(authored_job_id).aiperf_profile_path
+        if not path.exists():
+            return ()
+        offset = self._aiperf_offsets.get(authored_job_id, 0)
+        with path.open("rb") as artifact:
+            artifact.seek(offset)
+            appended = artifact.read()
+        self._aiperf_offsets[authored_job_id] = offset + len(appended)
+        lines = (self._aiperf_tails.get(authored_job_id, b"") + appended).split(b"\n")
+        self._aiperf_tails[authored_job_id] = lines.pop()
+        seen_request_ids = self._aiperf_request_ids.setdefault(authored_job_id, set())
+        records = []
+        for line in lines:
+            record = self._aiperf_request(line)
+            if record is None or record.request_id in seen_request_ids:
+                continue
+            seen_request_ids.add(record.request_id)
+            records.append(record)
+        return tuple(records)
+
+    def collect_aiperf_records(self, authored_job_id: str) -> int:
+        """Assign newly read AIPerf terminal records to their open tick."""
+        assigned = 0
+        for record in self.read_aiperf_records(authored_job_id):
+            timestamp = record.ended_at or record.cancelled_at
+            tick = self.tick_for(timestamp) if timestamp is not None else None
+            if tick is None:
+                continue
+            self._aiperf_records_by_window.setdefault(
+                (tick, authored_job_id), []
+            ).append(record)
+            assigned += 1
+        return assigned
+
+    def emit_online_job_window(
+        self,
+        tick: TraceTick,
+        authored_job_id: str,
+        *,
+        ttft_target_ms: float | None,
+        tpot_target_ms: float | None,
+    ) -> AIPerfSummary:
+        """Write one finalized client-outcome summary for an online job tick."""
+        binding = self.job_binding(authored_job_id)
+        if binding.job_kind != "online":
+            raise ValueError("AIPerf windows require an online job")
+        records = tuple(
+            self._aiperf_records_by_window.pop((tick.tick, authored_job_id), [])
+        )
+        summary = summarize_aiperf(
+            records,
+            ttft_target_ms=ttft_target_ms,
+            tpot_target_ms=tpot_target_ms,
+        )
+        self._append(
+            {
+                "kind": "online_job_window",
+                "tick": tick.tick,
+                "job_id": binding.store_job_id,
+                "authored_job_id": authored_job_id,
+                "window_start": tick.started_at.isoformat(),
+                "window_end": tick.ended_at.isoformat() if tick.ended_at else None,
+                **asdict(summary),
+            }
+        )
+        return summary
+
+    def emit_gpu_samples(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
+        """Write raw Store GPU samples that fall inside one finalized tick."""
+        if tick.ended_at is None:
+            raise ValueError("GPU samples require a closed tick")
+        emitted = 0
+        for binding in self._bindings.values():
+            rows = metrics.rows_for_job_window(
+                self.user_id,
+                binding.store_job_id,
+                tick.started_at,
+                tick.ended_at,
+            )
+            for metric in rows:
+                if (
+                    metric.metric_id in self._gpu_metric_ids
+                    or metric.job_id != binding.store_job_id
+                    or not tick.contains(metric.ts)
+                ):
+                    continue
+                self._gpu_metric_ids.add(metric.metric_id)
+                self._append(self._gpu_sample(tick, metric))
+                emitted += 1
+        return emitted
+
+    def emit_rank_windows(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
+        """Aggregate finalized Store GPU rows into ten-second rank trajectories."""
+        if tick.ended_at is None:
+            raise ValueError("rank windows require a closed tick")
+        rows = [
+            metric
+            for binding in self._bindings.values()
+            for metric in metrics.rows_for_job_window(
+                self.user_id,
+                binding.store_job_id,
+                tick.started_at,
+                tick.ended_at,
+            )
+            if metric.job_id == binding.store_job_id and tick.contains(metric.ts)
+        ]
+        emitted = 0
+        for (job_id, rank_id), trajectory in rank_trajectories(rows).items():
+            self._append(
+                {
+                    "kind": "rank_window",
+                    "tick": tick.tick,
+                    "job_id": job_id,
+                    "rank_id": rank_id,
+                    "chain_indices": trajectory["chain_indices"],
+                    "window_start": tick.started_at.isoformat(),
+                    "window_end": tick.ended_at.isoformat(),
+                    "sample_bucket_starts": trajectory["sample_bucket_starts"],
+                    "metrics": trajectory["metrics"],
+                    "telemetry_scope": "real_observed_window",
+                }
+            )
+            emitted += 1
+        return emitted
+
     def close_run(self, finished_at: datetime, *, status: str) -> None:
         """Write the terminal run record after scenario-owned shutdown completes."""
         self._append(
@@ -355,6 +607,54 @@ class RealTraceCollector:
 
     def _tick_number(self) -> int | None:
         return self._open_tick.tick if self._open_tick is not None else None
+
+    def _aiperf_request(self, line: bytes) -> AIPerfRequest | None:
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        metadata = raw.get("metadata")
+        metrics = raw.get("metrics")
+        if not isinstance(metadata, dict) or not isinstance(metrics, dict):
+            return None
+        request_id = metadata.get("x_request_id")
+        if not isinstance(request_id, str) or not request_id:
+            return None
+        cancelled = metadata.get("was_cancelled") is True
+        return AIPerfRequest(
+            request_id=request_id,
+            started_at=_timestamp(metadata.get("request_start_ns")),
+            ended_at=_timestamp(metadata.get("request_end_ns")),
+            cancelled_at=_timestamp(metadata.get("cancellation_time_ns")),
+            failed=bool(raw.get("error")),
+            cancelled=cancelled,
+            ttft_ms=_milliseconds(metrics, "time_to_first_token"),
+            tpot_ms=_milliseconds(metrics, "inter_token_latency"),
+            latency_ms=_milliseconds(metrics, "request_latency"),
+            input_length=_whole_number(metrics, "input_sequence_length"),
+            output_tokens=_whole_number(metrics, "output_sequence_length"),
+        )
+
+    def _gpu_sample(self, tick: TraceTick, metric: GpuMetric) -> dict[str, object]:
+        values = gpu_metric_to_metrics(metric)
+        if values["sm_utilization"] is not None:
+            values["sm_utilization"] = float(values["sm_utilization"]) * 100
+        return {
+            "kind": "gpu_sample",
+            "tick": tick.tick,
+            "metric_id": metric.metric_id,
+            "ts": metric.ts.isoformat(),
+            "job_id": metric.job_id,
+            "gpu_uuid": metric.gpu_uuid,
+            "rank_id": metric.rank_id,
+            "chain_index": metric.chain_index,
+            "local_rank": metric.local_rank,
+            "role": metric.role,
+            "node_name": metric.node_name,
+            "instance_type": metric.instance_type,
+            "model_name": metric.model_name,
+            "metrics": values,
+        }
 
     def _snapshot_jobs(self, jobs: JobStore, observed_at: datetime) -> None:
         for job in jobs.list_jobs(self.user_id):
@@ -471,3 +771,49 @@ class RealTraceCollector:
         if isinstance(value, set):
             return sorted(value)
         return str(value)
+
+
+def _mean(values: tuple[float, ...]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _percentile(values: tuple[float, ...], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _timestamp(value: object) -> datetime | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        return None
+    return datetime.fromtimestamp(value / 1_000_000_000, UTC)
+
+
+def _milliseconds(metrics: dict[str, object], name: str) -> float | None:
+    raw = metrics.get(name)
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("value")
+    unit = raw.get("unit")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    factors = {"ns": 1e-6, "us": 1e-3, "ms": 1.0, "s": 1000.0, "sec": 1000.0}
+    if not isinstance(unit, str) or unit not in factors:
+        return None
+    return float(value) * factors[unit]
+
+
+def _whole_number(metrics: dict[str, object], name: str) -> int | None:
+    raw = metrics.get(name)
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("value")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(value)
