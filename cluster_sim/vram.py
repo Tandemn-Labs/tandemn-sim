@@ -19,7 +19,8 @@ from rank_ids import rank_id
 
 VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
     "15min_real": {
-        "job-benchmark_timing_15min_real-0-1": 123.723,
+        "job-benchmark_timing_15min_real-0-1": 71.477,
+        "job-benchmark_timing_15min_real-0-2": 3.552,
     },
     "simulation_12h_homogenous": {
         "job-benchmark_timing_12hr_homogenous-0-1": 7.966,

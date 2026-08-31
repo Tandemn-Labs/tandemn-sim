@@ -60,7 +60,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_24h": (9, 800),
     "real_life_3h": (9, 192),
     "simulation_12h_homogenous": (1, 400),
-    "15min_real": (1, 24),
+    "15min_real": (2, 16),
     "real_life_12h": (9, 192),
     "real_life_24h": (9, 192),
 }
@@ -250,8 +250,8 @@ def _validate_resource_map_coverage(
             f"{benchmark_id} resource map must contain {expected_gpu_count} GPUs"
         )
     for cloud, region, zone, instance_type, _ in pools:
-        # RunPod MI300X capacity has no matching local hardware-catalog snapshot.
-        if cloud == "runpod":
+        # GCP and RunPod capacity have no matching local catalog snapshot.
+        if cloud in {"gcp", "runpod"}:
             continue
         if cloud not in catalogs:
             raise ValueError(f"unsupported benchmark cloud {cloud}")
