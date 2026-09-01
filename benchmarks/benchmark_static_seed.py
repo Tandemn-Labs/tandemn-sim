@@ -61,7 +61,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "real_life_3h": (9, 192),
     "simulation_12h_homogenous": (1, 400),
     "15min_real": (2, 16),
-    "real_life_12h": (9, 192),
+    "real_12h": (9, 192),
     "real_life_24h": (9, 192),
 }
 LOGGER = logging.getLogger(__name__)

@@ -58,7 +58,7 @@ class VramPlannerDriverTest(unittest.TestCase):
         self.assertEqual(
             {name: len(jobs) for name, jobs in VRAM_REQUIREMENTS_GIB.items()},
             {
-                "real_life_12h": 32,
+                "real_12h": 28,
                 "real_life_24h": 41,
                 "real_life_3h": 19,
                 "simulation_12h_homogenous": 37,
@@ -223,7 +223,7 @@ class VramPlannerDriverTest(unittest.TestCase):
 
     def test_placement_minimizes_total_provisioned_vram(self) -> None:
         """Prefer seven 80 GiB GPUs over three 192 GiB GPUs."""
-        driver = _driver(benchmark_name="real_life_12h")
+        driver = _driver(benchmark_name="real_12h")
         job_id = "job-benchmark_timing_real_12hr_192gpu-0-3"
 
         actions = driver._build_actions(

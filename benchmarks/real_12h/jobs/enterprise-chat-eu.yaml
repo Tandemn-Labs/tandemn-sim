@@ -1,0 +1,61 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_real_12hr_192gpu-150-2
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_real_12hr_192gpu-150-2
+  operation: base_service
+  start_at_offset_minutes: 150
+  stop_at_offset_minutes: 480
+spec:
+  user_id: tenant_enterprise_chat
+  optimization_goal: latency
+  precision: fp16
+  features:
+    isl_token_avg: 1500
+    isl_token_min: 375
+    isl_token_max: 5500
+    isl_distribution_type: LogNormal
+    osl_token_avg: 420
+    osl_token_min: 105
+    osl_token_max: 1200
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Diurnal
+    peak_to_mean_ratio: 2
+    workload_prefix_concentration: 0.5
+    multi_turn_ratio: 0.7
+    shared_prefix_length_avg: 375
+    is_session_affinity: true
+    priority_class: STANDARD
+    max_concurrent_streaming: 24
+    target_p99_ttft_ms: 500
+    target_p99_tpot_ms: 42
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 102
+  benchmark:
+    model: microsoft/phi-4
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 180
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:microsoft/phi-4}
+    dataset:
+      type: synthetic
+      entries: 1000
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 19800
+      rate: 0.9
+      smoothness: 0.41
+      concurrency: 24
+      rateRamp: 19800
+      gracePeriod: 1200
