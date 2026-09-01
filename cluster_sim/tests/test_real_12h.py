@@ -55,7 +55,18 @@ class RealTwelveHourTest(unittest.TestCase):
         self.assertEqual(scenario.tick_duration_ns, 300_000_000_000)
         self.assertEqual(len(scenario.online_jobs), 16)
         self.assertEqual(len(scenario.batch_jobs), 12)
-        self.assertEqual(set(self.jobs), set(self.overview_jobs))
+        self.assertEqual(
+            set(self.jobs),
+            {
+                job_id
+                for job_id, job in self.overview_jobs.items()
+                if job["kind"] == "online"
+            },
+        )
+        self.assertEqual(
+            {job.name for job in scenario.online_jobs + scenario.batch_jobs},
+            set(self.overview_jobs),
+        )
 
     def test_online_service_curve_is_smooth_and_search_free(self) -> None:
         """Maintain enterprise overlap without embedding or search traffic."""
@@ -127,6 +138,19 @@ class RealTwelveHourTest(unittest.TestCase):
 
         for job_id, source in self.overview_jobs.items():
             with self.subTest(job_id=job_id):
+                if source["kind"] == "batch":
+                    source_schedule = source["schedule"]
+                    input_source = source["input_source"]
+                    expanded_shards += input_source["shard_count"]
+                    self.assertEqual(
+                        input_source["shard_count"], source_schedule["shard_count"]
+                    )
+                    self.assertEqual(
+                        input_source["requests_per_shard"],
+                        source_schedule["requests_per_shard"],
+                    )
+                    continue
+
                 job = self.jobs[job_id]
                 schedule = job["schedule"]
                 source_schedule = source["schedule"]
@@ -140,44 +164,26 @@ class RealTwelveHourTest(unittest.TestCase):
                 self.assertEqual(job["spec"]["user_id"], source["user_id"])
                 self.assertEqual(features, source["spec_json"]["job_features"])
 
-                if source["kind"] == "online":
-                    benchmark = job["workload"]["benchmark"]
-                    phase = benchmark["phases"][0]
-                    self.assertEqual(
-                        schedule["stop_at_offset_minutes"],
-                        source_schedule["active_end_at_offset_minutes"],
-                    )
-                    self.assertEqual(
-                        benchmark["model"], source["spec_json"]["model_id"]
-                    )
-                    self.assertEqual(
-                        phase["duration"], source_schedule["duration_minutes"] * 60
-                    )
-                    self.assertEqual(
-                        phase["concurrency"], features["max_concurrent_streaming"]
-                    )
-                    self.assertEqual(
-                        phase["type"],
-                        phase_types[features["request_arrival_pattern"]],
-                    )
-                    self.assertGreater(phase["rate"], 0)
-                    continue
-
-                dataset = job["workload"]["dataset"]
-                partitioning = dataset["partitioning"]
-                expanded_shards += partitioning["shard_count"]
-                self.assertEqual(dataset["model"], source["spec_json"]["model_id"])
+                benchmark = job["workload"]["benchmark"]
+                phase = benchmark["phases"][0]
                 self.assertEqual(
-                    partitioning["shard_count"], source_schedule["shard_count"]
+                    schedule["stop_at_offset_minutes"],
+                    source_schedule["active_end_at_offset_minutes"],
                 )
                 self.assertEqual(
-                    partitioning["requests_per_shard"],
-                    source_schedule["requests_per_shard"],
+                    benchmark["model"], source["spec_json"]["model_id"]
                 )
                 self.assertEqual(
-                    dataset["record_count"],
-                    partitioning["shard_count"] * partitioning["requests_per_shard"],
+                    phase["duration"], source_schedule["duration_minutes"] * 60
                 )
+                self.assertEqual(
+                    phase["concurrency"], features["max_concurrent_streaming"]
+                )
+                self.assertEqual(
+                    phase["type"],
+                    phase_types[features["request_arrival_pattern"]],
+                )
+                self.assertGreater(phase["rate"], 0)
 
         self.assertEqual(expanded_shards, 678)
 
@@ -226,6 +232,26 @@ class RealTwelveHourTest(unittest.TestCase):
         self.assertEqual(
             sum(pool["total_instances"] * pool["gpus_per_instance"] for pool in pools),
             100,
+        )
+
+    def test_models_stay_within_the_available_set(self) -> None:
+        """Keep every authored job on an approved deployable model."""
+        allowed_models = {
+            "meta-llama/Llama-3.2-1B-Instruct",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "microsoft/phi-4",
+            "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "Qwen/Qwen3-Next-80B-A3B-Thinking",
+            "zai-org/GLM-4.5-Air",
+            "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ",
+        }
+
+        self.assertTrue(
+            {
+                job["spec_json"]["model_id"]
+                for job in self.overview_jobs.values()
+            }.issubset(allowed_models)
         )
 
 

@@ -1,10 +1,12 @@
-"""Build deterministic workload slices from existing benchmark YAML files."""
+"""Build deterministic workload slices from benchmark manifests."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import random
+import re
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -45,6 +47,7 @@ def load_scenario(overview_path: Path) -> Scenario:
     jobs_directory = overview_path.parent / settings["jobs"]
     online_jobs = []
     batch_jobs = []
+    loaded_job_ids = set()
 
     for job_path in sorted(jobs_directory.glob("*.yaml")):
         document = yaml.safe_load(job_path.read_text(encoding="utf-8"))
@@ -52,6 +55,7 @@ def load_scenario(overview_path: Path) -> Scenario:
         if not schedule["enabled"]:
             continue
         job_id = document["job_id"]
+        loaded_job_ids.add(job_id)
         features = document["spec"]["features"]
         workload = document["workload"]
         kind = schedule["kind"]
@@ -90,9 +94,43 @@ def load_scenario(overview_path: Path) -> Scenario:
                     "input": _distribution(features, "isl"),
                     "output": _distribution(features, "osl"),
                     "record_count": dataset["record_count"],
-                        "requests_per_shard": partitioning["requests_per_shard"],
-                        "seed": dataset["seed"],
-                        "task": dataset["request_format"],
+                    "requests_per_shard": partitioning["requests_per_shard"],
+                    "seed": dataset["seed"],
+                    "task": dataset["request_format"],
+                },
+            )
+        )
+
+    definition_path = overview_path.parent / settings["definition"]
+    for job in _document_jobs(definition_path):
+        job_id = str(job["job_id"])
+        if job_id in loaded_job_ids or job["kind"] != "batch":
+            continue
+        spec = job["spec_json"]
+        features = spec["job_features"]
+        source = job["input_source"]
+        schedule = job["schedule"]
+        batch_jobs.append(
+            BatchJob(
+                name=job_id,
+                store_job_id=job_id,
+                model_name=str(spec["model_id"]),
+                releases_at_ns=_ns(schedule["release_at_offset_minutes"]),
+                deadline_at_ns=_ns(schedule["deadline_at_offset_minutes"]),
+                hard_stop_at_ns=_ns(settings["hard_stop_at_offset_minutes"]),
+                workload={
+                    "features": features,
+                    "input": _distribution(features, "isl"),
+                    "output": _distribution(features, "osl"),
+                    "record_count": (
+                        int(source["shard_count"])
+                        * int(source["requests_per_shard"])
+                    ),
+                    "requests_per_shard": source["requests_per_shard"],
+                    "seed": int.from_bytes(
+                        hashlib.sha256(job_id.encode()).digest()[:8], "big"
+                    ),
+                    "task": "chat",
                 },
             )
         )
@@ -104,6 +142,16 @@ def load_scenario(overview_path: Path) -> Scenario:
         online_jobs=tuple(online_jobs),
         batch_jobs=tuple(batch_jobs),
     )
+
+
+def _document_jobs(path: Path) -> tuple[dict[str, object], ...]:
+    """Read canonical jobs from fenced JSON benchmark events."""
+    jobs = []
+    for block in re.findall(
+        r"```json\s*(.*?)```", path.read_text(encoding="utf-8"), re.DOTALL
+    ):
+        jobs.extend(json.loads(block).get("jobs", []))
+    return tuple(jobs)
 
 
 def materialize_online_requests(job: OnlineJob) -> tuple[Request, ...]:

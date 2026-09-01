@@ -397,6 +397,7 @@ candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_n
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_batched_tokens,T4,2048
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_batched_tokens,MI300,8192
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_batched_tokens,A10G,2048
+candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_batched_tokens,RTXPRO6000,2048
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,GB200,auto
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,B200,auto
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,H200,auto
@@ -411,6 +412,7 @@ candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcac
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,T4,auto
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,MI300,auto
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,A10G,auto
+candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,kvcache_dtype,RTXPRO6000,auto
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,GB200,16
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,B200,16
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,H200,16
@@ -425,6 +427,7 @@ candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,T4,16
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,MI300,16
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,A10G,16
+candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,block_size,RTXPRO6000,16
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,GB200,1024
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,B200,1024
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,H200,1024
@@ -439,6 +442,7 @@ candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_n
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,T4,256
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,MI300,1024
 candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,A10G,256
+candidate_jsonl,Qwen/Qwen2.5-Coder-32B-Instruct,Qwen2.5-Coder-32B-Instruct,max_num_seq,RTXPRO6000,256
 candidate_jsonl,meta-llama/Llama-3.3-70B-Instruct,Llama-3.3-70B-Instruct,max_num_batched_tokens,GB200,8192
 candidate_jsonl,meta-llama/Llama-3.3-70B-Instruct,Llama-3.3-70B-Instruct,max_num_batched_tokens,B200,8192
 candidate_jsonl,meta-llama/Llama-3.3-70B-Instruct,Llama-3.3-70B-Instruct,max_num_batched_tokens,H200,8192

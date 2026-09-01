@@ -62,33 +62,33 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_12hr_homogenous-690-2": 743.49,
     },
     "real_12h": {
-        "job-benchmark_timing_real_12hr_192gpu-0-1": 320.905,
-        "job-benchmark_timing_real_12hr_192gpu-0-2": 179.304,
-        "job-benchmark_timing_real_12hr_192gpu-0-3": 500.411,
-        "job-benchmark_timing_real_12hr_192gpu-0-4": 1497.795,
-        "job-benchmark_timing_real_12hr_192gpu-0-5": 356.794,
+        "job-benchmark_timing_real_12hr_192gpu-0-1": 7.966,
+        "job-benchmark_timing_real_12hr_192gpu-0-2": 7.966,
+        "job-benchmark_timing_real_12hr_192gpu-0-3": 171.67,
+        "job-benchmark_timing_real_12hr_192gpu-0-4": 102.824,
+        "job-benchmark_timing_real_12hr_192gpu-0-5": 3.333,
         "job-benchmark_timing_real_12hr_192gpu-0-6": 2.458,
         "job-benchmark_timing_real_12hr_192gpu-10-1": 741.768,
         "job-benchmark_timing_real_12hr_192gpu-10-2": 204.726,
-        "job-benchmark_timing_real_12hr_192gpu-45-3": 1026.932,
+        "job-benchmark_timing_real_12hr_192gpu-45-3": 141.678,
         "job-benchmark_timing_real_12hr_192gpu-90-1": 869.698,
         "job-benchmark_timing_real_12hr_192gpu-90-2": 613.243,
-        "job-benchmark_timing_real_12hr_192gpu-150-2": 794.06,
-        "job-benchmark_timing_real_12hr_192gpu-210-1": 4660.637,
-        "job-benchmark_timing_real_12hr_192gpu-210-2": 775.948,
+        "job-benchmark_timing_real_12hr_192gpu-150-2": 57.976,
+        "job-benchmark_timing_real_12hr_192gpu-210-1": 208.215,
+        "job-benchmark_timing_real_12hr_192gpu-210-2": 324.776,
         "job-benchmark_timing_real_12hr_192gpu-270-1": 1667.625,
-        "job-benchmark_timing_real_12hr_192gpu-360-1": 3218.094,
-        "job-benchmark_timing_real_12hr_192gpu-360-2": 840.193,
-        "job-benchmark_timing_real_12hr_192gpu-420-1": 181.67,
+        "job-benchmark_timing_real_12hr_192gpu-360-1": 109.256,
+        "job-benchmark_timing_real_12hr_192gpu-360-2": 3.333,
+        "job-benchmark_timing_real_12hr_192gpu-420-1": 156.847,
         "job-benchmark_timing_real_12hr_192gpu-420-2": 772.286,
-        "job-benchmark_timing_real_12hr_192gpu-480-1": 2027.71,
-        "job-benchmark_timing_real_12hr_192gpu-480-2": 521.621,
-        "job-benchmark_timing_real_12hr_192gpu-480-3": 1432.109,
+        "job-benchmark_timing_real_12hr_192gpu-480-1": 250.956,
+        "job-benchmark_timing_real_12hr_192gpu-480-2": 247.878,
+        "job-benchmark_timing_real_12hr_192gpu-480-3": 213.882,
         "job-benchmark_timing_real_12hr_192gpu-570-1": 457.339,
         "job-benchmark_timing_real_12hr_192gpu-570-2": 274.252,
         "job-benchmark_timing_real_12hr_192gpu-630-1": 313.143,
         "job-benchmark_timing_real_12hr_192gpu-630-2": 904.862,
-        "job-benchmark_timing_real_12hr_192gpu-690-1": 1078.202,
+        "job-benchmark_timing_real_12hr_192gpu-690-1": 109.647,
         "job-benchmark_timing_real_12hr_192gpu-690-2": 251.363,
     },
     "real_life_24h": {
@@ -285,6 +285,8 @@ _HARDWARE_ALIASES = {
     "a100-pcie-40gb": "a100-pcie-40gb",
     "a10g": "a10g-24gb",
     "a10g-24gb": "a10g-24gb",
+    "l4": "l4-24gb",
+    "l4-24gb": "l4-24gb",
     "l40s": "l40s-48gb",
     "l40s-48gb": "l40s-48gb",
     "mi300": "mi300x-192gb",
@@ -297,8 +299,10 @@ _HARDWARE_MEMORY_GIB = {
     "a100-sxm-80gb": 80,
     "a100-pcie-40gb": 40,
     "a10g-24gb": 24,
+    "l4-24gb": 24,
     "l40s-48gb": 48,
     "mi300x-192gb": 192,
+    "rtxpro6000": 96,
 }
 
 _PRECISION_STORAGE_BYTES = {
@@ -556,8 +560,14 @@ def generate_vram_requirements(
     requirements: dict[str, dict[str, float]] = {}
     for manifest_path in sorted(benchmarks_root.glob("*/benchmark.yaml")):
         benchmark_root = manifest_path.parent
+        manifest = _mapping(
+            yaml.safe_load(manifest_path.read_text(encoding="utf-8")),
+            str(manifest_path),
+        )
+        benchmark = _mapping(manifest.get("benchmark"), str(manifest_path))
+        benchmark_id = _text(benchmark.get("id"), f"benchmark id in {manifest_path}")
         jobs = _benchmark_jobs(benchmark_root)
-        requirements[benchmark_root.name] = {}
+        requirements[benchmark_id] = {}
         for job in jobs:
             spec = _mapping(job.get("spec_json"), "job spec_json")
             model_id = _text(spec.get("model_id"), "model_id")
@@ -566,7 +576,7 @@ def generate_vram_requirements(
             except KeyError as error:
                 raise ValueError(f"missing architecture for {model_id}") from error
             job_id = _text(job.get("job_id"), "job_id")
-            requirements[benchmark_root.name][job_id] = calculate_max_vram_gib(
+            requirements[benchmark_id][job_id] = calculate_max_vram_gib(
                 architecture,
                 job,
             )
@@ -617,11 +627,14 @@ def _cache_elements_per_token(architecture: ModelArchitecture) -> int:
 
 
 def _benchmark_jobs(benchmark_root: Path) -> tuple[dict[str, Any], ...]:
-    """Read YAML jobs when executable, with legacy benchmark docs as fallback."""
+    """Merge executable YAML jobs with canonical benchmark document jobs."""
     jobs_directory = benchmark_root / "jobs"
-    if jobs_directory.is_dir():
-        return _yaml_benchmark_jobs(jobs_directory)
-    return _document_benchmark_jobs(benchmark_root / "benchmark.md")
+    yaml_jobs = _yaml_benchmark_jobs(jobs_directory)
+    job_ids = {job["job_id"] for job in yaml_jobs}
+    document_jobs = _document_benchmark_jobs(benchmark_root / "benchmark.md")
+    return yaml_jobs + tuple(
+        job for job in document_jobs if job.get("job_id") not in job_ids
+    )
 
 
 def _yaml_benchmark_jobs(jobs_directory: Path) -> tuple[dict[str, Any], ...]:

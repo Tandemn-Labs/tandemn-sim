@@ -35,7 +35,7 @@ workload:
   schemaVersion: '2.0'
   randomSeed: 101
   benchmark:
-    model: moonshotai/Kimi-K2-Instruct
+    model: zai-org/GLM-4.5-Air
     endpoint:
       path: /v1/chat/completions
       type: chat
@@ -43,7 +43,7 @@ workload:
       timeout: 900
       connectionReuse: pooled
     tokenizer:
-      name: ${TOKENIZER_NAME:moonshotai/Kimi-K2-Instruct}
+      name: ${TOKENIZER_NAME:zai-org/GLM-4.5-Air}
     dataset:
       type: synthetic
       entries: 256
