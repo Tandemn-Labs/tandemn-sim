@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 import sys
@@ -191,6 +192,16 @@ class RealTwelveHourTest(unittest.TestCase):
         """Keep the real run at 100 GPUs and its configured benchmark ID."""
         self.assertEqual(sum(item["total_devices"] for item in self.resources), 100)
         self.assertEqual(
+            {item["accelerator"] for item in self.resources},
+            {
+                "H100-SXM-80GB",
+                "A100-SXM-80GB",
+                "A100-PCIe-40GB",
+                "RTXPRO6000",
+                "L4-24GB",
+            },
+        )
+        self.assertEqual(
             {
                 market: sum(item["markets"][market] for item in self.resources)
                 for market in ("reserved", "on_demand")
@@ -230,6 +241,10 @@ class RealTwelveHourTest(unittest.TestCase):
                         pools.extend(fabric["machine_pools"].values())
         self.assertEqual(len(pools), 9)
         self.assertEqual(
+            {pool["gpu_type"] for pool in pools},
+            {"H100", "A100_80GB", "RTXPRO6000", "L4"},
+        )
+        self.assertEqual(
             sum(pool["total_instances"] * pool["gpus_per_instance"] for pool in pools),
             100,
         )
@@ -247,12 +262,31 @@ class RealTwelveHourTest(unittest.TestCase):
             "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ",
         }
 
-        self.assertTrue(
-            {
-                job["spec_json"]["model_id"]
-                for job in self.overview_jobs.values()
-            }.issubset(allowed_models)
-        )
+        used_models = {
+            job["spec_json"]["model_id"] for job in self.overview_jobs.values()
+        }
+        self.assertTrue(used_models.issubset(allowed_models))
+
+        with (ROOT / "benchmarks" / "model_catalog_gpu_profiles.csv").open(
+            encoding="utf-8", newline=""
+        ) as stream:
+            profiles = list(csv.DictReader(stream))
+        expected_fields = {
+            "max_num_seq",
+            "max_num_batched_tokens",
+            "block_size",
+            "kvcache_dtype",
+        }
+        for model_id in used_models:
+            self.assertEqual(
+                {
+                    row["profile_field"]
+                    for row in profiles
+                    if row["model_id"] == model_id
+                    and row["gpu_type"] == "RTXPRO6000"
+                },
+                expected_fields,
+            )
 
 
 if __name__ == "__main__":

@@ -95,9 +95,15 @@ RTX4090:
 - Qwen/Qwen3-32B → bf16 TP: 1
 RTXPRO6000:
 - meta-llama/Llama-3.1-8B → bf16 TP: 1, 2
+- meta-llama/Llama-3.2-1B-Instruct → bf16 TP: 1, 2, 4, 8
+- meta-llama/Llama-3.3-70B-Instruct → bf16 TP: 2, 4, 8
+- microsoft/phi-4 → bf16 TP: 1, 2
+- mistralai/Mixtral-8x7B-Instruct-v0.1 → bf16 TP: 1, 2, 4, 8
 - Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8
 - Qwen/Qwen3-30B-A3B-Instruct-2507 → bf16 TP: 1, 2
 - Qwen/Qwen3-32B → bf16 TP: 1, 2
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8
+- zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8
 RTXPRO6000-RUNPOD:
 - BAAI/bge-reranker-v2-m3 → fp16 TP: 1
 - intfloat/multilingual-e5-large → fp16 TP: 1

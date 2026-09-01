@@ -57,9 +57,8 @@ Maximum provisioned capacity: **100 GPUs**. Reserved capacity is pre-provisioned
 | `H100-SXM-80GB` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
 | `A100-SXM-80GB` | 8 GPUs, NVLink | 3 | 16 | 8 | 24 |
 | `A100-PCIe-40GB` | 4 GPUs, PCIe | 1 | 4 | 0 | 4 |
-| `A10G-24GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
-| `L40S-48GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
-| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 1 | 8 | 0 | 8 |
+| `RTXPRO6000` | 8 GPUs, PCIe | 3 | 16 | 8 | 24 |
+| `L4-24GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
 | **Total** |  | **13** | **68** | **32** | **100** |
 
 | Accelerator | `us-east` | `eu-west` | `apac` | Total |
@@ -67,9 +66,8 @@ Maximum provisioned capacity: **100 GPUs**. Reserved capacity is pre-provisioned
 | H100 | 24 | 0 | 8 | 32 |
 | A100-SXM | 0 | 24 | 0 | 24 |
 | A100-PCIe | 0 | 4 | 0 | 4 |
-| A10G | 8 | 0 | 8 | 16 |
-| L40S | 8 | 0 | 8 | 16 |
-| MI300X | 0 | 8 | 0 | 8 |
+| RTXPRO6000 | 8 | 8 | 8 | 24 |
+| L4 | 8 | 0 | 8 | 16 |
 | **Region total** | **40** | **36** | **24** | **100** |
 
 | Region | Reserved Devices | On-Demand Cap | Total Devices |
@@ -78,7 +76,7 @@ Maximum provisioned capacity: **100 GPUs**. Reserved capacity is pre-provisioned
 | `eu-west` | 28 | 8 | 36 |
 | `apac` | 8 | 16 | 24 |
 
-Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A100-PCIe/A10G/L40S nodes. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
+Network caps: 400 Gbps RDMA for H100/A100-SXM nodes and 100 Gbps TCP/IP for A100-PCIe/RTX PRO 6000/L4 nodes. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
 
 ## T+00:00 - Always-On APIs
 
