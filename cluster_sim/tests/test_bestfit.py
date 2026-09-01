@@ -44,7 +44,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         self.assertEqual(
             {name: len(jobs) for name, jobs in BEST_FIT_CONFIGURATIONS.items()},
             {
-                "real_life_12h": 32,
+                "real_12h": 28,
                 "real_life_24h": 41,
                 "real_life_3h": 19,
                 "simulation_12h_homogenous": 37,
@@ -362,7 +362,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
 
 def _driver(jobs: tuple[OnlineJob, ...] = ()) -> BestFitPlannerDriver:
     """Build a best-fit driver without external Store clients."""
-    scenario = Scenario("real_life_12h", 1, 1, jobs, ())
+    scenario = Scenario("real_12h", 1, 1, jobs, ())
     return BestFitPlannerDriver(
         user_id="user",
         scenario=scenario,
