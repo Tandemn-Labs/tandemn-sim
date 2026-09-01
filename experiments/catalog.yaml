@@ -5,5 +5,4 @@ experiments:
   main_real_hardware: main_real_hardware.yaml
   mixed_scheduling: mixed_scheduling.yaml
   heterogeneous_placement: heterogeneous_placement.yaml
-  learning_shifts: learning_shifts.yaml
   agentic_ablations: agentic_ablations.yaml

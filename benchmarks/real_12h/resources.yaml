@@ -8,7 +8,7 @@ resources:
     memory_gb: 80
     aic_system: h100_sxm
     markets: {reserved: 24, on_demand: 8}
-    regions: {us-east: 24, eu-west: 0, apac: 8}
+    regions: {central-1: 32}
 
   - id: a100-sxm-80gb
     accelerator: A100-SXM-80GB
@@ -17,7 +17,7 @@ resources:
     memory_gb: 80
     aic_system: a100_sxm
     markets: {reserved: 16, on_demand: 8}
-    regions: {us-east: 0, eu-west: 24, apac: 0}
+    regions: {central-1: 24}
 
   - id: a100-pcie-40gb
     accelerator: A100-PCIe-40GB
@@ -27,7 +27,7 @@ resources:
     aic_system: null
     unsupported_reason: AIC 0.11 only defines the 80 GB A100 PCIe system
     markets: {reserved: 4, on_demand: 0}
-    regions: {us-east: 0, eu-west: 4, apac: 0}
+    regions: {central-1: 4}
 
   - id: rtx-pro-6000-blackwell-96gb
     accelerator: RTXPRO6000
@@ -37,7 +37,7 @@ resources:
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTX PRO 6000 Blackwell system model
     markets: {reserved: 16, on_demand: 8}
-    regions: {us-east: 8, eu-west: 8, apac: 8}
+    regions: {central-1: 24}
 
   - id: l4-24gb
     accelerator: L4-24GB
@@ -47,4 +47,4 @@ resources:
     aic_system: null
     unsupported_reason: AIC 0.11 has no L4 system model
     markets: {reserved: 8, on_demand: 8}
-    regions: {us-east: 8, eu-west: 0, apac: 8}
+    regions: {central-1: 16}

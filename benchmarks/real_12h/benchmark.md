@@ -61,22 +61,20 @@ Maximum provisioned capacity: **100 GPUs**. Reserved capacity is pre-provisioned
 | `L4-24GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
 | **Total** |  | **13** | **68** | **32** | **100** |
 
-| Accelerator | `us-east` | `eu-west` | `apac` | Total |
-|---|---:|---:|---:|---:|
-| H100 | 24 | 0 | 8 | 32 |
-| A100-SXM | 0 | 24 | 0 | 24 |
-| A100-PCIe | 0 | 4 | 0 | 4 |
-| RTXPRO6000 | 8 | 8 | 8 | 24 |
-| L4 | 8 | 0 | 8 | 16 |
-| **Region total** | **40** | **36** | **24** | **100** |
+| Accelerator | `central-1` | Total |
+|---|---:|---:|
+| H100 | 32 | 32 |
+| A100-SXM | 24 | 24 |
+| A100-PCIe | 4 | 4 |
+| RTXPRO6000 | 24 | 24 |
+| L4 | 16 | 16 |
+| **Region total** | **100** | **100** |
 
 | Region | Reserved Devices | On-Demand Cap | Total Devices |
 |---|---:|---:|---:|
-| `us-east` | 32 | 8 | 40 |
-| `eu-west` | 28 | 8 | 36 |
-| `apac` | 8 | 16 | 24 |
+| `central-1` | 68 | 32 | 100 |
 
-Network caps: 400 Gbps RDMA for H100/A100-SXM nodes and 100 Gbps TCP/IP for A100-PCIe/RTX PRO 6000/L4 nodes. Inter-region caps are 25 Gbps/75 ms RTT (`us-east<->eu-west`), 20 Gbps/145 ms (`us-east<->apac`), and 15 Gbps/220 ms (`eu-west<->apac`). Inferentia and Trainium are not allocated in this real manifest.
+All pools use the `tcpip` fabric in `central-1`; GPU-direct RDMA is disabled. Inferentia and Trainium are not allocated in this real manifest.
 
 ## T+00:00 - Always-On APIs
 
