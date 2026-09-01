@@ -211,14 +211,15 @@ class RealTwelveHourTest(unittest.TestCase):
         self.assertEqual(
             {
                 region: sum(item["regions"][region] for item in self.resources)
-                for region in ("us-east", "eu-west", "apac")
+                for region in ("central-1",)
             },
-            {"us-east": 40, "eu-west": 36, "apac": 24},
+            {"central-1": 100},
         )
 
-        catalog = yaml.safe_load(
+        catalogs = yaml.safe_load(
             (ROOT / "benchmarks" / "catalog.yaml").read_text(encoding="utf-8")
-        )["benchmarks"]["real_12h"]
+        )["benchmarks"]
+        catalog = catalogs["real_12h"]
         self.assertEqual(catalog["manifest"], "real_12h/benchmark.yaml")
         self.assertEqual(catalog["status"], "executable")
 
@@ -228,21 +229,35 @@ class RealTwelveHourTest(unittest.TestCase):
             .read_text(encoding="utf-8")
             .splitlines()
         ]
+        self.assertEqual(
+            {row["benchmark_id"] for row in resource_maps},
+            {
+                benchmark_id
+                for benchmark_id, benchmark in catalogs.items()
+                if benchmark["status"] == "executable"
+            },
+        )
         resource_map = next(
             row["resource_map"]
             for row in resource_maps
             if row["benchmark_id"] == "real_12h"
         )
+        self.assertEqual(set(resource_map["clouds"]), {"gcp"})
+        regions = resource_map["clouds"]["gcp"]["regions"]
+        self.assertEqual(set(regions), {"central-1"})
+        zone = regions["central-1"]["zones"]["default"]
+        self.assertEqual(set(zone["network_fabrics"]), {"tcpip"})
+        self.assertFalse(zone["network_fabrics"]["tcpip"]["gpu_direct_rdma"])
         pools = []
         for cloud in resource_map["clouds"].values():
             for region in cloud["regions"].values():
                 for zone in region["zones"].values():
                     for fabric in zone["network_fabrics"].values():
                         pools.extend(fabric["machine_pools"].values())
-        self.assertEqual(len(pools), 9)
+        self.assertEqual(len(pools), 5)
         self.assertEqual(
             {pool["gpu_type"] for pool in pools},
-            {"H100", "A100_80GB", "RTXPRO6000", "L4"},
+            {"H100", "A100_80GB", "A100_40GB", "RTXPRO6000", "L4"},
         )
         self.assertEqual(
             sum(pool["total_instances"] * pool["gpus_per_instance"] for pool in pools),

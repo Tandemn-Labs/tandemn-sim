@@ -1,7 +1,0 @@
-schema_version: "experiment/v1"
-
-experiment:
-  id: learning_shifts
-  benchmarks: [simulation_12h, simulation_24h, real_12h, real_life_24h]
-  methods: [dynamo_aic, contextual_bo, koi]
-  metrics: learning_shifts
