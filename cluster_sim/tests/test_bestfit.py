@@ -23,6 +23,7 @@ from bestfit import (
 )
 from models import OnlineJob, Scenario
 from policy import VALID_TP_DEGREES, load_config_policy
+from scenario import load_scenario
 from serving import build_rank_cluster
 from tandemn_system_data.models import Plan
 from vram import VRAM_REQUIREMENTS_GIB, ResourceTarget
@@ -123,10 +124,12 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                     f"{hardware} exceeds market capacity at minute {offset}",
                 )
 
-    def test_simulation_mappings_match_jobs_models_and_resources(self) -> None:
-        """Cross-reference every simulation job with both static baselines."""
+    def test_mappings_match_jobs_models_and_resources(self) -> None:
+        """Cross-reference executable jobs with both static baselines."""
         policy = load_config_policy()
         for benchmark in (
+            "15min_real",
+            "real_12h",
             "simulation_3h",
             "simulation_12h",
             "simulation_12h_homogenous",
@@ -134,16 +137,16 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         ):
             root = ROOT / "benchmarks" / benchmark
             resources = {
-                resource["accelerator"]
+                resource["accelerator"]: resource
                 for resource in yaml.safe_load(
                     (root / "resources.yaml").read_text(encoding="utf-8")
                 )["resources"]
             }
-            jobs = {}
-            for path in sorted((root / "jobs").glob("*.yaml")):
-                job = yaml.safe_load(path.read_text(encoding="utf-8"))
-                source = job["workload"].get("benchmark") or job["workload"]["dataset"]
-                jobs[job["job_id"]] = source["model"]
+            scenario = load_scenario(root / "benchmark.yaml")
+            jobs = {
+                job.name: job.model_name
+                for job in scenario.online_jobs + scenario.batch_jobs
+            }
 
             mappings = BEST_FIT_CONFIGURATIONS[benchmark]
             self.assertEqual(set(mappings), set(jobs))
@@ -156,6 +159,49 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 self.assertIsNotNone(rule, f"unsupported mapping for {job_id}")
                 assert rule is not None
                 self.assertIn(mapping["configuration"]["tp"], rule.allowed_tp)
+                if benchmark == "real_12h":
+                    configuration = mapping["configuration"]
+                    gpu_count = (
+                        configuration["tp"]
+                        * configuration["pp"]
+                        * configuration["dp"]
+                    )
+                    self.assertLessEqual(
+                        gpu_count, resources[hardware]["total_devices"]
+                    )
+                    self.assertGreaterEqual(
+                        gpu_count * resources[hardware]["memory_gb"],
+                        VRAM_REQUIREMENTS_GIB[benchmark][job_id],
+                    )
+
+    def test_real12_online_mapping_fits_frozen_fleet(self) -> None:
+        """Keep every active online placement within accelerator capacity."""
+        root = ROOT / "benchmarks" / "real_12h"
+        resources = {
+            resource["accelerator"]: resource["total_devices"]
+            for resource in yaml.safe_load(
+                (root / "resources.yaml").read_text(encoding="utf-8")
+            )["resources"]
+        }
+        jobs = load_scenario(root / "benchmark.yaml").online_jobs
+        mappings = BEST_FIT_CONFIGURATIONS["real_12h"]
+        boundaries = sorted(
+            {value for job in jobs for value in (job.starts_at_ns, job.stops_at_ns)}
+        )
+
+        for offset in boundaries[:-1]:
+            used = defaultdict(int)
+            for job in jobs:
+                if job.starts_at_ns <= offset < job.stops_at_ns:
+                    mapping = mappings[job.name]
+                    configuration = mapping["configuration"]
+                    used[mapping["hardware"]] += (
+                        configuration["tp"]
+                        * configuration["pp"]
+                        * configuration["dp"]
+                    )
+            for hardware, gpu_count in used.items():
+                self.assertLessEqual(gpu_count, resources[hardware])
 
     def test_waiting_jobs_exclude_terminal_jobs(self) -> None:
         """Defer a later mapped job without an action for a terminal job."""

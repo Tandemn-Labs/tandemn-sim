@@ -28,6 +28,7 @@ from vram import (
     calculate_max_vram_gib,
     generate_vram_requirements,
     model_architecture_from_huggingface,
+    select_vram_placement,
 )
 
 _SERVINGSIM_HARDWARE = {
@@ -71,12 +72,53 @@ class VramPlannerDriverTest(unittest.TestCase):
         for jobs in VRAM_REQUIREMENTS_GIB.values():
             self.assertTrue(all(required_gib > 0 for required_gib in jobs.values()))
 
+    def test_15min_jobs_use_l4_and_rtxpro6000(self) -> None:
+        """Place each smoke job on its supported real accelerator."""
+        resources = {
+            "on_demand|gcp|central-1|default|L4": {
+                "gpu_type": "L4",
+                "free": 8,
+                "pools": [],
+            },
+            "on_demand|gcp|central-1|default|RTXPRO6000": {
+                "gpu_type": "RTXPRO6000",
+                "free": 8,
+                "pools": [],
+            },
+        }
+        policy = load_config_policy()
+
+        qwen = select_vram_placement(
+            71.477,
+            resources,
+            model_id="Qwen/Qwen2.5-Coder-32B-Instruct",
+            config_policy=policy,
+        )
+        llama = select_vram_placement(
+            3.552,
+            resources,
+            model_id="meta-llama/Llama-3.2-1B-Instruct",
+            config_policy=policy,
+        )
+
+        self.assertIsNotNone(qwen)
+        self.assertIsNotNone(llama)
+        assert qwen is not None and llama is not None
+        self.assertEqual((qwen[0].gpu_type, qwen[1:]), ("RTXPRO6000", (1, 1, 1)))
+        self.assertEqual((llama[0].gpu_type, llama[1:]), ("L4", (1, 1, 1)))
+
     def test_checked_in_vram_map_matches_benchmarks(self) -> None:
-        """Keep the checked-in artifact derived from executable benchmark YAML."""
+        """Keep the checked-in artifact derived from benchmark definitions."""
         self.assertEqual(
             generate_vram_requirements(ROOT / "benchmarks"),
             VRAM_REQUIREMENTS_GIB,
         )
+
+    def test_real12_vram_map_matches_benchmark(self) -> None:
+        """Keep all 28 real-hardware requirements derived from their jobs."""
+        generated = generate_vram_requirements(ROOT / "benchmarks")
+
+        self.assertEqual(generated["real_12h"], VRAM_REQUIREMENTS_GIB["real_12h"])
 
     def test_known_vram_results_match_benchmark_inputs(self) -> None:
         """Preserve generated encoder and frontier-model VRAM outcomes."""

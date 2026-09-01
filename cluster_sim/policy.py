@@ -95,6 +95,7 @@ RTX4090:
 - Qwen/Qwen3-32B → bf16 TP: 1
 RTXPRO6000:
 - meta-llama/Llama-3.1-8B → bf16 TP: 1, 2
+- Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8
 - Qwen/Qwen3-30B-A3B-Instruct-2507 → bf16 TP: 1, 2
 - Qwen/Qwen3-32B → bf16 TP: 1, 2
 RTXPRO6000-RUNPOD:

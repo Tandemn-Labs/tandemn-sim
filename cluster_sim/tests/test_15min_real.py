@@ -173,6 +173,28 @@ class FifteenMinuteRealBenchmarkTest(unittest.TestCase):
             sum(row["model_id"] == job.model_name for row in models),
             1,
         )
+        with (ROOT / "benchmarks" / "model_catalog_gpu_profiles.csv").open(
+            encoding="utf-8", newline=""
+        ) as stream:
+            profiles = list(csv.DictReader(stream))
+        expected_fields = {
+            "max_num_seq",
+            "max_num_batched_tokens",
+            "block_size",
+            "kvcache_dtype",
+        }
+        for model_id, gpu_type in (
+            (job.model_name, "RTXPRO6000"),
+            (scenario.batch_jobs[0].model_name, "L4"),
+        ):
+            self.assertEqual(
+                {
+                    row["profile_field"]
+                    for row in profiles
+                    if row["model_id"] == model_id and row["gpu_type"] == gpu_type
+                },
+                expected_fields,
+            )
 
 
 if __name__ == "__main__":

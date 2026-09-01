@@ -1104,13 +1104,13 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
 ```json
 {
   "submit_at_offset_minutes": 480,
-  "description": "Kimi, GLM, and DeepSeek put pressure on large-memory and multi-node planning",
+  "description": "GLM and Qwen3-Next put pressure on large-memory and multi-node planning",
   "jobs": [
     {
       "user_id": "tenant_agents_premium",
       "kind": "online",
       "spec_json": {
-        "model_id": "moonshotai/Kimi-K2-Instruct",
+        "model_id": "zai-org/GLM-4.5-Air",
         "job_features": {
           "isl_token_avg": 1400,
           "isl_token_min": 350,
@@ -1136,7 +1136,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
         "type": "api_load_generator",
         "protocol": "openai_compatible_http",
         "endpoint": "/v1/chat/completions",
-        "prompt_dataset_id": "real_12h_kimi_agents",
+        "prompt_dataset_id": "real_12h_glm_premium_agents",
         "request_arrival_pattern": "Bursty",
         "max_concurrent_streaming": 16,
         "seed": 101
@@ -1204,7 +1204,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
       "user_id": "tenant_new_model_eval",
       "kind": "batch",
       "spec_json": {
-        "model_id": "deepseek-ai/DeepSeek-V3",
+        "model_id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
         "job_features": {
           "isl_token_avg": 1800,
           "isl_token_min": 450,
@@ -1229,7 +1229,7 @@ Network caps: 400 Gbps RDMA for H100/A100-SXM/MI300X nodes; 100 Gbps RoCE for A1
       },
       "input_source": {
         "type": "dataset",
-        "dataset_id": "real_12h_deepseek_probe",
+        "dataset_id": "real_12h_qwen3_next_probe",
         "partitioning": "fixed_shards",
         "shard_count": 32,
         "requests_per_shard": 200
