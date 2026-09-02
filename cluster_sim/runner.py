@@ -34,17 +34,8 @@ from typing import TypedDict
 
 from koi_trace import compile_koi_events
 from llm_usage import LlmUsage, append_usage, usage_path
-from models import (
-    BatchJob,
-    BatchProgress,
-    CreatedPlan,
-    OnlineJob,
-    PlannerResult,
-    Request,
-    Scenario,
-)
+from models import BatchJob, BatchProgress, OnlineJob, PlannerResult, Request, Scenario
 from planning import PlannerDriver
-from policy import validate_placement_config
 from routing import StickyRoundRobinRouter
 from scenario import build_batch_probe, materialize_online_requests, requests_in_tick
 from serving import (
@@ -359,7 +350,7 @@ class ClusterSimulator:
                     result.error,
                 ),
             )
-        apply_pending_plans(self.user_id, self.postgres, result.plans)
+        apply_pending_plans(self.user_id, self.postgres)
         applied_plans = []
         if trace_file is not None:
             for plan in plans:
@@ -1734,26 +1725,8 @@ def submit_waiting_job(
     )
 
 
-def apply_pending_plans(
-    user_id: str,
-    postgres: object,
-    created_plans: tuple[CreatedPlan, ...],
-) -> int:
+def apply_pending_plans(user_id: str, postgres: object) -> int:
     """Apply one user's created plans without Kubernetes or real GPU launches."""
-    from tandemn_system_data.clients import PlanStore
-
-    plan_store = PlanStore(postgres)
-    for created in created_plans:
-        plan = plan_store.get(created.plan_id)
-        if plan is None:
-            continue
-        for action in plan.actions:
-            action_type = getattr(action.type, "value", action.type)
-            if action_type not in {"place", "swap"}:
-                continue
-            for rank in action.ladder or ():
-                validate_placement_config(rank.config)
-
     from tandemn_orca.launcher import NoopLauncher
     from tandemn_orca.orca import Orca
 

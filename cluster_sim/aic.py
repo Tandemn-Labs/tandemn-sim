@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from io import StringIO
 from typing import Any, Protocol
@@ -22,6 +22,9 @@ from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
 _AIC_CANDIDATE_LIMIT = 1000
+_AIC_FALLBACK_MODES = ("HYBRID", "EMPIRICAL", "SOL")
+_AIC_PROFILE_BACKENDS = (("vllm", "0.22.0"), ("sglang", "0.5.14"))
+_A10G_PROFILE_FALLBACK_SYSTEMS = ("l40s", "a100_sxm", "h100_sxm", "h200_sxm")
 _AIC_SYSTEM_ALIASES = {
     "h100": "h100_sxm",
     "h100-sxm": "h100_sxm",
@@ -431,16 +434,40 @@ def _evaluate_job(
     for hardware in _hardware_candidates(resources, settings.system_mappings):
         try:
             request = _build_aic_request(known, hardware, settings, goal)
-            result = client.evaluate(request)
-            placement = _normalize_result(result, request, hardware)
-        except AicUnavailableError:
-            raise
-        except (AicEvaluationError, ValueError):
-            continue
-        placements.append(placement)
+        except ValueError:
+            return None
+        for attempt in _aic_requests(request):
+            try:
+                result = client.evaluate(attempt)
+            except AicUnavailableError:
+                raise
+            except (AicEvaluationError, ValueError):
+                continue
+            try:
+                placement = _normalize_result(result, attempt, hardware)
+            except (AicEvaluationError, ValueError):
+                break
+            placements.append(placement)
+            break
     if not placements:
         return None
     return min(placements, key=lambda value: _placement_score(value, goal))
+
+
+def _aic_requests(request: AicRequest) -> tuple[AicRequest, ...]:
+    """Return the normal AIC request followed by estimate-only fallbacks."""
+    attempts = [request]
+    for database_mode in _AIC_FALLBACK_MODES:
+        for backend, backend_version in _AIC_PROFILE_BACKENDS:
+            attempt = replace(
+                request,
+                database_mode=database_mode,
+                backend=backend,
+                backend_version=backend_version,
+            )
+            if attempt not in attempts:
+                attempts.append(attempt)
+    return tuple(attempts)
 
 
 def _build_aic_request(
@@ -602,9 +629,7 @@ def _hardware_candidates(
             raise ValueError("resource pools must be a list")
         target_pools: Sequence[dict[str, Any] | None] = pools or (None,)
         for pool in target_pools:
-            system = _aic_system(environment, pool, gpu_type, system_mappings)
-            if system is None:
-                continue
+            systems = _aic_systems(environment, pool, gpu_type, system_mappings)
             target = ResourceTarget(
                 environment_key=environment_key,
                 gpu_type=gpu_type,
@@ -615,7 +640,8 @@ def _hardware_candidates(
                 pool=pool,
             )
             if _target_available(target) > 0:
-                grouped.setdefault(system, []).append(target)
+                for system in systems:
+                    grouped.setdefault(system, []).append(target)
 
     candidates = []
     for system, targets in sorted(grouped.items()):
@@ -659,6 +685,21 @@ def _aic_system(
         or system_mappings.get(normalized)
         or _AIC_SYSTEM_ALIASES.get(normalized)
     )
+
+
+def _aic_systems(
+    environment: Mapping[str, object],
+    pool: Mapping[str, object] | None,
+    gpu_type: str,
+    system_mappings: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Return AIC systems that can estimate one Store GPU target."""
+    system = _aic_system(environment, pool, gpu_type, system_mappings)
+    if system is not None:
+        return (system,)
+    if _hardware_key(gpu_type) == "a10g":
+        return _A10G_PROFILE_FALLBACK_SYSTEMS
+    return ()
 
 
 def _select_target(
