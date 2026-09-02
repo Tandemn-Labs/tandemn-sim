@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 from models import OnlineJob, Scenario
 from openevolve import (
     OPENEOLVE_INITIAL_PROGRAM,
+    OPENEOLVE_SYSTEM_PROMPT,
     OnlineOpenEvolveClient,
     OpenEvolvePlacement,
     OpenEvolvePlannerDriver,
@@ -149,6 +150,8 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(requested, ["meta-llama/Llama-3.2-1B-Instruct"])
         self.assertEqual(snapshot.model_catalogs, _catalogs())
+        self.assertEqual(prompt["config_policy"][0]["allowed_pp"], [1, 2, 3, 4])
+        self.assertIn("PP must never exceed 4", OPENEOLVE_SYSTEM_PROMPT)
         self.assertEqual(
             prompt["model_catalog"],
             [

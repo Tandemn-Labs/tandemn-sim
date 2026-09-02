@@ -194,11 +194,11 @@ class RealTwelveHourTest(unittest.TestCase):
         self.assertEqual(
             {item["accelerator"] for item in self.resources},
             {
-                "H100-SXM-80GB",
-                "A100-SXM-80GB",
-                "A100-PCIe-40GB",
+                "H100",
+                "A100-80GB",
+                "A100-40GB",
                 "RTXPRO6000",
-                "L4-24GB",
+                "L4",
             },
         )
         self.assertEqual(
@@ -257,7 +257,7 @@ class RealTwelveHourTest(unittest.TestCase):
         self.assertEqual(len(pools), 5)
         self.assertEqual(
             {pool["gpu_type"] for pool in pools},
-            {"H100", "A100_80GB", "A100_40GB", "RTXPRO6000", "L4"},
+            {"H100", "A100-80GB", "A100-40GB", "RTXPRO6000", "L4"},
         )
         self.assertEqual(
             sum(pool["total_instances"] * pool["gpus_per_instance"] for pool in pools),

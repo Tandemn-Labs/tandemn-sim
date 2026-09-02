@@ -227,6 +227,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             document["config_policy"],
             [
                 {
+                    "allowed_pp": [1, 2, 3, 4],
                     "allowed_tp": [1, 2, 4, 8],
                     "gpu_type": "H100",
                     "model_id": "meta-llama/Llama-3.2-1B-Instruct",
@@ -246,6 +247,11 @@ class GptPlannerDriverTest(unittest.TestCase):
         )
         self.assertIn("global constraint across every placement", SYSTEM_PROMPT)
         self.assertIn("replica consumes one whole instance", SYSTEM_PROMPT)
+        self.assertIn("PP must never exceed 4", SYSTEM_PROMPT)
+        pp_schema = PLACEMENT_SCHEMA["properties"]["placements"]["items"][
+            "properties"
+        ]["configuration"]["anyOf"][0]["properties"]["pp"]
+        self.assertEqual(pp_schema["maximum"], 4)
 
     def test_defers_only_placement_that_exceeds_cumulative_capacity(self) -> None:
         """Keep an earlier placement and defer a later pool oversubscription."""

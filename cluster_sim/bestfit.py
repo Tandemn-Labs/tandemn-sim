@@ -29,236 +29,212 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_15min_real-0-2": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
     },
     "simulation_12h_homogenous": {
         "job-benchmark_timing_12hr_homogenous-0-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-0-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-0-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-0-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-0-5": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-0-6": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-10-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-10-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_12hr_homogenous-10-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 2, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-25-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-25-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-25-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-25-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-45-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 2, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-90-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-90-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 3, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-135-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-135-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-180-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr_homogenous-180-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-240-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_12hr_homogenous-240-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_12hr_homogenous-300-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 2, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-330-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-375-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 2, "dp": 4},
         },
         "job-benchmark_timing_12hr_homogenous-420-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 40},
         },
         "job-benchmark_timing_12hr_homogenous-420-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr_homogenous-465-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_12hr_homogenous-480-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-510-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 2, "dp": 3},
         },
         "job-benchmark_timing_12hr_homogenous-510-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-570-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr_homogenous-570-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr_homogenous-630-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 12},
         },
         "job-benchmark_timing_12hr_homogenous-630-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr_homogenous-690-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr_homogenous-690-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 2, "dp": 4},
         },
     },
     "real_12h": {
         "job-benchmark_timing_real_12hr_192gpu-0-1": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-0-2": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-0-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_real_12hr_192gpu-0-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-0-5": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-0-6": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_12hr_192gpu-10-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 8, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-10-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
         "job-benchmark_timing_real_12hr_192gpu-45-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_12hr_192gpu-90-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 3},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-90-2": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 5},
-        },
         "job-benchmark_timing_real_12hr_192gpu-150-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-210-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_real_12hr_192gpu-210-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 2},
         },
-        "job-benchmark_timing_real_12hr_192gpu-270-1": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 2, "dp": 6},
-        },
         "job-benchmark_timing_real_12hr_192gpu-360-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_real_12hr_192gpu-360-2": {
-            "hardware": "L4-24GB",
+            "hardware": "L4",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_real_12hr_192gpu-420-1": {
             "hardware": "RTXPRO6000",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-420-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 3, "dp": 1},
         },
         "job-benchmark_timing_real_12hr_192gpu-480-1": {
             "hardware": "RTXPRO6000",
@@ -268,722 +244,260 @@ BEST_FIT_CONFIGURATIONS: dict[
             "hardware": "RTXPRO6000",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
-        "job-benchmark_timing_real_12hr_192gpu-480-3": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-570-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 2, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-570-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-630-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-630-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 8, "pp": 2, "dp": 1},
-        },
         "job-benchmark_timing_real_12hr_192gpu-690-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_12hr_192gpu-690-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-    },
-    "real_life_24h": {
-        "job-benchmark_timing_real_24hr_192gpu-0-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-4": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-5": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-6": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-0-7": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-10-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-10-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-10-3": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-30-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-30-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-60-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-120-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-120-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-180-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-180-2": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-300-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-300-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-420-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-420-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-540-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-540-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-600-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-690-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-720-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-720-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-840-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-840-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-930-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-930-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-960-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-960-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1080-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 2, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1080-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1200-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1200-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1320-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 12},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1320-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1410-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_24hr_192gpu-1410-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-    },
-    "real_life_3h": {
-        "job-benchmark_timing_real_3hr_192gpu-0-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-0-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-0-3": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-0-4": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-0-5": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-12-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-12-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-12-3": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-25-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-25-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-45-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-45-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-70-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 2, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-70-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-70-3": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-95-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-95-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-120-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_real_3hr_192gpu-145-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 3},
         },
     },
     "simulation_12h": {
         "job-benchmark_timing_12hr-0-1": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-0-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-0-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-0-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-0-5": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-0-6": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-10-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-10-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr-10-3": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-25-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-25-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-25-3": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr-25-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-45-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-90-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-90-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr-135-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-135-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_12hr-180-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr-180-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-240-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-240-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_12hr-300-1": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-330-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-375-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-420-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 40},
         },
         "job-benchmark_timing_12hr-420-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr-465-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-480-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-510-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 8, "pp": 2, "dp": 3},
         },
         "job-benchmark_timing_12hr-510-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_12hr-570-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_12hr-570-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr-630-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 24},
         },
         "job-benchmark_timing_12hr-630-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr-690-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_12hr-690-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 8, "pp": 1, "dp": 6},
-        },
-    },
-    "simulation_24h": {
-        "job-benchmark_timing_24hr-0-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-0-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-3": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-4": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-5": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-6": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-7": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-0-8": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-10-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-10-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-10-3": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-10-4": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-30-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-30-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-60-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-120-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-120-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-180-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-180-2": {
-            "hardware": "A100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-240-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-300-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-300-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-420-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 32},
-        },
-        "job-benchmark_timing_24hr-420-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-540-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-540-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-540-3": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-600-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-690-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-720-1": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-720-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-840-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 64},
-        },
-        "job-benchmark_timing_24hr-840-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-930-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-930-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-960-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-960-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 2},
-        },
-        "job-benchmark_timing_24hr-1020-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-1020-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-1080-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 8, "pp": 2, "dp": 6},
-        },
-        "job-benchmark_timing_24hr-1080-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 4},
-        },
-        "job-benchmark_timing_24hr-1140-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-1200-1": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 32},
-        },
-        "job-benchmark_timing_24hr-1200-2": {
-            "hardware": "H100-SXM-80GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 8},
-        },
-        "job-benchmark_timing_24hr-1320-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 2, "pp": 1, "dp": 48},
-        },
-        "job-benchmark_timing_24hr-1320-2": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 32},
-        },
-        "job-benchmark_timing_24hr-1410-1": {
-            "hardware": "MI300X-192GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 16},
-        },
-        "job-benchmark_timing_24hr-1410-2": {
-            "hardware": "L40S-48GB",
-            "configuration": {"tp": 1, "pp": 1, "dp": 32},
         },
     },
     "simulation_3h": {
         "job-benchmark_timing_3hr-0-1": {
-            "hardware": "A10G-24GB",
+            "hardware": "A10G",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-3": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-4": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-0-5": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-7-1": {
-            "hardware": "A100-SXM-80GB",
+            "hardware": "A100-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-7-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-7-3": {
-            "hardware": "A100-SXM-80GB",
+            "hardware": "A100-80GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_3hr-15-1": {
-            "hardware": "A100-PCIe-40GB",
+            "hardware": "A100-40GB",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-15-3": {
-            "hardware": "A100-SXM-80GB",
+            "hardware": "A100-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-32-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 16},
         },
         "job-benchmark_timing_3hr-32-2": {
-            "hardware": "A100-SXM-80GB",
+            "hardware": "A100-80GB",
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-49-1": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_3hr-49-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 8},
         },
         "job-benchmark_timing_3hr-67-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 8, "pp": 2, "dp": 1},
         },
         "job-benchmark_timing_3hr-67-2": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-67-3": {
-            "hardware": "A100-SXM-80GB",
+            "hardware": "A100-80GB",
             "configuration": {"tp": 4, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-85-1": {
-            "hardware": "A100-PCIe-40GB",
+            "hardware": "A100-40GB",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-100-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 1, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-100-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 1, "pp": 1, "dp": 2},
         },
         "job-benchmark_timing_3hr-125-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 4, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-125-2": {
-            "hardware": "L40S-48GB",
+            "hardware": "L40S",
             "configuration": {"tp": 4, "pp": 1, "dp": 4},
         },
         "job-benchmark_timing_3hr-145-1": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 2, "pp": 1, "dp": 1},
         },
         "job-benchmark_timing_3hr-145-2": {
-            "hardware": "H100-SXM-80GB",
+            "hardware": "H100",
             "configuration": {"tp": 8, "pp": 2, "dp": 1},
         },
         "job-benchmark_timing_3hr-160-1": {
-            "hardware": "MI300X-192GB",
+            "hardware": "MI300",
             "configuration": {"tp": 2, "pp": 1, "dp": 8},
         },
     },
@@ -991,22 +505,25 @@ BEST_FIT_CONFIGURATIONS: dict[
 
 
 _HARDWARE_ALIASES = {
-    "h100": "h100-sxm-80gb",
-    "h100-sxm": "h100-sxm-80gb",
-    "h100-sxm-80gb": "h100-sxm-80gb",
-    "a100": "a100-sxm-80gb",
-    "a100-sxm": "a100-sxm-80gb",
-    "a100-sxm-80gb": "a100-sxm-80gb",
-    "a100-pcie": "a100-pcie-40gb",
-    "a100-pcie-40gb": "a100-pcie-40gb",
-    "a10g": "a10g-24gb",
-    "a10g-24gb": "a10g-24gb",
-    "l4": "l4-24gb",
-    "l4-24gb": "l4-24gb",
-    "l40s": "l40s-48gb",
-    "l40s-48gb": "l40s-48gb",
-    "mi300x": "mi300x-192gb",
-    "mi300x-192gb": "mi300x-192gb",
+    "h100": "h100",
+    "h100-sxm": "h100",
+    "h100-sxm-80gb": "h100",
+    "a100": "a100-80gb",
+    "a100-80gb": "a100-80gb",
+    "a100-sxm": "a100-80gb",
+    "a100-sxm-80gb": "a100-80gb",
+    "a100-40gb": "a100-40gb",
+    "a100-pcie": "a100-40gb",
+    "a100-pcie-40gb": "a100-40gb",
+    "a10g": "a10g",
+    "a10g-24gb": "a10g",
+    "l4": "l4",
+    "l4-24gb": "l4",
+    "l40s": "l40s",
+    "l40s-48gb": "l40s",
+    "mi300": "mi300",
+    "mi300x": "mi300",
+    "mi300x-192gb": "mi300",
 }
 
 LAUNCH_FIELDS = (

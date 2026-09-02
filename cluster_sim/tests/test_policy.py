@@ -97,6 +97,15 @@ H100:
         assert rule is not None
         self.assertEqual(rule.allowed_tp, (1, 2, 4, 6, 8))
 
+    def test_rejects_pp_above_global_limit_without_explicit_pp_policy(self) -> None:
+        """Enforce the global PP cap when a rule omits allowed PP values."""
+        rule = policy.ConfigPolicyRule(precision="bf16", allowed_tp=(1,))
+
+        self.assertTrue(rule.allows_parallelism(1, 4))
+        self.assertFalse(rule.allows_parallelism(1, 5))
+        with self.assertRaisesRegex(ValueError, "placement PP"):
+            policy.validate_placement_config({"pp": 5})
+
     def test_rejects_unsupported_tp_degrees(self) -> None:
         """Reject odd sharding and even degrees beyond the supported set."""
         for tp in (3, 10):

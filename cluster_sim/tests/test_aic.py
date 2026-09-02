@@ -8,6 +8,9 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
@@ -18,7 +21,9 @@ from aic import (
     AicRequest,
     AicResult,
     AicSettings,
+    NvidiaAicClient,
     StoreSnapshot,
+    _aic_system,
 )
 from models import OnlineJob, Scenario
 from serving import build_rank_cluster
@@ -35,6 +40,56 @@ _SERVINGSIM_HARDWARE = {
 
 class AicPlannerDriverTest(unittest.TestCase):
     """Verify greedy AIC placement and canonical lifecycle actions."""
+
+    def test_filters_pp_above_limit_before_selecting_aic_result(self) -> None:
+        """Select the best remaining result after removing PP above four."""
+        frame = pd.DataFrame(
+            [
+                {
+                    "parallel": "tp1pp5dp1",
+                    "replicas_needed": 1,
+                    "total_gpus_needed": 5,
+                    "tokens/s": 500,
+                    "ttft": 1,
+                    "tpot": 1,
+                    "bs": 1,
+                },
+                {
+                    "parallel": "tp1pp4dp1",
+                    "replicas_needed": 1,
+                    "total_gpus_needed": 4,
+                    "tokens/s": 400,
+                    "ttft": 2,
+                    "tpot": 2,
+                    "bs": 1,
+                },
+            ]
+        )
+        recommendation = SimpleNamespace(best_configs={"agg": frame})
+        request = AicRequest(
+            model="model",
+            system="h100_sxm",
+            available_devices=8,
+            backend="vllm",
+            backend_version=None,
+            database_mode="HYBRID",
+            serving_mode="agg",
+            input_tokens=1,
+            output_tokens=1,
+            target_ttft_ms=10,
+            target_tpot_ms=10,
+            optimization_goal="latency",
+            target_request_rate=1,
+            target_concurrency=None,
+        )
+
+        with patch(
+            "aiconfigurator.cli.api.cli_recommend",
+            return_value=recommendation,
+        ):
+            result = NvidiaAicClient().evaluate(request)
+
+        self.assertEqual(result.configuration["parallel"], "tp1pp4dp1")
 
     def test_greedy_jobs_observe_updated_capacity(self) -> None:
         """Reserve the first placement before evaluating the second job."""
@@ -194,8 +249,8 @@ class AicPlannerDriverTest(unittest.TestCase):
         client = FakeAicClient(throughput={"a100_sxm": 200})
         snapshot = StoreSnapshot(
             resources={
-                "reserved|azure|westus2|1|A100_80GB": {
-                    "gpu_type": "A100_80GB",
+                "reserved|azure|westus2|1|A100-80GB": {
+                    "gpu_type": "A100-80GB",
                     "total": 8,
                     "free": 8,
                     "pools": [],
@@ -212,6 +267,19 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertEqual(actions[0]["type"], "place")
         self.assertEqual(client.requests[0].system, "a100_sxm")
         self.assertEqual(actions[0]["ladder"][0]["env"][1], "azure")
+
+    def test_maps_canonical_hardware_to_aic_systems(self) -> None:
+        """Translate supported canonical labels to AIC system names."""
+        expected_systems = {
+            "H100": "h100_sxm",
+            "A100-40GB": "a100_sxm",
+            "A100-80GB": "a100_sxm",
+            "L40S": "l40s",
+        }
+
+        for hardware, expected in expected_systems.items():
+            with self.subTest(hardware=hardware):
+                self.assertEqual(_aic_system({}, None, hardware, {}), expected)
 
     def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
         """Keep DP in replica count rather than one ServingSim rank shape."""

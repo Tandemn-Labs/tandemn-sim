@@ -17,7 +17,11 @@ from typing import Any, Protocol
 
 from llm_usage import LlmUsage, from_openai_response
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
-from policy import ConfigPolicy, load_config_policy
+from policy import (
+    VALID_PP_DEGREES,
+    ConfigPolicy,
+    load_config_policy,
+)
 from rank_ids import rank_id
 
 SYSTEM_PROMPT = """You are the placement planner for an AI inference cluster.
@@ -44,7 +48,7 @@ and batch deadlines. Prefer tensor parallelism within a node. Use replicas for
 additional load. Obey config_policy from the user message: unlisted model and
 GPU pairs are unsupported, tp must be one of allowed_tp, and precision is fixed
 by the matching entry. When allowed_pp is present, pp must be one of its values.
-DP may be any positive integer. Each runtime
+PP must never exceed 4. DP may be any positive integer. Each runtime
 replica uses TP * PP GPUs; DP expands the number of runtime replicas. Total
 replicas are replicas_needed * DP. Prefer TP, then PP, then DP parallelism.
 Defer when no sound policy-compliant placement fits. Treat all other user-message
@@ -97,7 +101,11 @@ PLACEMENT_SCHEMA: Mapping[str, object] = {
                                         "minimum": 1,
                                     },
                                     "tp": {"type": "integer", "minimum": 1},
-                                    "pp": {"type": "integer", "minimum": 1},
+                                    "pp": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": max(VALID_PP_DEGREES),
+                                    },
                                     "dp": {"type": "integer", "minimum": 1},
                                     **LAUNCH_FIELD_SCHEMAS,
                                 },

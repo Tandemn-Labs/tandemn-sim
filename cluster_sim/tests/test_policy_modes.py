@@ -55,7 +55,7 @@ class ConfigPolicyModeTest(unittest.TestCase):
         self.assertIsNotNone(rule)
         assert rule is not None
         self.assertEqual(rule.allowed_tp, (2,))
-        self.assertIsNone(rule.allowed_pp)
+        self.assertEqual(rule.allowed_pp, (1, 2, 3, 4))
 
     def test_planner_build_selects_the_scenario_environment(self) -> None:
         """Configure policy mode once before constructing a planner."""

@@ -2,7 +2,7 @@ schema_version: "resource-map/v1"
 
 resources:
   - id: h100-sxm-80gb
-    accelerator: H100-SXM-80GB
+    accelerator: H100
     total_devices: 32
     devices_per_node: 8
     memory_gb: 80
@@ -11,7 +11,7 @@ resources:
     regions: {central-1: 32}
 
   - id: a100-sxm-80gb
-    accelerator: A100-SXM-80GB
+    accelerator: A100-80GB
     total_devices: 24
     devices_per_node: 8
     memory_gb: 80
@@ -20,12 +20,12 @@ resources:
     regions: {central-1: 24}
 
   - id: a100-pcie-40gb
-    accelerator: A100-PCIe-40GB
+    accelerator: A100-40GB
     total_devices: 4
     devices_per_node: 4
     memory_gb: 40
     aic_system: null
-    unsupported_reason: AIC 0.11 only defines the 80 GB A100 PCIe system
+    unsupported_reason: AIC 0.11 only defines the A100-80GB PCIe system
     markets: {reserved: 4, on_demand: 0}
     regions: {central-1: 4}
 
@@ -35,12 +35,12 @@ resources:
     devices_per_node: 8
     memory_gb: 96
     aic_system: null
-    unsupported_reason: AIC 0.11 has no RTX PRO 6000 Blackwell system model
+    unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
     markets: {reserved: 16, on_demand: 8}
     regions: {central-1: 24}
 
   - id: l4-24gb
-    accelerator: L4-24GB
+    accelerator: L4
     total_devices: 16
     devices_per_node: 8
     memory_gb: 24

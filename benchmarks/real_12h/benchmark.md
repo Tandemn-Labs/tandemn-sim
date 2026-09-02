@@ -54,18 +54,18 @@ Maximum provisioned capacity: **100 GPUs**. Reserved capacity is pre-provisioned
 
 | Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
 |---|---:|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
-| `A100-SXM-80GB` | 8 GPUs, NVLink | 3 | 16 | 8 | 24 |
-| `A100-PCIe-40GB` | 4 GPUs, PCIe | 1 | 4 | 0 | 4 |
+| `H100` | 8 GPUs, NVSwitch | 4 | 24 | 8 | 32 |
+| `A100-80GB` | 8 GPUs, NVLink | 3 | 16 | 8 | 24 |
+| `A100-40GB` | 4 GPUs, PCIe | 1 | 4 | 0 | 4 |
 | `RTXPRO6000` | 8 GPUs, PCIe | 3 | 16 | 8 | 24 |
-| `L4-24GB` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
+| `L4` | 8 GPUs, PCIe | 2 | 8 | 8 | 16 |
 | **Total** |  | **13** | **68** | **32** | **100** |
 
 | Accelerator | `central-1` | Total |
 |---|---:|---:|
 | H100 | 32 | 32 |
-| A100-SXM | 24 | 24 |
-| A100-PCIe | 4 | 4 |
+| A100-80GB | 24 | 24 |
+| A100-40GB | 4 | 4 |
 | RTXPRO6000 | 24 | 24 |
 | L4 | 16 | 16 |
 | **Region total** | **100** | **100** |

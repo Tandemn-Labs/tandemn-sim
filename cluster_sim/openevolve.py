@@ -17,7 +17,11 @@ from typing import Any, Protocol, cast
 
 from llm_usage import LlmUsage
 from models import BatchJob, CreatedPlan, OnlineJob, PlannerResult, Scenario
-from policy import ConfigPolicy, load_config_policy
+from policy import (
+    VALID_PP_DEGREES,
+    ConfigPolicy,
+    load_config_policy,
+)
 from rank_ids import rank_id
 from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
 
@@ -35,7 +39,7 @@ and configurations. Preserve the function signature and return only
 
 Keep placement configuration limited to replicas_needed, tp, pp, and dp. Tandemn
 materializes authoritative model catalog fields after the policy chooses a target
-GPU; never copy those fields into the policy response.
+GPU; never copy those fields into the policy response. PP must never exceed 4.
 
 Prioritize valid plans, then admission of urgent work, then predicted SLO fitness,
 then lower cost and GPU use. Defer a job when no policy-compliant placement fits.
@@ -560,9 +564,12 @@ def _config_policy_payload(
                     "gpu_type": gpu_type,
                     "precision": rule.precision,
                     "allowed_tp": list(rule.allowed_tp),
+                    "allowed_pp": list(
+                        rule.allowed_pp
+                        if rule.allowed_pp is not None
+                        else sorted(VALID_PP_DEGREES)
+                    ),
                 }
-                if rule.allowed_pp is not None:
-                    entry["allowed_pp"] = list(rule.allowed_pp)
                 entries.append(entry)
     return entries
 

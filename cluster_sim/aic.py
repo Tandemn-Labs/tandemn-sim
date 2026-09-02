@@ -18,6 +18,7 @@ from io import StringIO
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
+from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
 _AIC_CANDIDATE_LIMIT = 1000
@@ -27,6 +28,7 @@ _AIC_SYSTEM_ALIASES = {
     "h100-sxm-80gb": "h100_sxm",
     "h100_sxm": "h100_sxm",
     "a100": "a100_sxm",
+    "a100-40gb": "a100_sxm",
     "a100-80gb": "a100_sxm",
     "a100-sxm": "a100_sxm",
     "a100-sxm-80gb": "a100_sxm",
@@ -220,9 +222,15 @@ class NvidiaAicClient:
             raise AicEvaluationError("AIC returned no aggregate configuration")
         try:
             frame = frame[frame["total_gpus_needed"] <= request.available_devices]
+            frame = frame[
+                frame.apply(
+                    lambda row: _parallelism(row.to_dict())[1] in VALID_PP_DEGREES,
+                    axis=1,
+                )
+            ]
             if frame.empty:
                 raise AicEvaluationError(
-                    "AIC returned no configuration within available capacity"
+                    "AIC returned no configuration within capacity and PP limits"
                 )
             if request.optimization_goal == "latency":
                 selected = frame.sort_values(
@@ -483,6 +491,8 @@ def _normalize_result(
     """Validate AIC parallelism and bind it to one concrete Store target."""
     replicas = _positive_int(result.replicas, "replicas")
     tp, pp, dp = _parallelism(result.configuration)
+    if pp not in VALID_PP_DEGREES:
+        raise AicEvaluationError(f"AIC PP must be one of {sorted(VALID_PP_DEGREES)}")
     devices = replicas * tp * pp * dp
     if result.devices != devices:
         raise AicEvaluationError(
