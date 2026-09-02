@@ -18,7 +18,7 @@ Serving mode: aggregate serving with LMCache, no prefill/decode disaggregation
 
 Region: `us-east`
 
-Active accelerator catalog: `H100-SXM-80GB`
+Active accelerator catalog: `H100`
 
 Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`
 
@@ -30,7 +30,7 @@ Maximum provisioned capacity: **400 on-demand H100 GPUs**. The complete fleet is
 
 | Accelerator | Node Shape | Nodes | On-Demand | Total |
 |---|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 50 | 400 | 400 |
+| `H100` | 8 GPUs, NVSwitch | 50 | 400 | 400 |
 
 All nodes are in `us-east` with 400 Gbps RDMA. There is no reserved capacity, heterogeneous fallback, or inter-region placement.
 Each p5.48xlarge is an eight-GPU allocation unit; TP/PP groups must fit within one node.

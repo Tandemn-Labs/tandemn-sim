@@ -90,7 +90,7 @@ class StoreSmokeTest(unittest.TestCase):
             ).create_plans(0, utc_now())
 
             self.assertEqual(len(result.plans), 1)
-            self.assertEqual(apply_pending_plans(user_id, postgres), 1)
+            self.assertEqual(apply_pending_plans(user_id, postgres, result.plans), 1)
             self.assertEqual(plans.get(result.plans[0].plan_id).status, "applied")
             self.assertEqual(jobs.get(job.store_job_id).status, JobStatus.RUNNING)
             self.assertEqual(len(active_ranks(job.store_job_id, jobs)), 1)

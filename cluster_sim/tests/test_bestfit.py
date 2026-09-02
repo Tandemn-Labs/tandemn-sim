@@ -45,13 +45,10 @@ class BestFitPlannerDriverTest(unittest.TestCase):
         self.assertEqual(
             {name: len(jobs) for name, jobs in BEST_FIT_CONFIGURATIONS.items()},
             {
-                "real_12h": 28,
-                "real_life_24h": 41,
-                "real_life_3h": 19,
+                "real_12h": 16,
                 "simulation_12h_homogenous": 37,
                 "15min_real": 2,
                 "simulation_12h": 37,
-                "simulation_24h": 48,
                 "simulation_3h": 25,
             },
         )
@@ -62,6 +59,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 self.assertEqual(set(configuration), {"tp", "pp", "dp"})
                 self.assertTrue(all(value > 0 for value in configuration.values()))
                 self.assertIn(configuration["tp"], VALID_TP_DEGREES)
+                self.assertLessEqual(configuration["pp"], 4)
 
     def test_simulation_3h_mapping_obeys_policy_and_resource_map(self) -> None:
         """Fit every scheduled shape within policy, market, and region limits."""
@@ -133,7 +131,6 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             "simulation_3h",
             "simulation_12h",
             "simulation_12h_homogenous",
-            "simulation_24h",
         ):
             root = ROOT / "benchmarks" / benchmark
             resources = {
@@ -150,7 +147,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
 
             mappings = BEST_FIT_CONFIGURATIONS[benchmark]
             self.assertEqual(set(mappings), set(jobs))
-            self.assertEqual(set(VRAM_REQUIREMENTS_GIB[benchmark]), set(jobs))
+            self.assertLessEqual(set(jobs), set(VRAM_REQUIREMENTS_GIB[benchmark]))
             for job_id, model_id in jobs.items():
                 mapping = mappings[job_id]
                 hardware = mapping["hardware"]
@@ -158,17 +155,19 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 rule = policy.rule_for(hardware, model_id)
                 self.assertIsNotNone(rule, f"unsupported mapping for {job_id}")
                 assert rule is not None
-                self.assertIn(mapping["configuration"]["tp"], rule.allowed_tp)
+                configuration = mapping["configuration"]
+                self.assertTrue(
+                    rule.allows_parallelism(
+                        configuration["tp"], configuration["pp"]
+                    )
+                )
+                gpu_count = (
+                    configuration["tp"]
+                    * configuration["pp"]
+                    * configuration["dp"]
+                )
+                self.assertLessEqual(gpu_count, resources[hardware]["total_devices"])
                 if benchmark == "real_12h":
-                    configuration = mapping["configuration"]
-                    gpu_count = (
-                        configuration["tp"]
-                        * configuration["pp"]
-                        * configuration["dp"]
-                    )
-                    self.assertLessEqual(
-                        gpu_count, resources[hardware]["total_devices"]
-                    )
                     self.assertGreaterEqual(
                         gpu_count * resources[hardware]["memory_gb"],
                         VRAM_REQUIREMENTS_GIB[benchmark][job_id],

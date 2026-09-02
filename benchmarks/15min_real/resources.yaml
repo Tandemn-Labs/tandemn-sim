@@ -7,12 +7,12 @@ resources:
     devices_per_node: 8
     memory_gb: 96
     aic_system: null
-    unsupported_reason: AIC 0.11 has no RTX PRO 6000 Blackwell system model
+    unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
     markets: {on_demand: 8}
     regions: {central-1: 8}
 
   - id: l4-24gb
-    accelerator: L4-24GB
+    accelerator: L4
     total_devices: 8
     devices_per_node: 8
     memory_gb: 24

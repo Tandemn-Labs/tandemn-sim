@@ -2,7 +2,7 @@ schema_version: "resource-map/v1"
 
 resources:
   - id: h100-sxm-80gb
-    accelerator: H100-SXM-80GB
+    accelerator: H100
     total_devices: 400
     devices_per_node: 8
     memory_gb: 80

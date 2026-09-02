@@ -78,7 +78,7 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
         """Exclude reserved, heterogeneous, and cross-region capacity."""
         self.assertEqual(len(self.resources), 1)
         resource = self.resources[0]
-        self.assertEqual(resource["accelerator"], "H100-SXM-80GB")
+        self.assertEqual(resource["accelerator"], "H100")
         self.assertEqual(resource["total_devices"], 400)
         self.assertEqual(resource["devices_per_node"], 8)
         self.assertNotIn("allocation_kind", resource)
@@ -182,7 +182,7 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
                     job_id,
                 )
 
-            rule = policy.rule_for("H100-SXM-80GB", model_id)
+            rule = policy.rule_for("H100", model_id)
             self.assertIsNotNone(rule, f"unsupported H100 model for {job_id}")
             assert rule is not None
             self.assertEqual(job["spec"]["precision"], rule.precision)
@@ -210,7 +210,7 @@ class SimulationTwelveHourHomogenousTest(unittest.TestCase):
         boundaries = set()
         for job_id, job in self.jobs.items():
             mapping = mappings[job_id]
-            self.assertEqual(mapping["hardware"], "H100-SXM-80GB")
+            self.assertEqual(mapping["hardware"], "H100")
             configuration = mapping["configuration"]
             footprints[job_id] = (
                 configuration["tp"] * configuration["pp"] * configuration["dp"]

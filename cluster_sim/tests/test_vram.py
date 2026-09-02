@@ -42,10 +42,10 @@ _SERVINGSIM_HARDWARE = {
 class VramPlannerDriverTest(unittest.TestCase):
     """Verify generated requirements and capacity-aware placement."""
 
-    def test_policy_normalizes_store_hardware_name(self) -> None:
+    def test_policy_uses_store_hardware_name(self) -> None:
         """Resolve a Store hardware label to the matching policy section."""
         rule = load_config_policy().rule_for(
-            "H100-SXM-80GB",
+            "H100",
             "meta-llama/Llama-3.3-70B-Instruct",
         )
 
@@ -60,12 +60,9 @@ class VramPlannerDriverTest(unittest.TestCase):
             {name: len(jobs) for name, jobs in VRAM_REQUIREMENTS_GIB.items()},
             {
                 "real_12h": 28,
-                "real_life_24h": 41,
-                "real_life_3h": 19,
                 "simulation_12h_homogenous": 37,
                 "15min_real": 2,
                 "simulation_12h": 37,
-                "simulation_24h": 48,
                 "simulation_3h": 25,
             },
         )
@@ -226,6 +223,12 @@ class VramPlannerDriverTest(unittest.TestCase):
         self.assertTrue(is_valid_id(first_tick[0]["ladder"][0]["rank_id"], "rank"))
         Plan(user_id="tenant", actions=[first_tick[0]])
 
+    def test_policyless_placement_rejects_pp_above_four(self) -> None:
+        """Apply the shared PP limit even when no policy is supplied."""
+        resources = _snapshot("job", a10g_free=0, h100_free=40).resources
+
+        self.assertIsNone(select_vram_placement(3_200, resources))
+
     def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
         """Freeze Store catalog records with the rest of the planning tick."""
         driver = _driver()
@@ -264,7 +267,7 @@ class VramPlannerDriverTest(unittest.TestCase):
         )
 
     def test_placement_minimizes_total_provisioned_vram(self) -> None:
-        """Prefer seven 80 GiB GPUs over three 192 GiB GPUs."""
+        """Prefer one 192 GiB GPU over three 80 GiB GPUs."""
         driver = _driver(benchmark_name="real_12h")
         job_id = "job-benchmark_timing_real_12hr_192gpu-0-3"
 
@@ -278,10 +281,10 @@ class VramPlannerDriverTest(unittest.TestCase):
         )
 
         config = actions[0]["ladder"][0]["config"]
-        self.assertEqual(config["gpu_type"], "H100")
-        self.assertEqual(config["gpu_count"], 7)
+        self.assertEqual(config["gpu_type"], "MI300X")
+        self.assertEqual(config["gpu_count"], 1)
         self.assertEqual(config["tp"], 1)
-        self.assertEqual(config["pp"], 7)
+        self.assertEqual(config["pp"], 1)
         self.assertEqual(config["dp"], 1)
         self.assertEqual(config["precision"], "fp16")
 

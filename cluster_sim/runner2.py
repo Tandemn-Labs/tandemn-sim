@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
-from uuid import uuid4
 
 from models import BatchJob, OnlineJob, PlannerResult, Scenario
 from planning import PlannerDriver, build_planner
-from scenario import load_scenario
+from scenario import load_scenario, stable_store_job_ids
 
 ROOT = Path(__file__).resolve().parents[1]
 PLANNERS = (
@@ -249,19 +247,6 @@ def _benchmark_path(value: str) -> Path:
     return ROOT / "benchmarks" / value / "benchmark.yaml"
 
 
-def _fresh_store_job_ids(scenario: Scenario) -> Scenario:
-    """Assign unique Store IDs so repeated runs do not collide."""
-    return replace(
-        scenario,
-        online_jobs=tuple(
-            replace(job, store_job_id=f"job-{uuid4()}") for job in scenario.online_jobs
-        ),
-        batch_jobs=tuple(
-            replace(job, store_job_id=f"job-{uuid4()}") for job in scenario.batch_jobs
-        ),
-    )
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse one plan-only benchmark run."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -284,7 +269,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from tandemn_system_data.clients import PostgresClient
 
-    scenario = _fresh_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
+    scenario = stable_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
     clock = LogicalClock(epoch.astimezone(UTC))
     postgres = PostgresClient()
     planner = build_planner(

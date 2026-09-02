@@ -224,11 +224,11 @@ class ScenarioTest(unittest.TestCase):
 
         self.assertEqual(
             (nd["gpu_type"], nd["gpu_memory_gb"], nd["gpus_per_instance"]),
-            ("A100_80GB", 80, 8),
+            ("A100-80GB", 80, 8),
         )
         self.assertEqual(
             (nc["gpu_type"], nc["gpu_memory_gb"], nc["gpus_per_instance"]),
-            ("A100_80GB", 80, 4),
+            ("A100-40GB", 40, 4),
         )
 
     def test_linear_ramp_uses_integrated_rate(self) -> None:

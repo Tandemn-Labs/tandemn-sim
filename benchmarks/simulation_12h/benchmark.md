@@ -18,7 +18,7 @@ Serving mode: aggregate serving with LMCache, no prefill/decode disaggregation
 
 Regions: `us-east`, `eu-west`, `apac`
 
-Active accelerator catalog: `H100-SXM-80GB`, `A100-SXM-80GB`, `A100-PCIe-40GB`, `A10G-24GB`, `L40S-48GB`, `MI300X-192GB`
+Active accelerator catalog: `H100`, `A100-80GB`, `A100-40GB`, `A10G`, `L40S`, `MI300`
 
 Model catalog: `meta-llama/Llama-3.2-1B-Instruct`, `mistralai/Mixtral-8x7B-Instruct-v0.1`, `microsoft/phi-4`, `Qwen/Qwen2.5-Coder-32B-Instruct`, `meta-llama/Llama-3.3-70B-Instruct`, `Qwen/Qwen3-Next-80B-A3B-Thinking`, `zai-org/GLM-4.5-Air`, `moonshotai/Kimi-K2-Instruct`, `deepseek-ai/DeepSeek-V3`
 
@@ -30,25 +30,25 @@ Maximum provisioned capacity: **400 GPUs**. This is exactly 2x the 3-hour simula
 
 | Accelerator | Node/Slice Shape | Nodes/Slices | Reserved | On-Demand Cap | Total |
 |---|---:|---:|---:|---:|---:|
-| `H100-SXM-80GB` | 8 GPUs, NVSwitch | 10 | 64 | 16 | 80 |
-| `A100-SXM-80GB` | 8 GPUs, NVLink | 8 | 48 | 16 | 64 |
-| `A100-PCIe-40GB` | 8 GPUs, PCIe | 4 | 16 | 16 | 32 |
-| `A10G-24GB` | 8 GPUs, PCIe | 12 | 64 | 32 | 96 |
-| `L40S-48GB` | 8 GPUs, PCIe | 10 | 64 | 16 | 80 |
-| `MI300X-192GB` | 8 GPUs, Infinity Fabric | 6 | 16 | 32 | 48 |
+| `H100` | 8 GPUs, NVSwitch | 10 | 64 | 16 | 80 |
+| `A100-80GB` | 8 GPUs, NVLink | 8 | 48 | 16 | 64 |
+| `A100-40GB` | 8 GPUs, PCIe | 4 | 16 | 16 | 32 |
+| `A10G` | 8 GPUs, PCIe | 12 | 64 | 32 | 96 |
+| `L40S` | 8 GPUs, PCIe | 10 | 64 | 16 | 80 |
+| `MI300` | 8 GPUs, Infinity Fabric | 6 | 16 | 32 | 48 |
 | **Total** |  | **50** | **272** | **128** | **400** |
 
 | Accelerator | `us-east` | `eu-west` | `apac` | Total |
 |---|---:|---:|---:|---:|
 | H100 | 32 | 16 | 32 | 80 |
-| A100-SXM | 32 | 16 | 16 | 64 |
-| A100-PCIe | 16 | 16 | 0 | 32 |
+| A100-80GB | 32 | 16 | 16 | 64 |
+| A100-40GB | 16 | 16 | 0 | 32 |
 | A10G | 48 | 32 | 16 | 96 |
 | L40S | 32 | 32 | 16 | 80 |
-| MI300X | 32 | 16 | 0 | 48 |
+| MI300 | 32 | 16 | 0 | 48 |
 | **Region total** | **192** | **128** | **80** | **400** |
 
-Network caps: 400 Gbps RDMA between H100/A100-SXM/MI300X nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
+Network caps: 400 Gbps RDMA between H100/A100-80GB/MI300 nodes within a region; 100 Gbps RoCE for PCIe/A10G/L40S nodes. Inter-region caps are `us-east<->eu-west` 25 Gbps/75 ms RTT, `us-east<->apac` 20 Gbps/145 ms, and `eu-west<->apac` 15 Gbps/220 ms.
 
 ## Capacity Envelope
 

@@ -7,9 +7,11 @@ import json
 import math
 import random
 import re
-from dataclasses import dataclass
+from base64 import b32encode
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 import yaml
 from models import BatchJob, BatchProgress, OnlineJob, Request, Scenario
@@ -39,6 +41,25 @@ class TokenDistribution:
         )
         sampled = round(random_source.lognormvariate(location, self.sigma))
         return max(self.minimum, min(self.maximum, sampled))
+
+
+def stable_store_job_ids(scenario: Scenario) -> Scenario:
+    """Map benchmark jobs to deterministic 26-character Store IDs."""
+
+    def store_id(job_name: str) -> str:
+        key = f"tandemn-sim:{scenario.benchmark_name}:{job_name}"
+        return b32encode(uuid5(NAMESPACE_URL, key).bytes).decode().rstrip("=")
+
+    return replace(
+        scenario,
+        online_jobs=tuple(
+            replace(job, store_job_id=store_id(job.name))
+            for job in scenario.online_jobs
+        ),
+        batch_jobs=tuple(
+            replace(job, store_job_id=store_id(job.name)) for job in scenario.batch_jobs
+        ),
+    )
 
 
 def load_scenario(overview_path: Path) -> Scenario:

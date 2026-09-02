@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 
@@ -203,8 +204,10 @@ class ConfigPolicyRule:
 
     def allows_parallelism(self, tp: int, pp: int) -> bool:
         """Return whether one TP and PP pair satisfies this rule."""
-        return tp in self.allowed_tp and (
-            self.allowed_pp is None or pp in self.allowed_pp
+        return (
+            tp in self.allowed_tp
+            and pp in VALID_PP_DEGREES
+            and (self.allowed_pp is None or pp in self.allowed_pp)
         )
 
 
@@ -251,7 +254,7 @@ def load_config_policy() -> ConfigPolicy:
         allowed_tp = tuple(int(value) for value in match.group("tp").split(", "))
         raw_pp = match.group("pp")
         allowed_pp = (
-            None
+            tuple(sorted(VALID_PP_DEGREES))
             if raw_pp is None
             else tuple(int(value) for value in raw_pp.split(", "))
         )
@@ -265,15 +268,14 @@ def load_config_policy() -> ConfigPolicy:
             )
         if len(set(allowed_tp)) != len(allowed_tp):
             raise ValueError(f"duplicate TP value at policy line {line_number}")
-        if allowed_pp is not None:
-            invalid_pp = tuple(pp for pp in allowed_pp if pp not in VALID_PP_DEGREES)
-            if invalid_pp:
-                raise ValueError(
-                    f"unsupported PP values {invalid_pp} at policy line {line_number}; "
-                    f"expected values from {sorted(VALID_PP_DEGREES)}"
-                )
-            if len(set(allowed_pp)) != len(allowed_pp):
-                raise ValueError(f"duplicate PP value at policy line {line_number}")
+        invalid_pp = tuple(pp for pp in allowed_pp if pp not in VALID_PP_DEGREES)
+        if invalid_pp:
+            raise ValueError(
+                f"unsupported PP values {invalid_pp} at policy line {line_number}; "
+                f"expected values from {sorted(VALID_PP_DEGREES)}"
+            )
+        if len(set(allowed_pp)) != len(allowed_pp):
+            raise ValueError(f"duplicate PP value at policy line {line_number}")
         max_tp = MODEL_MAX_TP.get(model_id)
         if max_tp is not None and any(tp > max_tp for tp in allowed_tp):
             raise ValueError(
@@ -292,6 +294,15 @@ def load_config_policy() -> ConfigPolicy:
     if not rules:
         raise ValueError("embedded config policy is empty")
     return ConfigPolicy(rules)
+
+
+def validate_placement_config(config: Mapping[str, object]) -> None:
+    """Hard-reject a placement outside the global PP constraint."""
+    pp = config.get("pp")
+    if type(pp) is not int or pp not in VALID_PP_DEGREES:
+        raise ValueError(
+            f"placement PP must be one of {sorted(VALID_PP_DEGREES)}, got {pp!r}"
+        )
 
 
 def configure_config_policy(environment: str) -> None:

@@ -18,10 +18,12 @@ from contextual_bandit import (
     PlacementCandidate,
     StoreSnapshot,
     _PendingObservation,
+    _target_memory_gib,
     build_contextual_bandit_plan,
+    enumerate_candidates,
     verify_place_plan,
 )
-from policy import load_config_policy
+from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 from vram import ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
@@ -29,6 +31,53 @@ MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
 class ContextualBanditPlannerDriverTest(unittest.TestCase):
     """Verify Contextual Bandit omits terminal jobs from later plans."""
+
+    def test_canonical_hardware_and_pp_limit_reach_candidate_enumeration(
+        self,
+    ) -> None:
+        """Resolve benchmark GPU names and discard a PP-five candidate."""
+        expected_memory = {
+            "H100": 80,
+            "A100-80GB": 80,
+            "A100-40GB": 40,
+            "A10G": 24,
+            "L40S": 48,
+            "MI300": 192,
+            "L4": 24,
+            "RTXPRO6000": 96,
+        }
+        for hardware, memory_gib in expected_memory.items():
+            target = ResourceTarget(
+                environment_key=f"reserved|test|region|zone|{hardware}",
+                environment={"free": 8},
+                pool=None,
+                gpu_type=hardware,
+                instance_type=None,
+            )
+            with self.subTest(hardware=hardware):
+                self.assertEqual(_target_memory_gib(target), memory_gib)
+
+        resources = {
+            "reserved|test|region|zone|H100": {
+                "gpu_type": "H100",
+                "free": 8,
+                "pools": [],
+            }
+        }
+        policy = ConfigPolicy(
+            {("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))}
+        )
+        self.assertEqual(
+            enumerate_candidates(
+                "job",
+                MODEL_ID,
+                {},
+                400,
+                resources,
+                policy,
+            ),
+            (),
+        )
 
     def test_terminal_jobs_produce_no_actions(self) -> None:
         """Keep terminal jobs out of future placement plans."""
