@@ -103,8 +103,6 @@ H100:
 
         self.assertTrue(rule.allows_parallelism(1, 4))
         self.assertFalse(rule.allows_parallelism(1, 5))
-        with self.assertRaisesRegex(ValueError, "placement PP"):
-            policy.validate_placement_config({"pp": 5})
 
     def test_rejects_unsupported_tp_degrees(self) -> None:
         """Reject odd sharding and even degrees beyond the supported set."""

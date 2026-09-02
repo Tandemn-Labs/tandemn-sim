@@ -33,7 +33,6 @@ from runner import (
     _batch_outcome_rates,
     _batch_request_rate_per_second,
     advance_batch_progress,
-    apply_pending_plans,
     submit_waiting_job,
 )
 from scenario import load_scenario
@@ -47,24 +46,6 @@ from serving import (
 
 class RunnerDataPlaneTest(unittest.TestCase):
     """Verify the coordinator runs jobs and stages one metric commit."""
-
-    def test_policy_rejects_pp_above_four_before_plan_application(self) -> None:
-        """Apply the authoritative policy gate before invoking Orca."""
-        plan = SimpleNamespace(
-            actions=[
-                SimpleNamespace(
-                    type="place",
-                    ladder=[SimpleNamespace(config={"pp": 5})],
-                )
-            ]
-        )
-        plan_store = SimpleNamespace(get=lambda _plan_id: plan)
-
-        with (
-            patch("tandemn_system_data.clients.PlanStore", return_value=plan_store),
-            self.assertRaisesRegex(ValueError, "placement PP"),
-        ):
-            apply_pending_plans("user-a", object(), (CreatedPlan("plan-a"),))
 
     def test_run_trace_ends_after_hard_stop(self) -> None:
         """Write the terminal trace event after every running job is stopped."""

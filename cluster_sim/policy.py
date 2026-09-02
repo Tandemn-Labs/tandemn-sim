@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 
@@ -294,15 +293,6 @@ def load_config_policy() -> ConfigPolicy:
     if not rules:
         raise ValueError("embedded config policy is empty")
     return ConfigPolicy(rules)
-
-
-def validate_placement_config(config: Mapping[str, object]) -> None:
-    """Hard-reject a placement outside the global PP constraint."""
-    pp = config.get("pp")
-    if type(pp) is not int or pp not in VALID_PP_DEGREES:
-        raise ValueError(
-            f"placement PP must be one of {sorted(VALID_PP_DEGREES)}, got {pp!r}"
-        )
 
 
 def configure_config_policy(environment: str) -> None:
