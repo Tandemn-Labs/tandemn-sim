@@ -141,6 +141,7 @@ def load_scenario(overview_path: Path) -> Scenario:
         drain_end_ns=_ns(settings["hard_stop_at_offset_minutes"]),
         online_jobs=tuple(online_jobs),
         batch_jobs=tuple(batch_jobs),
+        environment=settings["environment"],
     )
 
 

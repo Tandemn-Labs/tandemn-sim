@@ -43,6 +43,7 @@ class Scenario:
     drain_end_ns: int
     online_jobs: tuple[OnlineJob, ...]
     batch_jobs: tuple[BatchJob, ...]
+    environment: str = "simulation"
 
 
 @dataclass(frozen=True)

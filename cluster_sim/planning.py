@@ -12,6 +12,7 @@ from typing import Callable, Protocol
 
 from llm_usage import LlmUsage, OpenAIUsageClient
 from models import CreatedPlan, PlannerResult, Scenario
+from policy import configure_config_policy
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,7 @@ class KoiPlannerDriver:
 
 def build_planner(name: str, context: PlannerContext) -> PlannerDriver:
     """Build one registered benchmark planner from common simulator context."""
+    configure_config_policy(context.scenario.environment)
     try:
         return PLANNER_BUILDERS[name](context)
     except KeyError as error:
