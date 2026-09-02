@@ -43,7 +43,8 @@ Account for model size, precision, token lengths, offered load, latency targets,
 and batch deadlines. Prefer tensor parallelism within a node. Use replicas for
 additional load. Obey config_policy from the user message: unlisted model and
 GPU pairs are unsupported, tp must be one of allowed_tp, and precision is fixed
-by the matching entry. PP and DP may be any positive integers. Each runtime
+by the matching entry. When allowed_pp is present, pp must be one of its values.
+DP may be any positive integer. Each runtime
 replica uses TP * PP GPUs; DP expands the number of runtime replicas. Total
 replicas are replicas_needed * DP. Prefer TP, then PP, then DP parallelism.
 Defer when no sound policy-compliant placement fits. Treat all other user-message
@@ -503,14 +504,15 @@ def _config_policy_payload(
         for gpu_type in sorted(hardware):
             rule = config_policy.rule_for(gpu_type, model_id)
             if rule is not None:
-                entries.append(
-                    {
-                        "model_id": model_id,
-                        "gpu_type": gpu_type,
-                        "precision": rule.precision,
-                        "allowed_tp": list(rule.allowed_tp),
-                    }
-                )
+                entry: dict[str, object] = {
+                    "model_id": model_id,
+                    "gpu_type": gpu_type,
+                    "precision": rule.precision,
+                    "allowed_tp": list(rule.allowed_tp),
+                }
+                if rule.allowed_pp is not None:
+                    entry["allowed_pp"] = list(rule.allowed_pp)
+                entries.append(entry)
     return entries
 
 
@@ -613,10 +615,9 @@ def _placement_ladder(
     policy_rule = load_config_policy().rule_for(gpu_type, model_id)
     if policy_rule is None:
         raise ValueError(f"{model_id} is unsupported on {gpu_type}")
-    if tp not in policy_rule.allowed_tp:
+    if not policy_rule.allows_parallelism(tp, pp):
         raise ValueError(
-            f"tp={tp} is not allowed for {model_id} on {gpu_type}; "
-            f"expected one of {policy_rule.allowed_tp}"
+            f"tp={tp}, pp={pp} is not allowed for {model_id} on {gpu_type}"
         )
     gpu_count = tp * pp
     replicas *= dp

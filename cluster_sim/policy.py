@@ -115,11 +115,53 @@ RTXPRO6000-RUNPOD:
 - zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8
 """
 
+_REAL_POLICY_TEXT = """\
+L4:
+- meta-llama/Llama-3.2-1B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- mistralai/Mixtral-8x7B-Instruct-v0.1 → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- microsoft/phi-4 → fp16 TP: 1, 2 PP: 1, 2, 3, 4
+- Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- meta-llama/Llama-3.3-70B-Instruct → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ → bf16-awq TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+A100:
+- meta-llama/Llama-3.2-1B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- mistralai/Mixtral-8x7B-Instruct-v0.1 → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- microsoft/phi-4 → fp16 TP: 1, 2 PP: 1, 2, 3, 4
+- Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- meta-llama/Llama-3.3-70B-Instruct → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ → bf16-awq TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+H100:
+- meta-llama/Llama-3.2-1B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- mistralai/Mixtral-8x7B-Instruct-v0.1 → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- microsoft/phi-4 → fp16 TP: 1, 2 PP: 1, 2, 3, 4
+- Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- meta-llama/Llama-3.3-70B-Instruct → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ → bf16-awq TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+RTX6000:
+- meta-llama/Llama-3.2-1B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- mistralai/Mixtral-8x7B-Instruct-v0.1 → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- microsoft/phi-4 → fp16 TP: 1, 2 PP: 1, 2, 3, 4
+- Qwen/Qwen2.5-Coder-32B-Instruct → fp16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- meta-llama/Llama-3.3-70B-Instruct → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- Qwen/Qwen3-Next-80B-A3B-Thinking → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- zai-org/GLM-4.5-Air → bf16 TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+- QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ → bf16-awq TP: 1, 2, 4, 8 PP: 1, 2, 3, 4
+"""
+
 _POLICY_ENTRY = re.compile(
-    r"^- (?P<model>.+) → (?P<precision>\S+) TP: (?P<tp>\d+(?:, \d+)*)$"
+    r"^- (?P<model>.+) → (?P<precision>\S+) TP: (?P<tp>\d+(?:, \d+)*)"
+    r"(?: PP: (?P<pp>\d+(?:, \d+)*))?$"
 )
 VALID_TP_DEGREES = frozenset({1, 2, 4, 6, 8})
+VALID_PP_DEGREES = frozenset({1, 2, 3, 4})
 MODEL_MAX_TP = {"microsoft/phi-4": 2}
+_POLICY_ENVIRONMENT = "simulation"
 _HARDWARE_ALIASES = {
     "a100": "a100-80gb",
     "a100-pcie": "a100-40gb",
@@ -136,6 +178,19 @@ _HARDWARE_ALIASES = {
     "mi300": "mi300x",
     "mi300x-192gb": "mi300x",
 }
+_REAL_HARDWARE_ALIASES = {
+    "a100-40gb": "a100",
+    "a100-80gb": "a100",
+    "a100-pcie": "a100",
+    "a100-pcie-40gb": "a100",
+    "a100-sxm": "a100",
+    "a100-sxm-80gb": "a100",
+    "h100-sxm": "h100",
+    "h100-sxm-80gb": "h100",
+    "l4-24gb": "l4",
+    "rtx-pro-6000": "rtx6000",
+    "rtxpro6000": "rtx6000",
+}
 
 
 @dataclass(frozen=True)
@@ -144,6 +199,13 @@ class ConfigPolicyRule:
 
     precision: str
     allowed_tp: tuple[int, ...]
+    allowed_pp: tuple[int, ...] | None = None
+
+    def allows_parallelism(self, tp: int, pp: int) -> bool:
+        """Return whether one TP and PP pair satisfies this rule."""
+        return tp in self.allowed_tp and (
+            self.allowed_pp is None or pp in self.allowed_pp
+        )
 
 
 class ConfigPolicy:
@@ -163,11 +225,16 @@ class ConfigPolicy:
 
 @cache
 def load_config_policy() -> ConfigPolicy:
-    """Parse and cache the embedded configuration policy."""
+    """Parse and cache the policy for the configured environment."""
     rules: dict[tuple[str, str], ConfigPolicyRule] = {}
     hardware: str | None = None
+    policy_text = (
+        _REAL_POLICY_TEXT
+        if _POLICY_ENVIRONMENT == "real_hardware"
+        else _POLICY_TEXT
+    )
 
-    for line_number, raw_line in enumerate(_POLICY_TEXT.splitlines(), start=1):
+    for line_number, raw_line in enumerate(policy_text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
@@ -182,6 +249,12 @@ def load_config_policy() -> ConfigPolicy:
 
         model_id = match.group("model")
         allowed_tp = tuple(int(value) for value in match.group("tp").split(", "))
+        raw_pp = match.group("pp")
+        allowed_pp = (
+            None
+            if raw_pp is None
+            else tuple(int(value) for value in raw_pp.split(", "))
+        )
         if any(tp < 1 for tp in allowed_tp):
             raise ValueError(f"TP values must be positive at policy line {line_number}")
         invalid_tp = tuple(tp for tp in allowed_tp if tp not in VALID_TP_DEGREES)
@@ -192,6 +265,15 @@ def load_config_policy() -> ConfigPolicy:
             )
         if len(set(allowed_tp)) != len(allowed_tp):
             raise ValueError(f"duplicate TP value at policy line {line_number}")
+        if allowed_pp is not None:
+            invalid_pp = tuple(pp for pp in allowed_pp if pp not in VALID_PP_DEGREES)
+            if invalid_pp:
+                raise ValueError(
+                    f"unsupported PP values {invalid_pp} at policy line {line_number}; "
+                    f"expected values from {sorted(VALID_PP_DEGREES)}"
+                )
+            if len(set(allowed_pp)) != len(allowed_pp):
+                raise ValueError(f"duplicate PP value at policy line {line_number}")
         max_tp = MODEL_MAX_TP.get(model_id)
         if max_tp is not None and any(tp > max_tp for tp in allowed_tp):
             raise ValueError(
@@ -204,6 +286,7 @@ def load_config_policy() -> ConfigPolicy:
         rules[key] = ConfigPolicyRule(
             precision=match.group("precision"),
             allowed_tp=allowed_tp,
+            allowed_pp=allowed_pp,
         )
 
     if not rules:
@@ -211,7 +294,21 @@ def load_config_policy() -> ConfigPolicy:
     return ConfigPolicy(rules)
 
 
+def configure_config_policy(environment: str) -> None:
+    """Select the simulation or real-hardware policy for this run."""
+    if environment not in {"simulation", "real_hardware"}:
+        raise ValueError(f"unsupported policy environment {environment!r}")
+    global _POLICY_ENVIRONMENT
+    _POLICY_ENVIRONMENT = environment
+    load_config_policy.cache_clear()
+
+
 def _canonical_hardware(value: str) -> str:
     """Normalize Store and policy hardware labels to one lookup key."""
     normalized = value.strip().lower().replace("_", "-")
-    return _HARDWARE_ALIASES.get(normalized, normalized)
+    aliases = (
+        _REAL_HARDWARE_ALIASES
+        if _POLICY_ENVIRONMENT == "real_hardware"
+        else _HARDWARE_ALIASES
+    )
+    return aliases.get(normalized, normalized)

@@ -1327,7 +1327,7 @@ def _place_action(
         raise ValueError(f"model catalog missing {model_id!r}") from error
     launch_config = _materialize_launch_config(catalog, target.gpu_type)
     rule = config_policy.rule_for(target.gpu_type, model_id)
-    if rule is None or tp not in rule.allowed_tp:
+    if rule is None or not rule.allows_parallelism(tp, pp):
         raise ValueError("BestFit selected a policy-invalid placement")
     per_replica_gpu_count = tp * pp
     return {

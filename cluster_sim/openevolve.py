@@ -82,6 +82,8 @@ def compute_placement(payload):
             larger_tp = [value for value in allowed_tp if value >= minimum_gpus]
             tp = min(larger_tp) if larger_tp else max(allowed_tp)
             pp = max(1, (minimum_gpus + tp - 1) // tp)
+            if "allowed_pp" in rule and pp not in rule["allowed_pp"]:
+                continue
             pools = resource.get("pools", [])
             targets = pools if pools else [None]
             for pool in targets:
@@ -553,14 +555,15 @@ def _config_policy_payload(
         for gpu_type in sorted(hardware):
             rule = config_policy.rule_for(gpu_type, model_id)
             if rule is not None:
-                entries.append(
-                    {
-                        "model_id": model_id,
-                        "gpu_type": gpu_type,
-                        "precision": rule.precision,
-                        "allowed_tp": list(rule.allowed_tp),
-                    }
-                )
+                entry: dict[str, object] = {
+                    "model_id": model_id,
+                    "gpu_type": gpu_type,
+                    "precision": rule.precision,
+                    "allowed_tp": list(rule.allowed_tp),
+                }
+                if rule.allowed_pp is not None:
+                    entry["allowed_pp"] = list(rule.allowed_pp)
+                entries.append(entry)
     return entries
 
 
@@ -658,10 +661,9 @@ def _placement_ladder(
     policy_rule = load_config_policy().rule_for(gpu_type, model_id)
     if policy_rule is None:
         raise ValueError(f"{model_id} is unsupported on {gpu_type}")
-    if tp not in policy_rule.allowed_tp:
+    if not policy_rule.allows_parallelism(tp, pp):
         raise ValueError(
-            f"tp={tp} is not allowed for {model_id} on {gpu_type}; "
-            f"expected one of {policy_rule.allowed_tp}"
+            f"tp={tp}, pp={pp} is not allowed for {model_id} on {gpu_type}"
         )
     gpu_count = tp * pp
     replicas *= dp
@@ -1399,6 +1401,10 @@ def _validate(payload, result):
             policy is None
             or catalog is None
             or configuration["tp"] not in policy["allowed_tp"]
+            or (
+                "allowed_pp" in policy
+                and configuration["pp"] not in policy["allowed_pp"]
+            )
         ):
             return {{"valid": False}}
 
@@ -1570,6 +1576,11 @@ def _validate_policy_response(
             allowed_tp = policy.get("allowed_tp")
             if not isinstance(allowed_tp, list) or tp not in allowed_tp:
                 raise ValueError(f"tp={tp} is not allowed on {gpu_type}")
+            allowed_pp = policy.get("allowed_pp")
+            if allowed_pp is not None and (
+                not isinstance(allowed_pp, list) or pp not in allowed_pp
+            ):
+                raise ValueError(f"pp={pp} is not allowed on {gpu_type}")
 
             gpu_count = tp * pp * dp
             pool = _select_pool(resource, placement.instance_type)

@@ -947,6 +947,7 @@ def select_vram_placement(
             continue
         minimum_gpus = math.ceil(required_vram_gib / memory_gib)
         desired_tp = min(minimum_gpus, 8)
+        rule = None
         if config_policy is None or model_id is None:
             tp = desired_tp
         else:
@@ -955,6 +956,8 @@ def select_vram_placement(
                 continue
             tp = _policy_tp(desired_tp, rule)
         pp = math.ceil(minimum_gpus / tp)
+        if rule is not None and not rule.allows_parallelism(tp, pp):
+            continue
         dp = 1
         gpu_count = tp * pp * dp
         footprint = _target_footprint(target, gpu_count)
@@ -1027,7 +1030,7 @@ def _place_action(
         raise ValueError(f"model catalog missing {model_id!r}") from error
     launch_config = _materialize_launch_config(catalog, target.gpu_type)
     rule = config_policy.rule_for(target.gpu_type, model_id)
-    if rule is None or tp not in rule.allowed_tp:
+    if rule is None or not rule.allows_parallelism(tp, pp):
         raise RuntimeError("selected VRAM placement violates config policy")
     per_replica_gpu_count = tp * pp
     return {

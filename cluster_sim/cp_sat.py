@@ -345,7 +345,7 @@ def build_cp_sat_plan(
         candidate.target.gpu_type,
     )
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
-    if rule is None or candidate.tp not in rule.allowed_tp:
+    if rule is None or not rule.allows_parallelism(candidate.tp, candidate.pp):
         raise ValueError("CP-SAT selected a policy-invalid placement")
     per_replica_gpu_count = candidate.tp * candidate.pp
     return {
@@ -443,6 +443,8 @@ def enumerate_candidates(
         minimum_gpus = math.ceil(required_vram_gib / memory_gib)
         for tp in sorted(rule.allowed_tp):
             pp = math.ceil(minimum_gpus / tp)
+            if not rule.allows_parallelism(tp, pp):
+                continue
             dp = 1
             gpu_count = tp * pp * dp
             footprint = _target_footprint(target, gpu_count)
@@ -592,7 +594,7 @@ def verify_place_plan(
     if not isinstance(model_id, str) or not model_id:
         raise ValueError("placement plan config requires model_id")
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
-    if rule is None or candidate.tp not in rule.allowed_tp:
+    if rule is None or not rule.allows_parallelism(candidate.tp, candidate.pp):
         raise ValueError("placement plan violates the configuration policy")
     if config.get("precision") != rule.precision:
         raise ValueError("placement plan precision violates the configuration policy")
