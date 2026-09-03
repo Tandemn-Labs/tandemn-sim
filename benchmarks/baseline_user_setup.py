@@ -69,6 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=BENCHMARKS / "resource_map_benchmarking.jsonl",
     )
     parser.add_argument("--benchmark-id", required=True)
+    parser.add_argument("--postgres-url")
     return parser.parse_args(argv)
 
 
@@ -221,7 +222,7 @@ def main(argv: list[str] | None = None) -> None:
         args.resource_map,
         args.benchmark_id,
     )
-    client = PostgresClient()
+    client = PostgresClient(args.postgres_url)
     require_static_seed(client, canonical_user_id)
     user_id = reset_user(client, name=name, resource_map=resource_map)
     if args.baseline == "koi":

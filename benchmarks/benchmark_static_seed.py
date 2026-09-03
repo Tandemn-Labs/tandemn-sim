@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 from tandemn_system_data.clients import (
     HardwareCatalogStore,
@@ -64,6 +65,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "real_12h": (9, 192),
     "real_life_24h": (9, 192),
 }
+DATABASE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 LOGGER = logging.getLogger(__name__)
 
 EXPECTED_COUNTS: tuple[tuple[str, type[Any], int], ...] = (
@@ -130,7 +132,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=tuple(EXPECTED_RESOURCE_MAP_SHAPES),
         required=True,
     )
+    parser.add_argument("--baselines", nargs="+")
+    parser.add_argument("--koi-root", type=Path)
     return parser.parse_args(argv)
+
+
+def baseline_database_name(benchmark_id: str, baseline: str) -> str:
+    """Return the fixed local PostgreSQL database name for one baseline."""
+    benchmark = benchmark_id.removeprefix("simulation_").replace(
+        "homogenous", "homogeneous"
+    )
+    name = f"tandemn_{benchmark}_{baseline}"
+    if not DATABASE_NAME_PATTERN.fullmatch(name):
+        raise ValueError(f"invalid baseline database name {name!r}")
+    return name
+
+
+def baseline_database_url(database_name: str) -> str:
+    """Build one local Store URL for a fixed baseline database."""
+    return (
+        make_url(DEFAULT_URL)
+        .set(database=database_name)
+        .render_as_string(hide_password=False)
+    )
 
 
 def _checksum(path: Path) -> str:
@@ -330,9 +354,44 @@ def reset_store() -> None:
     _run([sys.executable, "-m", "alembic", "upgrade", "head"])
 
 
-def seed_static(inputs: StaticInputs) -> None:
+def reset_baseline_database(database_name: str) -> None:
+    """Replace one local baseline database without touching other baselines."""
+    if not DATABASE_NAME_PATTERN.fullmatch(database_name):
+        raise ValueError(f"invalid baseline database name {database_name!r}")
+    admin_url = make_url(DEFAULT_URL).set(database="postgres")
+    engine = create_engine(admin_url, isolation_level="AUTOCOMMIT", future=True)
+    quoted_name = f'"{database_name}"'
+    try:
+        with engine.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) "
+                    "FROM pg_stat_activity "
+                    "WHERE datname = :database_name "
+                    "AND pid <> pg_backend_pid()"
+                ),
+                {"database_name": database_name},
+            )
+            connection.execute(text(f"DROP DATABASE IF EXISTS {quoted_name}"))
+            connection.execute(text(f"CREATE DATABASE {quoted_name}"))
+    finally:
+        engine.dispose()
+
+
+def migrate_database(database_url: str) -> None:
+    """Apply the Store schema to one newly created baseline database."""
+    environment = {**os.environ, "TANDEMN_POSTGRES_URL": database_url}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=STORE_ROOT,
+        check=True,
+        env=environment,
+    )
+
+
+def seed_static(inputs: StaticInputs, client: PostgresClient | None = None) -> None:
     """Write the validated, shared benchmark inputs to the empty Store."""
-    client = PostgresClient()
+    client = client or PostgresClient()
     with client.begin() as session:
         session.add(
             UserRow(
@@ -371,6 +430,58 @@ def verify_static_state(client: PostgresClient) -> None:
         raise RuntimeError(f"unexpected hardware catalog keys: {sorted(catalog_keys)}")
 
 
+def seed_baseline_databases(
+    inputs: StaticInputs,
+    benchmark_id: str,
+    baselines: list[str],
+    koi_root: Path | None,
+) -> dict[str, str]:
+    """Create fully isolated Store databases and users for requested baselines."""
+    if len(baselines) != len(set(baselines)):
+        raise ValueError("--baselines must not contain duplicates")
+    if "koi" in baselines and koi_root is None:
+        raise ValueError("--koi-root is required when --baselines includes koi")
+
+    if __package__:
+        from benchmarks.baseline_user_setup import (
+            BASELINES,
+            baseline_name,
+            initialize_koi,
+            reset_user,
+        )
+    else:
+        from baseline_user_setup import (
+            BASELINES,
+            baseline_name,
+            initialize_koi,
+            reset_user,
+        )
+
+    unknown = sorted(set(baselines) - set(BASELINES))
+    if unknown:
+        raise ValueError(f"unknown baselines: {', '.join(unknown)}")
+
+    user_ids = {}
+    for baseline in baselines:
+        database_name = baseline_database_name(benchmark_id, baseline)
+        database_url = baseline_database_url(database_name)
+        reset_baseline_database(database_name)
+        migrate_database(database_url)
+        client = PostgresClient(database_url)
+        seed_static(inputs, client)
+        verify_static_state(client)
+        run_id = f"{benchmark_id.removeprefix('simulation_')}-{baseline}"
+        user_id = reset_user(
+            client,
+            name=baseline_name(baseline, run_id),
+            resource_map=inputs.resource_map,
+        )
+        if baseline == "koi":
+            initialize_koi(client, user_id, koi_root)
+        user_ids[baseline] = user_id
+    return user_ids
+
+
 def main(argv: list[str] | None = None) -> None:
     """Perform one validated, destructive local static benchmark setup."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -381,6 +492,15 @@ def main(argv: list[str] | None = None) -> None:
     _validate_local_store()
     LOGGER.info("validated static benchmark inputs; resetting local Store")
     reset_store()
+    if args.baselines:
+        user_ids = seed_baseline_databases(
+            inputs,
+            args.benchmark_id,
+            args.baselines,
+            args.koi_root,
+        )
+        print(json.dumps(user_ids, sort_keys=True))
+        return
     seed_static(inputs)
     verify_static_state(PostgresClient())
     LOGGER.info(

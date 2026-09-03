@@ -17,9 +17,12 @@ from benchmarks.benchmark_static_seed import (
     _validate_catalog,
     _validate_local_store,
     _validate_resource_map_coverage,
+    baseline_database_name,
+    baseline_database_url,
     load_inputs,
     parse_args,
     reset_store,
+    seed_baseline_databases,
 )
 from benchmarks.seed_benchmark_store import load_resource_map
 
@@ -128,6 +131,54 @@ class StaticSeedTest(unittest.TestCase):
             ROOT / "benchmarks/catalog-snapshots",
         )
 
+    def test_baseline_database_names_are_fixed_per_benchmark(self) -> None:
+        self.assertEqual(
+            baseline_database_name("simulation_3h", "bestfit"),
+            "tandemn_3h_bestfit",
+        )
+        self.assertEqual(
+            baseline_database_name("simulation_12h_homogenous", "gpt_only"),
+            "tandemn_12h_homogeneous_gpt_only",
+        )
+        self.assertEqual(
+            baseline_database_url("tandemn_3h_bestfit"),
+            "postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_3h_bestfit",
+        )
+
+    def test_seeds_requested_baselines_into_separate_databases(self) -> None:
+        inputs = SimpleNamespace(resource_map=object())
+        clients = [object(), object()]
+        with (
+            patch(
+                "benchmarks.benchmark_static_seed.reset_baseline_database"
+            ) as reset_database,
+            patch("benchmarks.benchmark_static_seed.migrate_database") as migrate,
+            patch(
+                "benchmarks.benchmark_static_seed.PostgresClient", side_effect=clients
+            ),
+            patch("benchmarks.benchmark_static_seed.seed_static") as seed,
+            patch("benchmarks.benchmark_static_seed.verify_static_state") as verify,
+            patch(
+                "benchmarks.baseline_user_setup.reset_user",
+                side_effect=("user-bestfit", "user-edf"),
+            ),
+        ):
+            user_ids = seed_baseline_databases(
+                inputs,
+                "simulation_3h",
+                ["bestfit", "edf"],
+                None,
+            )
+
+        self.assertEqual(user_ids, {"bestfit": "user-bestfit", "edf": "user-edf"})
+        self.assertEqual(
+            [call.args[0] for call in reset_database.call_args_list],
+            ["tandemn_3h_bestfit", "tandemn_3h_edf"],
+        )
+        self.assertEqual(migrate.call_count, 2)
+        self.assertEqual(seed.call_count, 2)
+        self.assertEqual(verify.call_count, 2)
+
     def test_selects_resource_map_by_benchmark_id(self) -> None:
         _, resource_map = load_resource_map(
             ROOT / "benchmarks/resource_map_benchmarking.jsonl",
@@ -135,10 +186,7 @@ class StaticSeedTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            sum(
-                pool.total_gpus
-                for *_, pool in resource_map.iter_machine_pools()
-            ),
+            sum(pool.total_gpus for *_, pool in resource_map.iter_machine_pools()),
             400,
         )
 
