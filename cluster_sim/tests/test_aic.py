@@ -23,6 +23,7 @@ from aic import (
     AicSettings,
     NvidiaAicClient,
     StoreSnapshot,
+    _aic_requests,
     _aic_system,
 )
 from models import OnlineJob, Scenario
@@ -40,6 +41,33 @@ _SERVINGSIM_HARDWARE = {
 
 class AicPlannerDriverTest(unittest.TestCase):
     """Verify greedy AIC placement and canonical lifecycle actions."""
+
+    def test_aic_fallback_is_one_same_backend_empirical_request(self) -> None:
+        """Retry only with empirical estimation for the original request."""
+        request = AicRequest(
+            model="model",
+            system="h100_sxm",
+            available_devices=8,
+            backend="vllm",
+            backend_version="0.22.0",
+            database_mode="HYBRID",
+            serving_mode="agg",
+            input_tokens=1,
+            output_tokens=1,
+            target_ttft_ms=10,
+            target_tpot_ms=10,
+            optimization_goal="latency",
+            target_request_rate=1,
+            target_concurrency=None,
+        )
+
+        attempts = _aic_requests(request)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0], request)
+        self.assertEqual(attempts[1].database_mode, "EMPIRICAL")
+        self.assertEqual(attempts[1].backend, request.backend)
+        self.assertEqual(attempts[1].backend_version, request.backend_version)
 
     def test_filters_pp_above_limit_before_selecting_aic_result(self) -> None:
         """Select the best remaining result after removing PP above four."""
@@ -281,31 +309,30 @@ class AicPlannerDriverTest(unittest.TestCase):
             with self.subTest(hardware=hardware):
                 self.assertEqual(_aic_system({}, None, hardware, {}), expected)
 
-    def test_aic_replicas_fold_into_canonical_data_parallelism(self) -> None:
-        """Flatten AIC replica and DP factors into the canonical rank replica count."""
-        client = FakeAicClient(tp=2, dp=3, replicas=2)
+    def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
+        """Keep DP in replica count rather than one ServingSim rank shape."""
+        client = FakeAicClient(tp=2, dp=3)
         actions = _driver((_job("job_1"),), client)._build_actions(
-            _snapshot(waiting=({"job_id": "job_1"},), h100_free=12)
+            _snapshot(waiting=({"job_id": "job_1"},), h100_free=6)
         )
 
         placed = actions[0]
         shape = placed["ladder"][0]["config"]
         self.assertEqual(shape["count"], 2)
         self.assertEqual(shape["gpu_count"], 2)
-        self.assertEqual(shape["dp"], 6)
-        self.assertEqual(placed["ladder"][0]["n_replicas"], 6)
+        self.assertEqual(placed["ladder"][0]["n_replicas"], 3)
         Plan(user_id="tenant", actions=[placed])
         cluster = build_rank_cluster(
             SimpleNamespace(
                 rank_name=placed["ladder"][0]["rank_id"],
                 model_name=shape["model_id"],
                 shape=shape,
-                chains=(object(),) * 6,
+                chains=(object(),) * 3,
             ),
             _SERVINGSIM_HARDWARE,
         )
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
-        self.assertEqual(cluster["nodes"][0]["num_instances"], 6)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
 
 class FakeAicClient:
