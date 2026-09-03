@@ -17,9 +17,12 @@ from contextual_bandit import (
     ContextualBanditPlannerDriver,
     PlacementCandidate,
     StoreSnapshot,
+    _features,
     _PendingObservation,
     _target_memory_gib,
     build_contextual_bandit_plan,
+    build_placement_problems,
+    capacity_limits,
     enumerate_candidates,
     verify_place_plan,
 )
@@ -27,6 +30,8 @@ from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
 from vram import ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+RUNNING_MODEL_ID = "running-model"
+_H100_ENVIRONMENT = "reserved|aws|us-east|use1-az1|H100"
 
 
 class ContextualBanditPlannerDriverTest(unittest.TestCase):
@@ -64,9 +69,7 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
                 "pools": [],
             }
         }
-        policy = ConfigPolicy(
-            {("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))}
-        )
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
         self.assertEqual(
             enumerate_candidates(
                 "job",
@@ -126,6 +129,43 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         self.assertEqual(requested, [MODEL_ID])
         self.assertEqual(snapshot.model_catalogs, _catalogs())
 
+    def test_snapshot_reads_running_job_model_catalogs(self) -> None:
+        """Freeze catalogs for both waiting placements and running-job swaps."""
+        driver = object.__new__(ContextualBanditPlannerDriver)
+        driver.user_id = "user"
+        catalogs = {
+            MODEL_ID: _catalogs()[MODEL_ID],
+            RUNNING_MODEL_ID: _catalogs()[MODEL_ID],
+        }
+        requested = []
+        driver.job_store = SimpleNamespace(
+            running_jobs=lambda _user_id: (
+                {
+                    "job": _store_job("running", RUNNING_MODEL_ID),
+                    "ranks": [_active_rank("rank-running")],
+                },
+            ),
+            waiting_jobs=lambda _user_id: (_store_job("waiting"),),
+            paused_jobs=lambda _user_id: (),
+        )
+        driver.resource_map_store = SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {},
+            )
+        )
+        driver.model_catalog_store = SimpleNamespace(
+            get=lambda model_id: (
+                requested.append(model_id)
+                or SimpleNamespace(model_dump=lambda **_kwargs: catalogs[model_id])
+            )
+        )
+
+        snapshot = driver._read_store_snapshot()
+
+        self.assertEqual(requested, [MODEL_ID, RUNNING_MODEL_ID])
+        self.assertEqual(snapshot.model_catalogs, catalogs)
+
     def test_selected_candidate_uses_exact_gpu_catalog_profile(self) -> None:
         """Materialize Store launch fields only after bandit selection."""
         candidate = PlacementCandidate(
@@ -169,6 +209,153 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
         verify_place_plan(plan, candidate, catalogs, policy)
+
+    def test_data_parallel_candidates_use_per_replica_ladder_shape(self) -> None:
+        """Represent DP as replicas while reserving the total GPU footprint."""
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
+        candidates = enumerate_candidates(
+            "job",
+            MODEL_ID,
+            {},
+            1,
+            _resources(3),
+            policy,
+        )
+
+        self.assertEqual(
+            [
+                (candidate.dp, candidate.gpu_count, candidate.footprint)
+                for candidate in candidates
+            ],
+            [(1, 1, 1), (2, 1, 2), (3, 1, 3)],
+        )
+        candidate = candidates[-1]
+        plan = build_contextual_bandit_plan(
+            _store_job("job"),
+            candidate,
+            _catalogs(),
+            policy,
+        )
+
+        rank = plan["ladder"][0]
+        self.assertEqual(rank["n_replicas"], 3)
+        self.assertEqual(rank["config"]["gpu_count"], 1)
+        self.assertEqual(rank["config"]["count"], 1)
+        verify_place_plan(plan, candidate, _catalogs(), policy)
+
+    def test_selected_running_candidate_swaps_with_active_rank_id(self) -> None:
+        """Keep the active rank identity and selected context through a swap."""
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
+        running = _running_job("job", "rank-active")
+        snapshot = StoreSnapshot(
+            resources=_resources(2),
+            running_jobs=(running,),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        driver = _planning_driver(policy, now)
+        driver._sample_weight = lambda: (0.0,) * 11
+
+        actions = driver._build_actions(snapshot)
+
+        self.assertEqual(actions[0]["type"], "swap")
+        self.assertEqual(actions[0]["ladder"][0]["rank_id"], "rank-active")
+        self.assertEqual(actions[0]["ladder"][0]["n_replicas"], 2)
+        self.assertEqual(driver._pending["job"].rank_id, "rank-active")
+        problem = build_placement_problems(
+            (),
+            _resources(2),
+            "test",
+            {},
+            policy,
+            running_jobs=(running,),
+        )[0]
+        candidate = next(
+            candidate for candidate in problem.candidates if candidate.dp == 2
+        )
+        self.assertEqual(
+            driver._pending["job"].features,
+            _features(
+                problem,
+                candidate,
+                capacity_limits(_resources(2)),
+                1,
+            ),
+        )
+
+    def test_unselected_running_candidate_keeps_current_rank(self) -> None:
+        """Use keep rather than defer when a running candidate is not selected."""
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
+        running = _running_job(
+            "job",
+            "rank-active",
+            count=2,
+            tp=1,
+            pp=2,
+        )
+        driver = _planning_driver(policy, datetime(2026, 1, 1, tzinfo=UTC))
+        driver._select_placements = lambda _problems, _capacities: {}
+
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=_resources(1),
+                running_jobs=(running,),
+                waiting_jobs=(),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        self.assertEqual(actions, [{"job_id": "job", "type": "keep"}])
+
+    def test_unchanged_and_non_single_running_ranks_keep(self) -> None:
+        """Skip no-op swaps and leave no-rank or multi-rank jobs untouched."""
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
+        unchanged = _running_job("unchanged", "rank-unchanged")
+        no_rank = _store_job("no-rank")
+        multiple_ranks = _running_job(
+            "multiple",
+            "rank-first",
+            extra_ranks=(_active_rank("rank-second"),),
+        )
+        problems = build_placement_problems(
+            (),
+            _resources(1),
+            "test",
+            {},
+            policy,
+            running_jobs=(unchanged, no_rank, multiple_ranks),
+        )
+
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0].job_id, "unchanged")
+        self.assertEqual(problems[0].action_type, "swap")
+        self.assertEqual(problems[0].candidates, ())
+        driver = _planning_driver(policy, datetime(2026, 1, 1, tzinfo=UTC))
+        driver._select_placements = lambda _problems, _capacities: {}
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=_resources(1),
+                running_jobs=(unchanged, no_rank, multiple_ranks),
+                waiting_jobs=(),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        self.assertEqual(
+            actions,
+            [
+                {"job_id": "unchanged", "type": "keep"},
+                {"job_id": "no-rank", "type": "keep"},
+                {"job_id": "multiple", "type": "keep"},
+            ],
+        )
 
     def test_pending_rank_id_matches_the_placement_plan(self) -> None:
         """Query Store telemetry using the rank identity Orca materializes."""
@@ -236,21 +423,94 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         self.assertAlmostEqual(driver.last_reward, -0.6)
 
 
-def _store_job(job_id: str) -> dict[str, object]:
+def _store_job(
+    job_id: str,
+    model_id: str = MODEL_ID,
+) -> dict[str, object]:
     """Create one canonical waiting Store job."""
     return {
         "job_id": job_id,
         "user_id": "tenant",
-        "spec_json": {"model_id": MODEL_ID},
+        "spec_json": {"model_id": model_id, "required_vram_gib": 1},
     }
+
+
+def _resources(free: int) -> dict[str, dict[str, object]]:
+    """Create one H100 resource target with the requested free capacity."""
+    return {
+        _H100_ENVIRONMENT: {
+            "gpu_type": "H100",
+            "free": free,
+            "pools": [],
+        }
+    }
+
+
+def _active_rank(
+    rank_id: str,
+    *,
+    count: int = 1,
+    tp: int = 1,
+    pp: int = 1,
+    dp: int = 1,
+) -> dict[str, object]:
+    """Create one canonical active rank shape for a running Store job."""
+    return {
+        "rank_id": rank_id,
+        "n_replicas": dp,
+        "shape_json": {
+            "env": _H100_ENVIRONMENT.split("|"),
+            "instance_type": None,
+            "gpu_type": "H100",
+            "gpu_count": count,
+            "count": count,
+            "tp": tp,
+            "pp": pp,
+            "dp": dp,
+        },
+    }
+
+
+def _running_job(
+    job_id: str,
+    rank_id: str,
+    model_id: str = MODEL_ID,
+    *,
+    count: int = 1,
+    tp: int = 1,
+    pp: int = 1,
+    dp: int = 1,
+    extra_ranks: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    """Create one Store running job with canonical active-rank payloads."""
+    return {
+        **_store_job(job_id, model_id),
+        "active_ranks": [
+            _active_rank(rank_id, count=count, tp=tp, pp=pp, dp=dp),
+            *extra_ranks,
+        ],
+    }
+
+
+def _planning_driver(
+    policy: ConfigPolicy,
+    feedback_start: datetime,
+) -> ContextualBanditPlannerDriver:
+    """Build only the bandit state required to construct actions."""
+    driver = object.__new__(ContextualBanditPlannerDriver)
+    driver.benchmark_name = "test"
+    driver.benchmark_job_ids = {}
+    driver.config_policy = policy
+    driver._pending = {}
+    driver._feedback_start = feedback_start
+    return driver
 
 
 def _reward_driver() -> ContextualBanditPlannerDriver:
     """Build only the Thompson state needed for reward observations."""
     driver = object.__new__(ContextualBanditPlannerDriver)
     driver._precision = [
-        [1.0 if row == column else 0.0 for column in range(11)]
-        for row in range(11)
+        [1.0 if row == column else 0.0 for column in range(11)] for row in range(11)
     ]
     driver._reward_weight = [0.0] * 11
     driver._pending = {}

@@ -801,7 +801,7 @@ class VramPlannerDriver:
                 actions.append({"job_id": job_id, "type": "defer"})
                 continue
             target, tp, pp, dp = placement
-            reserve_vram_placement(target, tp * pp * dp)
+            reserve_vram_placement(target, tp * pp, dp)
             actions.append(
                 _place_action(
                     job_id,
@@ -853,8 +853,8 @@ def select_vram_placement(
         ):
             continue
         dp = 1
-        gpu_count = tp * pp * dp
-        footprint = _target_footprint(target, gpu_count)
+        gpu_count = tp * pp
+        footprint = _target_footprint(target, gpu_count, dp)
         if footprint is None or footprint > _target_available(target):
             continue
         feasible.append(
@@ -1010,28 +1010,39 @@ def _policy_tp(desired_tp: int, rule: ConfigPolicyRule) -> int:
     return max(rule.allowed_tp)
 
 
-def _target_footprint(target: ResourceTarget, gpu_count: int) -> int | None:
-    """Translate mapped GPUs into the target's allocation unit."""
+def _target_footprint(
+    target: ResourceTarget,
+    per_replica_gpu_count: int,
+    replicas: int = 1,
+) -> int | None:
+    """Translate a runtime replica group into the target's allocation unit."""
+    if replicas < 1:
+        raise ValueError("replicas must be positive")
     if target.pool is None:
-        return gpu_count
+        return per_replica_gpu_count * replicas
     allocation_kind = str(
         target.pool.get("allocation_kind")
         or target.pool.get("allocation_unit")
         or "instance"
     ).lower()
     if allocation_kind == "gpu":
-        return gpu_count
+        return per_replica_gpu_count * replicas
     gpus_per_instance = _positive_int(
         target.pool.get("gpus_per_instance"),
         "gpus_per_instance",
     )
-    instances = math.ceil(gpu_count / gpus_per_instance)
-    return instances * gpus_per_instance
+    if per_replica_gpu_count > gpus_per_instance:
+        return None
+    return replicas * gpus_per_instance
 
 
-def reserve_vram_placement(target: ResourceTarget, gpu_count: int) -> None:
+def reserve_vram_placement(
+    target: ResourceTarget,
+    per_replica_gpu_count: int,
+    replicas: int = 1,
+) -> None:
     """Reserve a selected VRAM placement for the current control tick."""
-    footprint = _target_footprint(target, gpu_count)
+    footprint = _target_footprint(target, per_replica_gpu_count, replicas)
     if footprint is None or footprint > _target_available(target):
         raise RuntimeError("selected VRAM placement no longer fits")
     target.environment["free"] = int(target.environment["free"]) - footprint

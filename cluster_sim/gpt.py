@@ -22,37 +22,41 @@ from policy import (
     ConfigPolicy,
     load_config_policy,
 )
-from rank_ids import rank_id
+from rank_ids import active_rank_id, rank_id
 
 SYSTEM_PROMPT = """You are the placement planner for an AI inference cluster.
 
 The user message contains one frozen Tandemn Store snapshot. resources contains
 the live resource map after subtracting active chain allocations. active_jobs
 contains running jobs and pending_jobs contains waiting jobs. jobs_for_tick
-contains only unplaced waiting jobs that require a new decision.
+contains actionable scenario jobs: eligible running jobs first, followed by
+waiting jobs. Every jobs_for_tick entry has a lifecycle.
 
-Return exactly one place or defer decision for every jobs_for_tick entry, in the
-same order. Do not return job IDs; Tandemn Store owns job identity. For a place
-decision, select an exact environment key and, when pools are present, an
-instance_type from that environment. Supply replicas_needed, tp, pp, and dp as
+Return exactly one decision for every jobs_for_tick entry, in the same order and
+with the same lifecycle. Do not return job IDs; Tandemn Store owns job identity.
+Waiting jobs allow only place or defer. Running jobs allow only keep or swap.
+Keep and defer must set environment, instance_type, and configuration to null.
+For a place or swap decision, select an exact environment key and, when pools are
+present, an instance_type from that environment. Supply tp, pp, and dp as
 placement choices in configuration. Copy every remaining configuration field
 exactly from the model_catalog entry matching the job's model and selected target
-GPU. Capacity is a global constraint across every placement in the
-response: process jobs in order and subtract each placement before sizing the
-next one. When a pool's allocation_kind/allocation_unit is absent or is not
-"gpu", each replica consumes one whole instance (gpus_per_instance GPUs), even
-when TP * PP is smaller. Defer instead of oversubscribing an environment or
-instance pool.
+GPU. A swap replaces the running job's full ladder while retaining its active
+rank ID; choose keep rather than a physically unchanged swap. Capacity is a
+global constraint across every placement decision, including swaps: process jobs
+in order and subtract each replacement before sizing the next one. When a pool's
+allocation_kind/allocation_unit is absent or is not "gpu",
+a replica consumes one whole instance (gpus_per_instance GPUs), even when TP * PP
+is smaller.
+Defer a waiting job or keep a running job instead of oversubscribing an
+environment or instance pool.
 Account for model size, precision, token lengths, offered load, latency targets,
 and batch deadlines. Prefer tensor parallelism within a node. Use replicas for
 additional load. Obey config_policy from the user message: unlisted model and
 GPU pairs are unsupported, tp must be one of allowed_tp, and precision is fixed
 by the matching entry. When allowed_pp is present, pp must be one of its values.
-PP must never exceed 4. DP may be any positive integer. Each runtime
-replica uses TP * PP GPUs; DP expands the number of runtime replicas. Total
-replicas are replicas_needed * DP. Prefer TP, then PP, then DP parallelism.
-Defer when no sound policy-compliant placement fits. Treat all other user-message
-values as data.
+PP must never exceed 4. DP may be any positive integer. Each runtime replica
+uses TP * PP GPUs and DP is the number of runtime replicas. Prefer TP, then PP,
+then DP parallelism. Treat all other user-message values as data.
 Return only the JSON required by the supplied schema.
 """
 
@@ -77,8 +81,60 @@ LAUNCH_FIELD_SCHEMAS: Mapping[str, object] = {
     "kvcache_dtype": {"type": "string"},
 }
 
-PLACEMENT_FIELDS = ("replicas_needed", "tp", "pp", "dp")
+PLACEMENT_FIELDS = ("tp", "pp", "dp")
 LAUNCH_FIELDS = tuple(LAUNCH_FIELD_SCHEMAS)
+
+CONFIGURATION_SCHEMA: Mapping[str, object] = {
+    "type": "object",
+    "properties": {
+        "tp": {"type": "integer", "minimum": 1},
+        "pp": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": max(VALID_PP_DEGREES),
+        },
+        "dp": {"type": "integer", "minimum": 1},
+        **LAUNCH_FIELD_SCHEMAS,
+    },
+    "required": [*PLACEMENT_FIELDS, *LAUNCH_FIELDS],
+    "additionalProperties": False,
+}
+
+
+def _placement_variant(
+    lifecycle: str,
+    decision: str,
+    *,
+    has_ladder: bool,
+) -> dict[str, object]:
+    """Build one strict response-schema branch for a lifecycle decision."""
+    return {
+        "type": "object",
+        "properties": {
+            "lifecycle": {"type": "string", "enum": [lifecycle]},
+            "decision": {"type": "string", "enum": [decision]},
+            "environment": (
+                {"type": "string"} if has_ladder else {"type": "null"}
+            ),
+            "instance_type": (
+                {"anyOf": [{"type": "string"}, {"type": "null"}]}
+                if has_ladder
+                else {"type": "null"}
+            ),
+            "configuration": (
+                CONFIGURATION_SCHEMA if has_ladder else {"type": "null"}
+            ),
+        },
+        "required": [
+            "lifecycle",
+            "decision",
+            "environment",
+            "instance_type",
+            "configuration",
+        ],
+        "additionalProperties": False,
+    }
+
 
 PLACEMENT_SCHEMA: Mapping[str, object] = {
     "type": "object",
@@ -86,46 +142,12 @@ PLACEMENT_SCHEMA: Mapping[str, object] = {
         "placements": {
             "type": "array",
             "items": {
-                "type": "object",
-                "properties": {
-                    "decision": {"type": "string", "enum": ["place", "defer"]},
-                    "environment": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "instance_type": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "configuration": {
-                        "anyOf": [
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "replicas_needed": {
-                                        "type": "integer",
-                                        "minimum": 1,
-                                    },
-                                    "tp": {"type": "integer", "minimum": 1},
-                                    "pp": {
-                                        "type": "integer",
-                                        "minimum": 1,
-                                        "maximum": max(VALID_PP_DEGREES),
-                                    },
-                                    "dp": {"type": "integer", "minimum": 1},
-                                    **LAUNCH_FIELD_SCHEMAS,
-                                },
-                                "required": [
-                                    *PLACEMENT_FIELDS,
-                                    *LAUNCH_FIELDS,
-                                ],
-                                "additionalProperties": False,
-                            },
-                            {"type": "null"},
-                        ]
-                    },
-                },
-                "required": [
-                    "decision",
-                    "environment",
-                    "instance_type",
-                    "configuration",
-                ],
-                "additionalProperties": False,
+                "anyOf": [
+                    _placement_variant("waiting", "place", has_ladder=True),
+                    _placement_variant("waiting", "defer", has_ladder=False),
+                    _placement_variant("running", "keep", has_ladder=False),
+                    _placement_variant("running", "swap", has_ladder=True),
+                ]
             },
         }
     },
@@ -150,6 +172,7 @@ class StoreSnapshot:
 class GptPlacement:
     """One narrow placement decision returned by GPT."""
 
+    lifecycle: str
     decision: str
     environment: str | None
     instance_type: str | None
@@ -331,19 +354,18 @@ class GptPlannerDriver:
         """Read one Store snapshot, persist one plan, and return its identity."""
         try:
             snapshot = self._read_store_snapshot()
-            waiting_ids = tuple(
-                job["job_id"]
-                for job in snapshot.waiting_jobs
-                if job.get("job_id") in self.jobs
-            )
+            actionable_jobs = self._actionable_job_ids(snapshot)
             placements: tuple[GptPlacement, ...] = ()
             llm_usage: tuple[LlmUsage, ...] = ()
-            if waiting_ids:
+            if actionable_jobs:
                 prompt = _build_user_prompt(
                     tick_number,
                     logical_time,
                     snapshot,
-                    tuple(self.jobs[job_id] for job_id in waiting_ids),
+                    tuple(
+                        (lifecycle, self.jobs[job_id])
+                        for lifecycle, job_id in actionable_jobs
+                    ),
                     load_config_policy(),
                 )
                 placements, llm_usage = self.client.place(
@@ -390,13 +412,14 @@ class GptPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        running_jobs = tuple(_running_job_payload(job) for job in running)
         waiting_jobs = tuple(_model_payload(job) for job in waiting)
         model_ids = {
             _text(
                 _mapping(job.get("spec_json"), "job spec_json").get("model_id"),
                 "model_id",
             )
-            for job in waiting_jobs
+            for job in (*running_jobs, *waiting_jobs)
             if job.get("job_id") in self.jobs
         }
         model_catalogs = {}
@@ -407,12 +430,31 @@ class GptPlannerDriver:
             model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
-            running_jobs=tuple(_running_job_payload(job) for job in running),
+            running_jobs=running_jobs,
             waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
             model_catalogs=model_catalogs,
         )
+
+    def _actionable_job_ids(
+        self,
+        snapshot: StoreSnapshot,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return eligible Store jobs in the response and action order."""
+        actionable = []
+        for lifecycle, jobs in (
+            ("running", snapshot.running_jobs),
+            ("waiting", snapshot.waiting_jobs),
+        ):
+            for job in jobs:
+                job_id = _text(job.get("job_id"), f"{lifecycle} Store job_id")
+                if job_id not in self.jobs:
+                    continue
+                if lifecycle == "running" and active_rank_id(job) is None:
+                    continue
+                actionable.append((lifecycle, job_id))
+        return tuple(actionable)
 
     def _build_actions(
         self,
@@ -420,17 +462,35 @@ class GptPlannerDriver:
         placements: Sequence[GptPlacement],
     ) -> list[dict[str, object]]:
         """Convert validated GPT placements into canonical Store actions."""
-        waiting_ids = tuple(
-            job["job_id"]
-            for job in snapshot.waiting_jobs
-            if job.get("job_id") in self.jobs
-        )
-        _validate_response_count(waiting_ids, placements)
-        placement_by_job = dict(zip(waiting_ids, placements, strict=True))
+        actionable_jobs = self._actionable_job_ids(snapshot)
+        _validate_response_count(actionable_jobs, placements)
+        placement_by_job = {
+            job_id: placement
+            for (_, job_id), placement in zip(actionable_jobs, placements, strict=True)
+        }
         resources = deepcopy(snapshot.resources)
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
-            actions.append({"job_id": running["job_id"], "type": "keep"})
+            job_id = _text(running.get("job_id"), "running Store job_id")
+            placement = placement_by_job.get(job_id)
+            if placement is None or placement.decision == "keep":
+                actions.append({"job_id": job_id, "type": "keep"})
+                continue
+            if placement.decision != "swap":
+                raise ValueError("running jobs require keep or swap decisions")
+            try:
+                action = _swap_action(
+                    job_id,
+                    running,
+                    self.jobs[job_id],
+                    placement,
+                    resources,
+                    snapshot.model_catalogs,
+                )
+            except PlacementCapacityError:
+                actions.append({"job_id": job_id, "type": "keep"})
+                continue
+            actions.append(action)
         for waiting in snapshot.waiting_jobs:
             job_id = waiting.get("job_id")
             if not isinstance(job_id, str):
@@ -442,6 +502,8 @@ class GptPlannerDriver:
             if placement.decision == "defer":
                 actions.append({"job_id": job_id, "type": "defer"})
                 continue
+            if placement.decision != "place":
+                raise ValueError("waiting jobs require place or defer decisions")
             try:
                 action = _place_action(
                     job_id,
@@ -465,10 +527,11 @@ def _build_user_prompt(
     tick_number: int,
     logical_time: datetime,
     snapshot: StoreSnapshot,
-    jobs: tuple[OnlineJob | BatchJob, ...],
+    actionable_jobs: tuple[tuple[str, OnlineJob | BatchJob], ...],
     config_policy: ConfigPolicy,
 ) -> str:
-    """Serialize the frozen Store snapshot and waiting simulator jobs."""
+    """Serialize the frozen Store snapshot and actionable simulator jobs."""
+    jobs = tuple(job for _, job in actionable_jobs)
     return json.dumps(
         {
             "tick": tick_number,
@@ -489,7 +552,10 @@ def _build_user_prompt(
                 snapshot.resources,
                 jobs,
             ),
-            "jobs_for_tick": [_job_prompt_payload(job) for job in jobs],
+            "jobs_for_tick": [
+                _job_prompt_payload(lifecycle, job)
+                for lifecycle, job in actionable_jobs
+            ],
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -564,10 +630,70 @@ def _place_action(
 ) -> dict[str, object]:
     """Combine deterministic job fields with one GPT placement."""
     known = _known_job_fields(store_job, scenario_job)
+    return _placement_action(
+        job_id,
+        scenario_job,
+        known,
+        placement,
+        resources,
+        catalogs,
+        action_type="place",
+        rank_name=rank_id(known),
+    )
+
+
+def _swap_action(
+    job_id: str,
+    running: Mapping[str, object],
+    scenario_job: OnlineJob | BatchJob,
+    placement: GptPlacement,
+    resources: dict[str, dict[str, Any]],
+    catalogs: Mapping[str, Mapping[str, Any]],
+) -> dict[str, object]:
+    """Replace a running job's ladder or retain it when unchanged."""
+    known = _known_job_fields(running, scenario_job)
+    rank_name = active_rank_id(running)
+    if rank_name is None:
+        raise ValueError("running job has no sole active rank for swap")
+    if _is_noop_swap(running, rank_name, placement, resources):
+        _placement_ladder(
+            scenario_job,
+            known,
+            placement,
+            resources,
+            catalogs,
+            rank_name,
+            reserve=False,
+        )
+        return {"job_id": job_id, "type": "keep"}
+    return _placement_action(
+        job_id,
+        scenario_job,
+        known,
+        placement,
+        resources,
+        catalogs,
+        action_type="swap",
+        rank_name=rank_name,
+    )
+
+
+def _placement_action(
+    job_id: str,
+    scenario_job: OnlineJob | BatchJob,
+    known: Mapping[str, object],
+    placement: GptPlacement,
+    resources: dict[str, dict[str, Any]],
+    catalogs: Mapping[str, Mapping[str, Any]],
+    *,
+    action_type: str,
+    rank_name: str,
+) -> dict[str, object]:
+    """Build one full place or swap action from a validated placement."""
     target_tps = _number(known.get("target_tps"))
     return {
         "job_id": job_id,
-        "type": "place",
+        "type": action_type,
         "target_tps": (
             target_tps if target_tps is not None else _target_tps(scenario_job)
         ),
@@ -580,6 +706,7 @@ def _place_action(
                 placement,
                 resources,
                 catalogs,
+                rank_name,
             )
         ],
     }
@@ -591,6 +718,9 @@ def _placement_ladder(
     placement: GptPlacement,
     resources: dict[str, dict[str, Any]],
     catalogs: Mapping[str, Mapping[str, Any]],
+    rank_name: str,
+    *,
+    reserve: bool = True,
 ) -> dict[str, object]:
     """Validate one placement and reserve its Store resource footprint."""
     if placement.environment is None or placement.configuration is None:
@@ -604,7 +734,6 @@ def _placement_ladder(
         raise ValueError(
             "GPT configuration must contain placement and model catalog fields"
         )
-    replicas = _positive_int(config.get("replicas_needed"), "replicas_needed")
     tp = _positive_int(config.get("tp"), "tp")
     pp = _positive_int(config.get("pp"), "pp")
     dp = _positive_int(config.get("dp"), "dp")
@@ -625,10 +754,10 @@ def _placement_ladder(
         raise ValueError(f"{model_id} is unsupported on {gpu_type}")
     if not policy_rule.allows_parallelism(tp, pp):
         raise ValueError(
-            f"tp={tp}, pp={pp} is not allowed for {model_id} on {gpu_type}"
+            f"tp={tp} is not allowed with pp={pp} for {model_id} on {gpu_type}"
         )
     gpu_count = tp * pp
-    replicas *= dp
+    replicas = dp
     pool = _select_pool(environment, placement.instance_type)
     capacity_per_replica = gpu_count
     instance_type = None
@@ -651,13 +780,14 @@ def _placement_ladder(
     available = int(environment["free"])
     if pool is not None:
         available = min(available, int(pool["free"]))
-    if footprint > available:
-        raise PlacementCapacityError(
-            f"{placement.environment} has {available} free GPUs, not {footprint}"
-        )
-    environment["free"] = int(environment["free"]) - footprint
-    if pool is not None:
-        pool["free"] = int(pool["free"]) - footprint
+    if reserve:
+        if footprint > available:
+            raise PlacementCapacityError(
+                f"{placement.environment} has {available} free GPUs, not {footprint}"
+            )
+        environment["free"] = int(environment["free"]) - footprint
+        if pool is not None:
+            pool["free"] = int(pool["free"]) - footprint
 
     rank_config: dict[str, object] = {
         **launch_config,
@@ -675,12 +805,60 @@ def _placement_ladder(
     }
     return {
         "role": known.get("role") or "aggregate",
-        "rank_id": rank_id(known),
+        "rank_id": rank_name,
         "env": placement.environment.split("|"),
         "config": rank_config,
         "n_replicas": replicas,
         "mechanism_id": known.get("mechanism_id"),
     }
+
+
+def _is_noop_swap(
+    running: Mapping[str, object],
+    rank_name: str,
+    placement: GptPlacement,
+    resources: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Return whether a swap would retain the active rank's physical shape."""
+    if placement.environment is None or placement.configuration is None:
+        return False
+    environment = resources.get(placement.environment)
+    if environment is None:
+        return False
+    active_rank = _active_rank(running, rank_name)
+    shape = _mapping(active_rank.get("shape_json"), "active rank shape")
+    pool = _select_pool(environment, placement.instance_type)
+    instance_type = None
+    if pool is not None:
+        instance_type = _text(pool.get("instance_type"), "instance_type")
+    config = placement.configuration
+    try:
+        tp = _positive_int(config.get("tp"), "tp")
+        pp = _positive_int(config.get("pp"), "pp")
+        dp = _positive_int(config.get("dp"), "dp")
+    except ValueError:
+        return False
+    return (
+        _env_key(shape.get("env") or shape.get("pool_id")) == placement.environment
+        and shape.get("instance_type") == instance_type
+        and shape.get("gpu_count", shape.get("count"))
+        == tp * pp
+        and shape.get("tp") == tp
+        and shape.get("pp") == pp
+        and active_rank.get("n_replicas") == dp
+    )
+
+
+def _active_rank(running: Mapping[str, object], rank_name: str) -> dict[str, Any]:
+    """Return the active rank selected by the shared identity helper."""
+    values = running.get("active_ranks")
+    if not isinstance(values, list):
+        raise ValueError("running job active_ranks must be a list")
+    for value in values:
+        rank = _mapping(value, "active rank")
+        if rank.get("rank_id") == rank_name:
+            return rank
+    raise ValueError(f"running job has no active rank {rank_name!r}")
 
 
 def _materialize_launch_config(
@@ -809,19 +987,29 @@ def _parse_placements(document: Mapping[str, object]) -> tuple[GptPlacement, ...
     placements = []
     for index, value in enumerate(values):
         item = _mapping(value, f"placements[{index}]")
+        lifecycle = _text(item.get("lifecycle"), "lifecycle")
         decision = _text(item.get("decision"), "decision")
-        if decision == "defer":
+        allowed_decisions = {
+            "waiting": {"place", "defer"},
+            "running": {"keep", "swap"},
+        }
+        if lifecycle not in allowed_decisions:
+            raise ValueError("lifecycle must be waiting or running")
+        if decision not in allowed_decisions[lifecycle]:
+            raise ValueError(f"{lifecycle} jobs cannot use {decision} decisions")
+        if decision in {"defer", "keep"}:
             if any(
                 item.get(key) is not None
                 for key in ("environment", "instance_type", "configuration")
             ):
-                raise ValueError("defer decisions must use null placement fields")
-            placements.append(GptPlacement(decision, None, None, None))
+                raise ValueError(
+                    f"{decision} decisions must use null placement fields"
+                )
+            placements.append(GptPlacement(lifecycle, decision, None, None, None))
             continue
-        if decision != "place":
-            raise ValueError("decision must be place or defer")
         placements.append(
             GptPlacement(
+                lifecycle=lifecycle,
                 decision=decision,
                 environment=_text(item.get("environment"), "environment"),
                 instance_type=_optional_text(item.get("instance_type")),
@@ -832,12 +1020,39 @@ def _parse_placements(document: Mapping[str, object]) -> tuple[GptPlacement, ...
 
 
 def _validate_response_count(
-    expected_ids: Sequence[str],
+    actionable_jobs: Sequence[tuple[str, str]],
     placements: Sequence[GptPlacement],
 ) -> None:
-    """Require one ordered GPT decision per waiting Store job."""
-    if len(placements) != len(expected_ids):
-        raise ValueError("GPT must decide every waiting job exactly once")
+    """Require one lifecycle-valid GPT decision per actionable Store job."""
+    if len(placements) != len(actionable_jobs):
+        raise ValueError("GPT must decide every actionable job exactly once")
+    allowed_decisions = {
+        "waiting": {"place", "defer"},
+        "running": {"keep", "swap"},
+    }
+    for (lifecycle, _), placement in zip(actionable_jobs, placements, strict=True):
+        if placement.lifecycle != lifecycle:
+            raise ValueError("GPT placement lifecycle does not match Store job")
+        if placement.decision not in allowed_decisions[lifecycle]:
+            raise ValueError(
+                f"{lifecycle} jobs cannot use {placement.decision} decisions"
+            )
+        if placement.decision in {"defer", "keep"}:
+            if any(
+                value is not None
+                for value in (
+                    placement.environment,
+                    placement.instance_type,
+                    placement.configuration,
+                )
+            ):
+                raise ValueError(
+                    f"{placement.decision} decisions must use null placement fields"
+                )
+        elif placement.environment is None or placement.configuration is None:
+            raise ValueError(
+                f"{placement.decision} decisions must include placement fields"
+            )
 
 
 def _validate_complete_job_actions(
@@ -904,12 +1119,16 @@ def _target_tps(job: OnlineJob | BatchJob) -> float | None:
     return round(record_count * average / duration_seconds, 3)
 
 
-def _job_prompt_payload(job: OnlineJob | BatchJob) -> dict[str, object]:
+def _job_prompt_payload(
+    lifecycle: str,
+    job: OnlineJob | BatchJob,
+) -> dict[str, object]:
     """Expose workload requirements without transferring Store job identity."""
     payload = asdict(job)
     payload.pop("name", None)
     payload.pop("store_job_id", None)
     payload["kind"] = "online" if isinstance(job, OnlineJob) else "batch"
+    payload["lifecycle"] = lifecycle
     return payload
 
 

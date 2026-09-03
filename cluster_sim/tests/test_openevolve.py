@@ -28,6 +28,7 @@ from openevolve import (
     _job_required_vram_gib,
     _place_action,
     _resource_prompt_payload,
+    _resources_with_free_capacity,
     _validate_policy_response,
     load_policy_source,
 )
@@ -42,6 +43,8 @@ _SERVINGSIM_HARDWARE = {
     "memory_bandwidth_gb_s": 3350,
     "link_bandwidth_gb_s": 900,
 }
+
+_ACTIVE_RANK_ID = "rank_01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
 class OpenEvolvePlannerTest(unittest.TestCase):
@@ -96,7 +99,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         self.assertEqual(placements[0].environment, "env|H100")
         self.assertEqual(
             placements[0].configuration,
-            {"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+            {"tp": 1, "pp": 1, "dp": 1},
         )
         self.assertEqual(calls[0][3], 3)
         system_message = calls[0][2]["prompt"]["system_message"]
@@ -112,9 +115,24 @@ class OpenEvolvePlannerTest(unittest.TestCase):
     def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
         """Freeze resolved Store launch profiles for the tick and LLM context."""
         driver = _driver()
+        driver.jobs["running"] = _online_job("running")
         requested = []
         driver.job_store = SimpleNamespace(
-            running_jobs=lambda _user_id: (),
+            running_jobs=lambda _user_id: (
+                {
+                    "job": _store_job_for("running"),
+                    "ranks": [
+                        {
+                            "rank_id": _ACTIVE_RANK_ID,
+                            "n_replicas": 1,
+                            "shape_json": {
+                                "env": "reserved|aws|us-east|use1-az1|H100",
+                                "count": 1,
+                            },
+                        }
+                    ],
+                },
+            ),
             waiting_jobs=lambda _user_id: (_store_job(),),
             paused_jobs=lambda _user_id: (),
         )
@@ -150,6 +168,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(requested, ["meta-llama/Llama-3.2-1B-Instruct"])
         self.assertEqual(snapshot.model_catalogs, _catalogs())
+        self.assertEqual(snapshot.running_jobs[0]["job_id"], "running")
         self.assertEqual(prompt["config_policy"][0]["allowed_pp"], [1, 2, 3, 4])
         self.assertIn("PP must never exceed 4", OPENEOLVE_SYSTEM_PROMPT)
         self.assertEqual(
@@ -198,10 +217,11 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             model_catalogs=_catalogs(),
         )
         placement = OpenEvolvePlacement(
+            lifecycle="waiting",
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type=None,
-            configuration={"replicas_needed": 1, "tp": 1, "pp": 1, "dp": 1},
+            configuration={"tp": 1, "pp": 1, "dp": 1},
         )
 
         actions = driver._build_actions(snapshot, (placement,))
@@ -224,6 +244,150 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             self.assertEqual(rank_config[field], value)
         Plan(user_id="tenant", actions=[placed])
 
+    def test_running_candidates_can_swap_with_their_active_rank_id(self) -> None:
+        """Use lifecycle decisions and preserve rank identity across a swap."""
+        driver = _driver()
+        driver.jobs["running"] = _online_job("running")
+        active_rank = _ACTIVE_RANK_ID
+        snapshot = StoreSnapshot(
+            resources={
+                "env-a|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 0,
+                    "pools": [],
+                },
+                "env-b|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                },
+            },
+            running_jobs=(_running_store_job("running", active_rank, "env-a|H100"),),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        prompt = json.loads(
+            _build_user_prompt(
+                1,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                (driver.jobs["running"], driver.jobs["waiting"]),
+                load_config_policy(),
+            )
+        )
+        placements = (
+            OpenEvolvePlacement(
+                lifecycle="running",
+                decision="swap",
+                environment="env-b|H100",
+                instance_type=None,
+                configuration={"tp": 1, "pp": 1, "dp": 1},
+            ),
+            OpenEvolvePlacement("waiting", "defer", None, None, None),
+        )
+
+        actions = driver._build_actions(snapshot, placements)
+
+        self.assertEqual(
+            [job["lifecycle"] for job in prompt["jobs_for_tick"]],
+            ["running", "waiting"],
+        )
+        self.assertEqual(
+            prompt["jobs_for_tick"][0]["active_placement"]["environment"],
+            "env-a|H100",
+        )
+        self.assertEqual([action["type"] for action in actions], ["swap", "defer"])
+        self.assertEqual(actions[0]["ladder"][0]["rank_id"], active_rank)
+
+    def test_noop_swap_is_kept(self) -> None:
+        """Do not materialize a swap whose physical ladder is unchanged."""
+        driver = _driver()
+        driver.jobs["running"] = _online_job("running")
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100": {
+                    "gpu_type": "H100",
+                    "total": 2,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(
+                _running_store_job("running", _ACTIVE_RANK_ID, "env|H100"),
+            ),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+
+        actions = driver._build_actions(
+            snapshot,
+            (
+                OpenEvolvePlacement(
+                    lifecycle="running",
+                    decision="swap",
+                    environment="env|H100",
+                    instance_type=None,
+                    configuration={"tp": 1, "pp": 1, "dp": 1},
+                ),
+            ),
+        )
+
+        self.assertEqual(actions, [{"job_id": "running", "type": "keep"}])
+
+    def test_validators_enforce_lifecycle_and_reject_noop_swaps(self) -> None:
+        """Accept only running keep or changed swap decisions."""
+        payload = _payload()
+        job = payload["jobs_for_tick"][0]
+        job["lifecycle"] = "running"
+        job["active_placement"] = {
+            "environment": "env|H100",
+            "instance_type": None,
+            "gpu_count": 1,
+            "tp": 1,
+            "pp": 1,
+            "n_replicas": 1,
+        }
+        keep = {
+            "placements": [
+                {
+                    "lifecycle": "running",
+                    "decision": "keep",
+                    "environment": None,
+                    "instance_type": None,
+                    "configuration": None,
+                }
+            ]
+        }
+        namespace: dict[str, object] = {}
+        exec(_evaluator_source(payload), namespace)
+
+        self.assertEqual(
+            namespace["_validate"](payload, keep),
+            {"valid": True, "gpu_footprint": 0},
+        )
+        _validate_policy_response(payload, keep)
+
+        noop = {
+            "placements": [
+                {
+                    "lifecycle": "running",
+                    "decision": "swap",
+                    "environment": "env|H100",
+                    "instance_type": None,
+                    "configuration": {"tp": 1, "pp": 1, "dp": 1},
+                }
+            ]
+        }
+        self.assertEqual(namespace["_validate"](payload, noop), {"valid": False})
+        with self.assertRaisesRegex(ValueError, "different physical placement"):
+            _validate_policy_response(payload, noop)
+
     def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
         """Keep DP in replica count rather than one ServingSim rank shape."""
         driver = _driver()
@@ -233,10 +397,11 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             _store_job(),
             job,
             OpenEvolvePlacement(
+                lifecycle="waiting",
                 decision="place",
                 environment="reserved|aws|us-east|use1-az1|H100",
                 instance_type=None,
-                configuration={"replicas_needed": 2, "tp": 2, "pp": 1, "dp": 3},
+                configuration={"tp": 2, "pp": 1, "dp": 3},
             ),
             {
                 "reserved|aws|us-east|use1-az1|H100": {
@@ -252,19 +417,19 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         shape = action["ladder"][0]["config"]
         self.assertEqual(shape["count"], 2)
         self.assertEqual(shape["gpu_count"], 2)
-        self.assertEqual(action["ladder"][0]["n_replicas"], 6)
+        self.assertEqual(action["ladder"][0]["n_replicas"], 3)
         Plan(user_id="tenant", actions=[action])
         cluster = build_rank_cluster(
             SimpleNamespace(
                 rank_name=action["ladder"][0]["rank_id"],
                 model_name=shape["model_id"],
                 shape=shape,
-                chains=(object(),) * 6,
+                chains=(object(),) * 3,
             ),
             _SERVINGSIM_HARDWARE,
         )
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
-        self.assertEqual(cluster["nodes"][0]["num_instances"], 6)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
     def test_vram_requirement_uses_benchmark_name_after_store_id_refresh(self) -> None:
         """Keep OpenEvolve's VRAM lookup stable across repeated CLI runs."""
@@ -362,6 +527,104 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs 171.67 GiB"):
             _validate_policy_response(payload, response)
 
+    def test_evaluator_and_final_validator_use_canonical_dp_footprints(self) -> None:
+        """Charge DP copies by GPU or whole-instance replicas consistently."""
+        payload = _payload()
+        resource = payload["tandemn_state"]["resources"]["env|H100"]
+        resource.update({"total": 6, "free": 6})
+        resource["pools"] = [
+            {
+                "instance_type": "gpu-pool",
+                "allocation_kind": "gpu",
+                "total": 6,
+                "free": 6,
+            }
+        ]
+        payload["config_policy"][0]["allowed_tp"] = [2]
+        response = _placement_response(tp=2, dp=3, instance_type="gpu-pool")
+        namespace: dict[str, object] = {}
+        exec(_evaluator_source(payload), namespace)
+
+        self.assertEqual(
+            namespace["_validate"](payload, response),
+            {"valid": True, "gpu_footprint": 6},
+        )
+        _validate_policy_response(payload, response)
+
+        resource["free"] = 5
+        resource["pools"][0]["free"] = 5
+        namespace = {}
+        exec(_evaluator_source(payload), namespace)
+        self.assertEqual(namespace["_validate"](payload, response), {"valid": False})
+        with self.assertRaisesRegex(ValueError, "needs 6 GPUs"):
+            _validate_policy_response(payload, response)
+
+        resource.update({"total": 16, "free": 16})
+        resource["pools"] = [
+            {
+                "instance_type": "instance-pool",
+                "gpus_per_instance": 8,
+                "total": 16,
+                "free": 16,
+            }
+        ]
+        response = _placement_response(tp=2, dp=2, instance_type="instance-pool")
+        namespace = {}
+        exec(_evaluator_source(payload), namespace)
+
+        self.assertEqual(
+            namespace["_validate"](payload, response),
+            {"valid": True, "gpu_footprint": 16},
+        )
+        _validate_policy_response(payload, response)
+
+        oversized = _placement_response(tp=16, dp=1, instance_type="instance-pool")
+        payload["config_policy"][0]["allowed_tp"] = [16]
+        namespace = {}
+        exec(_evaluator_source(payload), namespace)
+        self.assertEqual(namespace["_validate"](payload, oversized), {"valid": False})
+        with self.assertRaisesRegex(ValueError, "needs 16 GPUs per replica"):
+            _validate_policy_response(payload, oversized)
+
+    def test_active_gpu_pool_accounting_includes_all_replicas(self) -> None:
+        """Subtract each active GPU-pool rank replica from local free capacity."""
+        resources = _resources_with_free_capacity(
+            SimpleNamespace(
+                market="reserved",
+                scheduling_summary=lambda: {
+                    "reserved|aws|us-east|use1-az1|H100": {
+                        "gpu_type": "H100",
+                        "total": 8,
+                        "pools": [
+                            {
+                                "instance_type": "gpu-pool",
+                                "allocation_kind": "gpu",
+                                "total": 8,
+                            }
+                        ],
+                    }
+                },
+            ),
+            (
+                {
+                    "ranks": [
+                        {
+                            "n_replicas": 3,
+                            "shape_json": {
+                                "env": "reserved|aws|us-east|use1-az1|H100",
+                                "instance_type": "gpu-pool",
+                                "count": 2,
+                            },
+                        }
+                    ]
+                },
+            ),
+        )
+
+        resource = resources["reserved|aws|us-east|use1-az1|H100"]
+        self.assertEqual(resource["free"], 2)
+        self.assertEqual(resource["pools"][0]["free"], 2)
+
     def test_seed_policy_selects_and_reserves_an_instance_pool(self) -> None:
         """Select an exact pool and reserve its whole-instance footprint."""
         payload = _payload()
@@ -388,9 +651,21 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             ],
         }
         payload["jobs_for_tick"] = [
-            {"model_name": "model", "required_vram_gib": 1.0},
-            {"model_name": "model", "required_vram_gib": 1.0},
-            {"model_name": "model", "required_vram_gib": 1.0},
+            {
+                "model_name": "model",
+                "required_vram_gib": 1.0,
+                "lifecycle": "waiting",
+            },
+            {
+                "model_name": "model",
+                "required_vram_gib": 1.0,
+                "lifecycle": "waiting",
+            },
+            {
+                "model_name": "model",
+                "required_vram_gib": 1.0,
+                "lifecycle": "waiting",
+            },
         ]
 
         response = load_policy_source(OPENEOLVE_INITIAL_PROGRAM)(payload)
@@ -444,27 +719,19 @@ def _payload() -> dict[str, object]:
                 **_launch_config(),
             }
         ],
-        "jobs_for_tick": [{"model_name": "model", "required_vram_gib": 1.0}],
+        "jobs_for_tick": [
+            {
+                "model_name": "model",
+                "required_vram_gib": 1.0,
+                "lifecycle": "waiting",
+            }
+        ],
     }
 
 
 def _driver() -> OpenEvolvePlannerDriver:
     """Build an OpenEvolve driver without external Store or LLM clients."""
-    job = OnlineJob(
-        name="waiting",
-        store_job_id="waiting",
-        model_name="meta-llama/Llama-3.2-1B-Instruct",
-        starts_at_ns=0,
-        stops_at_ns=1,
-        workload={
-            "features": {
-                "isl_token_avg": 100,
-                "osl_token_avg": 20,
-                "required_vram_gib": 7.966,
-            },
-            "phases": [{"rate": 1.0}],
-        },
-    )
+    job = _online_job("waiting")
     return OpenEvolvePlannerDriver(
         user_id="user",
         scenario=Scenario("test", 1, 1, (job,), ()),
@@ -476,6 +743,25 @@ def _driver() -> OpenEvolvePlannerDriver:
         max_tokens=100,
         backend="vllm",
         client=object(),
+    )
+
+
+def _online_job(job_id: str) -> OnlineJob:
+    """Create one scenario job with the shared test model and workload."""
+    return OnlineJob(
+        name=job_id,
+        store_job_id=job_id,
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
+        starts_at_ns=0,
+        stops_at_ns=1,
+        workload={
+            "features": {
+                "isl_token_avg": 100,
+                "osl_token_avg": 20,
+                "required_vram_gib": 7.966,
+            },
+            "phases": [{"rate": 1.0}],
+        },
     )
 
 
@@ -493,6 +779,34 @@ def _store_job() -> dict[str, object]:
             },
         },
     }
+
+
+def _store_job_for(job_id: str) -> dict[str, object]:
+    """Create one canonical Store job payload for an arbitrary job ID."""
+    job = _store_job()
+    job["job_id"] = job_id
+    return job
+
+
+def _running_store_job(
+    job_id: str,
+    rank_id: str,
+    environment: str,
+) -> dict[str, object]:
+    """Create one running Store payload with a single active rank."""
+    job = _store_job_for(job_id)
+    job["active_ranks"] = [
+        {
+            "rank_id": rank_id,
+            "n_replicas": 1,
+            "shape_json": {
+                "env": environment,
+                "instance_type": None,
+                "count": 1,
+            },
+        }
+    ]
+    return job
 
 
 def _launch_config() -> dict[str, object]:
@@ -537,11 +851,11 @@ def compute_placement(payload):
     return {
         "placements": [
             {
+                "lifecycle": "waiting",
                 "decision": "place",
                 "environment": "env|H100",
                 "instance_type": None,
                 "configuration": {
-                    "replicas_needed": 1,
                     "tp": 1,
                     "pp": 1,
                     "dp": 1,
@@ -552,19 +866,23 @@ def compute_placement(payload):
 """
 
 
-def _placement_response(tp: int) -> dict[str, object]:
+def _placement_response(
+    tp: int,
+    dp: int = 1,
+    instance_type: str | None = None,
+) -> dict[str, object]:
     """Return one complete placement response for evaluator tests."""
     return {
         "placements": [
             {
+                "lifecycle": "waiting",
                 "decision": "place",
                 "environment": "env|H100",
-                "instance_type": None,
+                "instance_type": instance_type,
                 "configuration": {
-                    "replicas_needed": 1,
                     "tp": tp,
                     "pp": 1,
-                    "dp": 1,
+                    "dp": dp,
                 },
             }
         ]
