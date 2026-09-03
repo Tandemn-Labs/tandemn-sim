@@ -143,17 +143,17 @@ class CpSatPlannerDriverTest(unittest.TestCase):
             candidate_id="candidate",
             job_id="job",
             target=ResourceTarget(
-                environment_key="reserved|azure|westus2|1|A100-40GB",
+                environment_key="reserved|azure|westus2|1|A100-80GB",
                 environment={},
                 pool=None,
-                gpu_type="A100-40GB",
+                gpu_type="A100-80GB",
                 instance_type="Standard_NC96ads_A100_v4",
             ),
             tp=1,
             pp=1,
             dp=1,
             footprint=1,
-            memory_gib=40.0,
+            memory_gib=80.0,
             required_vram_gib=1.0,
             model_weight_gib=1.0,
             kv_demand=0.0,
@@ -167,7 +167,7 @@ class CpSatPlannerDriverTest(unittest.TestCase):
             "kvcache_dtype",
         ):
             catalogs[MODEL_ID][field].append(
-                {"gpu_type": "A100-40GB", "value": _launch_config()[field]}
+                {"gpu_type": "A100-80GB", "value": _launch_config()[field]}
             )
 
         plan = build_cp_sat_plan(
@@ -177,7 +177,7 @@ class CpSatPlannerDriverTest(unittest.TestCase):
             load_config_policy(),
         )
 
-        self.assertEqual(plan["ladder"][0]["config"]["gpu_type"], "A100-40GB")
+        self.assertEqual(plan["ladder"][0]["config"]["gpu_type"], "A100-80GB")
         self.assertEqual(plan["ladder"][0]["config"]["max_num_seq"], 256)
 
     def test_solver_respects_capacity_and_prefers_higher_priority(self) -> None:

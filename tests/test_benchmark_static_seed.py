@@ -223,6 +223,19 @@ class StaticSeedTest(unittest.TestCase):
         self.assertEqual(pools["a2-highgpu-4g"].gpu_type, "A100-40GB")
         self.assertEqual(pools["a2-highgpu-4g"].gpu_memory_gb, 40)
 
+    def test_azure_a100_pool_has_80_gib(self) -> None:
+        _, resource_map = load_resource_map(
+            ROOT / "benchmarks/resource_map_benchmarking.jsonl",
+            "simulation_3h",
+        )
+        pools = {
+            instance_type: pool
+            for *_, instance_type, pool in resource_map.iter_machine_pools()
+        }
+
+        self.assertEqual(pools["Standard_NC96ads_A100_v4"].gpu_type, "A100-80GB")
+        self.assertEqual(pools["Standard_NC96ads_A100_v4"].gpu_memory_gb, 80)
+
     def test_rejects_catalog_without_a_benchmark_pool(self) -> None:
         _, resource_map = load_resource_map(
             ROOT / "benchmarks/resource_map_benchmarking.jsonl"
