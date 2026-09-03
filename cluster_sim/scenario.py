@@ -7,7 +7,6 @@ import json
 import math
 import random
 import re
-from base64 import b32encode
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
@@ -17,6 +16,7 @@ import yaml
 from models import BatchJob, BatchProgress, OnlineJob, Request, Scenario
 
 SECOND = 1_000_000_000
+_CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 @dataclass(frozen=True)
@@ -43,21 +43,26 @@ class TokenDistribution:
         return max(self.minimum, min(self.maximum, sampled))
 
 
-def stable_store_job_ids(scenario: Scenario) -> Scenario:
-    """Map benchmark jobs to deterministic 26-character Store IDs."""
+def generate_job_ulid(scenario: Scenario) -> Scenario:
+    """Map benchmark jobs to deterministic 26-character ULID bodies."""
 
-    def store_id(job_name: str) -> str:
+    def job_ulid(job_name: str) -> str:
         key = f"tandemn-sim:{scenario.benchmark_name}:{job_name}"
-        return b32encode(uuid5(NAMESPACE_URL, key).bytes).decode().rstrip("=")
+        raw = b"\x00" * 6 + uuid5(NAMESPACE_URL, key).bytes[:10]
+        value = int.from_bytes(raw, "big")
+        return "".join(
+            _CROCKFORD_BASE32[(value >> shift) & 31]
+            for shift in range(125, -1, -5)
+        )
 
     return replace(
         scenario,
         online_jobs=tuple(
-            replace(job, store_job_id=store_id(job.name))
+            replace(job, store_job_id=job_ulid(job.name))
             for job in scenario.online_jobs
         ),
         batch_jobs=tuple(
-            replace(job, store_job_id=store_id(job.name)) for job in scenario.batch_jobs
+            replace(job, store_job_id=job_ulid(job.name)) for job in scenario.batch_jobs
         ),
     )
 

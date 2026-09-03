@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from cli import _benchmark_path, main, parse_args
 from models import Scenario
-from scenario import load_scenario, stable_store_job_ids
+from scenario import generate_job_ulid, load_scenario
 
 
 class CliTest(unittest.TestCase):
@@ -66,8 +66,8 @@ class CliTest(unittest.TestCase):
         scenario = load_scenario(
             ROOT / "benchmarks" / "simulation_3h" / "benchmark.yaml"
         )
-        first = stable_store_job_ids(scenario)
-        second = stable_store_job_ids(scenario)
+        first = generate_job_ulid(scenario)
+        second = generate_job_ulid(scenario)
 
         original = (*scenario.online_jobs, *scenario.batch_jobs)
         updated = (*first.online_jobs, *first.batch_jobs)
@@ -80,6 +80,12 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual(len({job.store_job_id for job in updated}), len(updated))
         self.assertTrue(all(len(job.store_job_id) == 26 for job in updated))
+        self.assertTrue(
+            all(
+                set(job.store_job_id) <= set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+                for job in updated
+            )
+        )
         self.assertEqual(first, second)
 
     def test_trace_options_must_be_supplied_together(self) -> None:

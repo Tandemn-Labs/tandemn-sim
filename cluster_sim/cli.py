@@ -8,7 +8,7 @@ from pathlib import Path
 
 from planning import PlannerContext, build_planner
 from runner import ClusterSimulator, LogicalClock
-from scenario import load_scenario, stable_store_job_ids
+from scenario import generate_job_ulid, load_scenario
 
 ROOT = Path(__file__).resolve().parents[1]
 TANDEMN_ROOT = ROOT.parent
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from tandemn_system_data.clients import PostgresClient
 
-    scenario = stable_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
+    scenario = generate_job_ulid(load_scenario(_benchmark_path(args.benchmark)))
     clock = LogicalClock(epoch.astimezone(UTC))
     postgres = PostgresClient(args.postgres_url)
     planner = build_planner(

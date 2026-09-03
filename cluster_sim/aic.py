@@ -21,7 +21,8 @@ from models import CreatedPlan, PlannerResult, Scenario
 from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
-_AIC_CANDIDATE_LIMIT = 1000 
+LOGGER = logging.getLogger(__name__)
+_AIC_CANDIDATE_LIMIT = 1000
 _A10G_PROFILE_FALLBACK_SYSTEMS = ("l40s", "a100_sxm", "h100_sxm", "h200_sxm")
 _AIC_SYSTEM_ALIASES = {
     "h100": "h100_sxm",
@@ -343,8 +344,16 @@ class AicPlannerDriver:
         del logical_time
         try:
             snapshot = self._read_store_snapshot()
+            LOGGER.info(
+                "AIC tick %d: running=%d waiting=%d paused=%d",
+                tick_number,
+                len(snapshot.running_jobs),
+                len(snapshot.waiting_jobs),
+                len(snapshot.paused_jobs),
+            )
             actions = self._build_actions(snapshot)
             if not actions:
+                LOGGER.info("AIC tick %d: no actions", tick_number)
                 return PlannerResult(tick_number=tick_number, plans=())
 
             from tandemn_system_data.models import Plan
@@ -356,11 +365,18 @@ class AicPlannerDriver:
                 actions=actions,
             )
             self.plan_store.create(plan)
+            LOGGER.info(
+                "AIC tick %d: persisted plan %s with %d actions",
+                tick_number,
+                plan.plan_id,
+                len(actions),
+            )
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(CreatedPlan(plan_id=plan.plan_id),),
             )
         except Exception as error:
+            LOGGER.exception("AIC tick %d failed", tick_number)
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(),
@@ -388,6 +404,7 @@ class AicPlannerDriver:
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
             actions.append({"job_id": running["job_id"], "type": "keep"})
+            LOGGER.debug("AIC keeping job %s", running["job_id"])
         for waiting in snapshot.waiting_jobs:
             job_id = waiting.get("job_id")
             if not isinstance(job_id, str):
@@ -400,8 +417,19 @@ class AicPlannerDriver:
             )
             if placement is None:
                 actions.append({"job_id": job_id, "type": "defer"})
+                LOGGER.info("AIC deferring job %s: no feasible placement", job_id)
                 continue
             _reserve(placement)
+            LOGGER.info(
+                "AIC placing job %s: target=%s gpus=%d tp=%d pp=%d dp=%d replicas=%d",
+                job_id,
+                placement.target.environment_key,
+                placement.tp * placement.pp * placement.dp,
+                placement.tp,
+                placement.pp,
+                placement.dp,
+                placement.replicas,
+            )
             actions.append(
                 _place_action(
                     job_id,
@@ -412,6 +440,7 @@ class AicPlannerDriver:
             )
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
+            LOGGER.info("AIC deferring paused job %s", paused["job_id"])
         _validate_complete_job_actions(snapshot, actions)
         return actions
 
