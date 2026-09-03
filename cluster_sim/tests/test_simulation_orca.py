@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,14 @@ from tandemn_system_data.models.enums import (
 )
 from tandemn_system_data.models.plan import Plan, PlanAction
 from tandemn_system_data.models.rank import Rank
+
+from data_generation.real_scenario import (
+    Manifest,
+    ManifestJob,
+    State,
+    StoreJob,
+    run_scenario,
+)
 
 OLD_RANK_ID = "rank_01JBM2YQYZ1KQ9C8GZP1XB6V5T"
 NEW_RANK_ID = "rank_01JBM30YQ7X3WQAR6HF8C2Q9T8"
@@ -128,6 +137,74 @@ class SimulationOrcaTest(unittest.TestCase):
         self.assertEqual(rank.status, RankStatus.LAUNCHING)
         self.assertEqual(rank.shape_json["model_id"], "model-a")
         self.assertEqual(plans.applied, [plan.plan_id])
+
+    def test_place_hands_running_store_job_to_real_scenario(self) -> None:
+        plan = Plan(
+            user_id="user-a",
+            actions=[
+                PlanAction(
+                    job_id="job-a",
+                    type=ActionType.PLACE,
+                    ladder=[_ladder(OLD_RANK_ID)],
+                )
+            ],
+        )
+        jobs = _JobStore({"job-a": JobStatus.WAITING})
+
+        with (
+            patch("simulation_orca.JobStore", return_value=jobs),
+            patch("simulation_orca.PlanStore", return_value=_PlanStore([plan])),
+        ):
+            apply_pending_plans("user-a", object())
+
+        store = SimpleNamespace(
+            list_jobs=lambda _user_ids: (
+                StoreJob("job-a", jobs.statuses["job-a"], "authored-job"),
+            ),
+            finish_job=lambda *_args: True,
+        )
+        manifest = Manifest(
+            "handoff",
+            0.01,
+            (
+                ManifestJob(
+                    "authored-job",
+                    "user-a",
+                    ROOT / "benchmarks" / "15min_real" / "jobs" / "code-chat.yaml",
+                ),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch(
+                    "data_generation.real_scenario.resolve_endpoint",
+                    return_value="http://127.0.0.1:28001",
+                ),
+                patch("data_generation.real_scenario.check_ready", return_value=True),
+                patch(
+                    "data_generation.real_scenario._launch",
+                    side_effect=lambda tracked, *_args: setattr(
+                        tracked, "state", State.DONE
+                    ),
+                ) as launch,
+            ):
+                self.assertEqual(
+                    run_scenario(
+                        manifest,
+                        store,
+                        poll_interval=0.01,
+                        ready_timeout=1,
+                        output_dir=Path(directory),
+                        router_config_dir=Path(directory),
+                        source_cloud="sim",
+                        source_region="region-1",
+                        source_zone="zone-1",
+                    ),
+                    0,
+                )
+
+        self.assertEqual(launch.call_args.args[0].store_job_id, "job-a")
 
     def test_swap_then_preempt_replaces_and_stops_ranks(self) -> None:
         old_rank = Rank(
