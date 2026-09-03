@@ -23,8 +23,9 @@ from aic import (
     AicSettings,
     NvidiaAicClient,
     StoreSnapshot,
-    _aic_requests,
     _aic_system,
+    _evaluate_aic_request,
+    _evaluate_job,
 )
 from models import OnlineJob, Scenario
 from serving import build_rank_cluster
@@ -42,14 +43,32 @@ _SERVINGSIM_HARDWARE = {
 class AicPlannerDriverTest(unittest.TestCase):
     """Verify greedy AIC placement and canonical lifecycle actions."""
 
-    def test_aic_fallback_is_one_same_backend_empirical_request(self) -> None:
-        """Retry only with empirical estimation for the original request."""
+    def test_aic_uses_sol_then_empirical_once_after_primary_failure(self) -> None:
+        """Use one SOL/EMPIRICAL fallback round after all primary calls fail."""
+        client = FallbackAicClient()
+
+        placement = _evaluate_job(
+            _store_job({"job_id": "job_1"}),
+            _snapshot(h100_free=8).resources,
+            _driver_settings(),
+            client,
+            float("inf"),
+        )
+
+        self.assertIsNotNone(placement)
+        self.assertEqual(
+            [request.database_mode for request in client.requests],
+            ["HYBRID", "SOL", "EMPIRICAL"],
+        )
+
+    def test_aic_process_timeout_terminates_the_worker(self) -> None:
+        """Stop AIConfigurator without waiting for its worker threads."""
         request = AicRequest(
             model="model",
             system="h100_sxm",
             available_devices=8,
             backend="vllm",
-            backend_version="0.22.0",
+            backend_version=None,
             database_mode="HYBRID",
             serving_mode="agg",
             input_tokens=1,
@@ -61,13 +80,43 @@ class AicPlannerDriverTest(unittest.TestCase):
             target_concurrency=None,
         )
 
-        attempts = _aic_requests(request)
+        context = TimeoutContext()
+        with patch("aic.multiprocessing.get_context", return_value=context):
+            with self.assertRaisesRegex(AicEvaluationError, "timed out"):
+                NvidiaAicClient().evaluate(request, timeout_seconds=0.01)
+        self.assertTrue(context.process.terminated)
 
-        self.assertEqual(len(attempts), 2)
-        self.assertEqual(attempts[0], request)
-        self.assertEqual(attempts[1].database_mode, "EMPIRICAL")
-        self.assertEqual(attempts[1].backend, request.backend)
-        self.assertEqual(attempts[1].backend_version, request.backend_version)
+    def test_aic_process_returns_successful_result(self) -> None:
+        """Return the child process result."""
+        request = AicRequest(
+            model="model",
+            system="h100_sxm",
+            available_devices=8,
+            backend="vllm",
+            backend_version=None,
+            database_mode="HYBRID",
+            serving_mode="agg",
+            input_tokens=1,
+            output_tokens=1,
+            target_ttft_ms=10,
+            target_tpot_ms=10,
+            optimization_goal="latency",
+            target_request_rate=1,
+            target_concurrency=None,
+        )
+        result = AicResult(
+            devices=1,
+            replicas=1,
+            ttft_ms=1,
+            tpot_ms=1,
+            request_latency_ms=1,
+            throughput_tokens_per_second=1,
+            configuration={},
+        )
+
+        with patch("aic.multiprocessing.get_context", return_value=SuccessContext()):
+            with patch("aic._evaluate_aic_request", return_value=result):
+                self.assertIs(NvidiaAicClient().evaluate(request), result)
 
     def test_filters_pp_above_limit_before_selecting_aic_result(self) -> None:
         """Select the best remaining result after removing PP above four."""
@@ -114,10 +163,11 @@ class AicPlannerDriverTest(unittest.TestCase):
         with patch(
             "aiconfigurator.cli.api.cli_recommend",
             return_value=recommendation,
-        ):
-            result = NvidiaAicClient().evaluate(request)
+        ) as recommend:
+            result = _evaluate_aic_request(request)
 
         self.assertEqual(result.configuration["parallel"], "tp1pp4dp1")
+        self.assertEqual(recommend.call_args.kwargs["top_n"], 10)
 
     def test_greedy_jobs_observe_updated_capacity(self) -> None:
         """Reserve the first placement before evaluating the second job."""
@@ -302,6 +352,7 @@ class AicPlannerDriverTest(unittest.TestCase):
             "H100": "h100_sxm",
             "A100-40GB": "a100_sxm",
             "A100-80GB": "a100_sxm",
+            "A10G": "l4",
             "L40S": "l40s",
         }
 
@@ -356,7 +407,9 @@ class FakeAicClient:
         self.throughput = throughput or {"h100_sxm": 300}
         self.requests: list[AicRequest] = []
 
-    def evaluate(self, request: AicRequest) -> AicResult:
+    def evaluate(
+        self, request: AicRequest, timeout_seconds: float | None = None
+    ) -> AicResult:
         self.requests.append(request)
         if request.model == self.unsupported_model:
             raise AicEvaluationError(
@@ -376,6 +429,30 @@ class FakeAicClient:
         )
 
 
+class FallbackAicClient(FakeAicClient):
+    """Fail primary and SOL modes before accepting EMPIRICAL."""
+
+    def evaluate(
+        self, request: AicRequest, timeout_seconds: float | None = None
+    ) -> AicResult:
+        self.requests.append(request)
+        if request.database_mode == "HYBRID":
+            raise AicEvaluationError("primary unavailable")
+        if request.database_mode == "SOL":
+            raise AicEvaluationError("SOL unavailable")
+        if request.database_mode != "EMPIRICAL":
+            raise AssertionError(f"unexpected fallback mode {request.database_mode}")
+        return AicResult(
+            devices=1,
+            replicas=1,
+            ttft_ms=10,
+            tpot_ms=5,
+            request_latency_ms=100,
+            throughput_tokens_per_second=300,
+            configuration={"parallel": "tp1pp1dp1", "bs": 128},
+        )
+
+
 def _driver(
     jobs: tuple[OnlineJob, ...],
     client: FakeAicClient,
@@ -388,16 +465,102 @@ def _driver(
         job_store=object(),
         resource_map_store=object(),
         plan_store=object(),
-        settings=AicSettings(
-            backend="vllm",
-            backend_version=None,
-            backend_versions={},
-            database_mode="HYBRID",
-            serving_mode="agg",
-            system_mappings={},
-        ),
+        settings=_driver_settings(),
         client=client,
     )
+
+
+def _driver_settings() -> AicSettings:
+    """Return bounded default settings for local AIC adapter tests."""
+    return AicSettings(
+        backend="vllm",
+        backend_version=None,
+        backend_versions={},
+        database_mode="HYBRID",
+        serving_mode="agg",
+        system_mappings={},
+        call_timeout_seconds=20.0,
+        tick_timeout_seconds=280.0,
+    )
+
+
+class TimeoutProcess:
+    """Represent an AIC child that exceeds its deadline."""
+
+    def __init__(self) -> None:
+        self.terminated = False
+
+    def start(self) -> None:
+        pass
+
+    def join(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_alive(self) -> bool:
+        return not self.terminated
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
+class TimeoutContext:
+    """Supply a deterministic timeout process without spawning a worker."""
+
+    def __init__(self) -> None:
+        self.process = TimeoutProcess()
+
+    def Queue(self, maxsize: int) -> object:
+        return object()
+
+    def Process(self, target: object, args: tuple[object, ...]) -> TimeoutProcess:
+        return self.process
+
+
+class SuccessQueue:
+    """Hold one child result for the synchronous process test."""
+
+    def __init__(self) -> None:
+        self.value: tuple[object, object] | None = None
+
+    def put(self, value: tuple[object, object]) -> None:
+        self.value = value
+
+    def get(self, timeout: float) -> tuple[object, object]:
+        assert self.value is not None
+        return self.value
+
+    def close(self) -> None:
+        pass
+
+
+class SuccessProcess:
+    """Run the supplied child target synchronously for protocol coverage."""
+
+    def __init__(self, target: object, args: tuple[object, ...]) -> None:
+        self.target = target
+        self.args = args
+
+    def start(self) -> None:
+        self.target(*self.args)
+
+    def join(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_alive(self) -> bool:
+        return False
+
+
+class SuccessContext:
+    """Supply a synchronous successful child process."""
+
+    def __init__(self) -> None:
+        self.queue = SuccessQueue()
+
+    def Queue(self, maxsize: int) -> SuccessQueue:
+        return self.queue
+
+    def Process(self, target: object, args: tuple[object, ...]) -> SuccessProcess:
+        return SuccessProcess(target, args)
 
 
 def _job(job_id: str) -> OnlineJob:

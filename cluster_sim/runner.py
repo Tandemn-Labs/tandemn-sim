@@ -181,19 +181,20 @@ class ClusterSimulator:
         self._admissions_in_tick = 0
         self._traffic_starts: dict[str, int] = {}
         self._requests = {
-            job.store_job_id: materialize_online_requests(job) for job in scenario.online_jobs
+            job.store_job_id: materialize_online_requests(job)
+            for job in scenario.online_jobs
         }
         self._online_jobs = {job.store_job_id: job for job in scenario.online_jobs}
         self._online_backlog = {job.store_job_id: () for job in scenario.online_jobs}
         self._batch_jobs = {job.store_job_id: job for job in scenario.batch_jobs}
         self._batch_progress = {
-            job.store_job_id: BatchProgress(total_requests=int(job.workload["record_count"]))
+            job.store_job_id: BatchProgress(
+                total_requests=int(job.workload["record_count"])
+            )
             for job in scenario.batch_jobs
         }
         self._request_outcomes = {
-            job.store_job_id: _RequestOutcome(
-                offered=int(job.workload["record_count"])
-            )
+            job.store_job_id: _RequestOutcome(offered=int(job.workload["record_count"]))
             for job in scenario.batch_jobs
         }
         self._router = StickyRoundRobinRouter()
@@ -205,9 +206,8 @@ class ClusterSimulator:
         results = []
         tick_number = 0
         try:
-            while (
-                self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns
-                and (max_ticks is None or tick_number < max_ticks)
+            while self._offset_ns(self.clock.now()) < self.scenario.drain_end_ns and (
+                max_ticks is None or tick_number < max_ticks
             ):
                 results.append(self.run_tick(tick_number))
                 tick_number += 1
@@ -356,7 +356,10 @@ class ClusterSimulator:
             for plan in plans:
                 stored = plan_store.get(plan["plan_id"])
                 applied_plans.append(
-                    {**plan, "status": stored.status if stored is not None else "missing"}
+                    {
+                        **plan,
+                        "status": stored.status if stored is not None else "missing",
+                    }
                 )
         if trace_file is not None:
             running_jobs = self.jobs.running_jobs(self.user_id)
@@ -397,7 +400,8 @@ class ClusterSimulator:
                     self._admissions_in_tick += 1
             for running in running_jobs:
                 self._trace_job_state(
-                    running.job.job_id, "RUNNING", start, "ranks_materialized")
+                    running.job.job_id, "RUNNING", start, "ranks_materialized"
+                )
                 for rank in running.ranks:
                     append_event(
                         trace_file,
@@ -418,9 +422,7 @@ class ClusterSimulator:
                 tick_number,
                 applied_plans,
                 materialized_rank_ids,
-                selected_plan_error=getattr(
-                    self, "_tick_selected_plan_error", False
-                ),
+                selected_plan_error=getattr(self, "_tick_selected_plan_error", False),
             )
             raise
         self._trace_plan_validations(
@@ -429,7 +431,9 @@ class ClusterSimulator:
             materialized_rank_ids,
         )
         self._submit_jobs_before(end_offset_ns)
-        self.clock.advance(timedelta(microseconds=self.scenario.tick_duration_ns // 1_000))
+        self.clock.advance(
+            timedelta(microseconds=self.scenario.tick_duration_ns // 1_000)
+        )
         return result
 
     def _submit_jobs_before_or_at(self, offset_ns: int) -> None:
@@ -448,14 +452,17 @@ class ClusterSimulator:
         return tuple(
             job
             for job in jobs
-            if job.name not in self._submitted_jobs and self._release_ns(job) < offset_ns
+            if job.name not in self._submitted_jobs
+            and self._release_ns(job) < offset_ns
         )
 
     def _submit(self, job: OnlineJob | BatchJob) -> None:
         """Persist one waiting job with its exact logical benchmark release time."""
         from tandemn_system_data.clients import ModelCatalogStore
 
-        submitted_at = self.clock.start + timedelta(microseconds=self._release_ns(job) // 1_000)
+        submitted_at = self.clock.start + timedelta(
+            microseconds=self._release_ns(job) // 1_000
+        )
         catalog = ModelCatalogStore(self.postgres).get(job.model_name)
         submit_waiting_job(
             job,
@@ -516,8 +523,12 @@ class ClusterSimulator:
 
         catalog_store = HardwareCatalogStore(self.postgres)
         all_catalogs = getattr(catalog_store, "all", lambda: None)()
-        catalogs = all_catalogs if isinstance(all_catalogs, list) else [catalog_store.get()]
-        catalog = merge_hardware_catalogs([item for item in catalogs if item is not None])
+        catalogs = (
+            all_catalogs if isinstance(all_catalogs, list) else [catalog_store.get()]
+        )
+        catalog = merge_hardware_catalogs(
+            [item for item in catalogs if item is not None]
+        )
         if not catalog["regions"]:
             raise ValueError("hardware catalog is required for rank simulation")
         resource_map = ResourceMapStore(self.postgres, user_id=self.user_id).get()
@@ -539,7 +550,9 @@ class ClusterSimulator:
             if job is None:
                 continue
             active_ns_by_job[running.job.job_id] = self.scenario.tick_duration_ns
-            traffic_start = self._traffic_starts.setdefault(running.job.job_id, start_offset_ns)
+            traffic_start = self._traffic_starts.setdefault(
+                running.job.job_id, start_offset_ns
+            )
             duration = job.stops_at_ns - job.starts_at_ns
             relative_start = start_offset_ns - traffic_start
             backlog = tuple(
@@ -620,12 +633,13 @@ class ClusterSimulator:
             )
 
         rank_runs = tuple(
-            rank_run
-            for prepared in prepared_jobs
-            for rank_run in prepared.rank_runs
+            rank_run for prepared in prepared_jobs for rank_run in prepared.rank_runs
         )
         if rank_runs:
-            print(f"[tick {tick_number}] ServingSim ranks: 0/{len(rank_runs)} complete", flush=True)
+            print(
+                f"[tick {tick_number}] ServingSim ranks: 0/{len(rank_runs)} complete",
+                flush=True,
+            )
         try:
             results = (
                 run_ranks(
@@ -683,9 +697,7 @@ class ClusterSimulator:
                 if getattr(result, "status", "completed") in rank_failure_reasons
             )
             if crash_failures:
-                failed_rank_ids.update(
-                    failure.rank_id for failure in crash_failures
-                )
+                failed_rank_ids.update(failure.rank_id for failure in crash_failures)
                 self._fail_ranks(prepared.running, job.name, crash_failures)
             active_pairs = tuple(
                 (rank_run, result)
@@ -705,9 +717,7 @@ class ClusterSimulator:
                 features.get("target_p99_tpot_ms"),
                 job.workload.get("task", "generate"),
             )
-            completed_request_count = int(
-                request_summary["completed_request_count"]
-            )
+            completed_request_count = int(request_summary["completed_request_count"])
             backlog_names = {
                 request.request_name for request in self._online_backlog.get(job_id, ())
             }
@@ -718,14 +728,17 @@ class ClusterSimulator:
                 "batch_latency_diagnostic": False,
                 "offered_request_count": (
                     len(prepared.online_requests) - len(self._online_backlog[job_id])
-                    if prepared.online_requests is not None else None
+                    if prepared.online_requests is not None
+                    else None
                 ),
                 "admitted_request_count": (
                     sum(
                         request.request_name not in backlog_names
                         for result in active_results
                         for request in getattr(result, "admitted_requests", ())
-                    ) if prepared.online_requests is not None else None
+                    )
+                    if prepared.online_requests is not None
+                    else None
                 ),
                 "attempted_request_count": attempted_request_count,
                 "unfinished_request_count": max(
@@ -774,9 +787,7 @@ class ClusterSimulator:
                             prepared.running,
                             tick_start
                             + timedelta(
-                                microseconds=(
-                                    self.scenario.tick_duration_ns // 1_000
-                                )
+                                microseconds=(self.scenario.tick_duration_ns // 1_000)
                             ),
                         )
                     )
@@ -841,9 +852,7 @@ class ClusterSimulator:
                 campaign_request_per_sec=request_rate,
             )
             batch_progress_updates[job_id] = staged_progress
-            outcome_updates.append(
-                (job_id, 0, projected_completed, outcome_rates)
-            )
+            outcome_updates.append((job_id, 0, projected_completed, outcome_rates))
             if staged_progress.completed_requests == staged_progress.total_requests:
                 finished_batch.append(
                     (
@@ -858,10 +867,7 @@ class ClusterSimulator:
         requeue_after_failure = [
             prepared.running
             for prepared in prepared_jobs
-            if all(
-                rank.rank_id in failed_rank_ids
-                for rank in prepared.running.ranks
-            )
+            if all(rank.rank_id in failed_rank_ids for rank in prepared.running.ranks)
         ]
         metric_store = None
         if metrics:
@@ -907,7 +913,11 @@ class ClusterSimulator:
                     collect_rank_telemetry(
                         metric_store,
                         self.user_id,
-                        (metric.job_id for metric in metrics if metric.job_id is not None),
+                        (
+                            metric.job_id
+                            for metric in metrics
+                            if metric.job_id is not None
+                        ),
                         tick_start,
                         window_end,
                     )
@@ -938,7 +948,9 @@ class ClusterSimulator:
                     ):
                         continue
                     rank = (metric.job_id, metric.rank_id)
-                    chain_indices_by_rank.setdefault(rank, set()).add(metric.chain_index)
+                    chain_indices_by_rank.setdefault(rank, set()).add(
+                        metric.chain_index
+                    )
                 for rank, actual in trajectories.items():
                     v_actual = {
                         name: values
@@ -1035,9 +1047,7 @@ class ClusterSimulator:
                             request_summary["offered_request_count"],
                             request_summary["admitted_request_count"],
                             request_summary["qualified_output_tokens"],
-                            request_count_scope=request_summary[
-                                "request_count_scope"
-                            ],
+                            request_count_scope=request_summary["request_count_scope"],
                             batch_latency_diagnostic=request_summary[
                                 "batch_latency_diagnostic"
                             ],
@@ -1103,7 +1113,8 @@ class ClusterSimulator:
                             (
                                 row
                                 for row in rows
-                                if pool_by_rank.get(row.rank_id) == (env_key, instance_type)
+                                if pool_by_rank.get(row.rank_id)
+                                == (env_key, instance_type)
                             ),
                         )
                         append_event(
@@ -1163,10 +1174,17 @@ class ClusterSimulator:
         from tandemn_system_data.models.enums import ReasonCode
 
         deployments = build_rank_deployments(running.job, running.ranks)
-        model_catalog = ModelCatalogStore(self.postgres).get(running.job.spec_json["model_id"])
+        model_catalog = ModelCatalogStore(self.postgres).get(
+            running.job.spec_json["model_id"]
+        )
         if model_catalog is None:
-            raise ValueError(f"model catalog missing {running.job.spec_json['model_id']!r}")
-        benchmark_job = self._online_jobs.get(running.job.job_id) or self._batch_jobs[running.job.job_id]
+            raise ValueError(
+                f"model catalog missing {running.job.spec_json['model_id']!r}"
+            )
+        benchmark_job = (
+            self._online_jobs.get(running.job.job_id)
+            or self._batch_jobs[running.job.job_id]
+        )
         for deployment in deployments:
             deployment.shape["weight_dtype"] = model_catalog.weight_dtype
             deployment.shape["weight_quantization_method"] = (
@@ -1214,7 +1232,9 @@ class ClusterSimulator:
             rank_requests = routed[deployment.rank_name]
             if not rank_requests:
                 continue
-            run_name = f"{self.run_name}-t{tick_number}-{job_name}-{deployment.rank_name}"
+            run_name = (
+                f"{self.run_name}-t{tick_number}-{job_name}-{deployment.rank_name}"
+            )
             rank_runs.append(
                 prepare_rank_run(
                     deployment,
@@ -1297,9 +1317,7 @@ class ClusterSimulator:
             workload = getattr(batch_job, "workload", {})
             offered = (
                 int(
-                    workload.get(
-                        "record_count", getattr(progress, "total_requests", 0)
-                    )
+                    workload.get("record_count", getattr(progress, "total_requests", 0))
                 )
                 if batch_job
                 else 0
@@ -1459,7 +1477,9 @@ class ClusterSimulator:
         trace_file = getattr(self, "trace_file", None)
         if trace_file is not None:
             finished_at = finished_at or self.clock.now()
-            self._trace_job_state(running.job.job_id, "FINISHED", finished_at, "completed")
+            self._trace_job_state(
+                running.job.job_id, "FINISHED", finished_at, "completed"
+            )
             self._ensure_online_offers_through(running.job.job_id, finished_at)
             request_outcome = self._terminal_request_outcome(running.job.job_id)
             append_event(
@@ -1472,14 +1492,19 @@ class ClusterSimulator:
                     deadline_slo_met,
                     request_outcome["unfinished_request_count"],
                     deadline_outcome=(
-                        "met" if deadline_slo_met is True else "missed"
-                        if deadline_slo_met is False else None
+                        "met"
+                        if deadline_slo_met is True
+                        else "missed"
+                        if deadline_slo_met is False
+                        else None
                     ),
                     **request_outcome,
                 ),
             )
 
-    def _fail_ranks(self, running, job_name, failures: tuple[_RankFailure, ...]) -> None:
+    def _fail_ranks(
+        self, running, job_name, failures: tuple[_RankFailure, ...]
+    ) -> None:
         """Mark rank-local failures while siblings continue serving the job."""
         from tandemn_system_data.models.enums import RankStatus
 
@@ -1512,7 +1537,10 @@ class ClusterSimulator:
                         rank.rank_id,
                         self.clock.now().isoformat(),
                         failure.reason_code,
-                        gpu_count if isinstance(gpu_count, int) and not isinstance(gpu_count, bool) else None,
+                        gpu_count
+                        if isinstance(gpu_count, int)
+                        and not isinstance(gpu_count, bool)
+                        else None,
                         failure.error_detail[-1_000:],
                     ),
                 )
@@ -1574,8 +1602,7 @@ class ClusterSimulator:
             if trace_file is not None:
                 deadline_slo_met = self._hard_stop_deadline_slo(job_id, tick_limited)
                 request_outcome = self._terminal_request_outcome(job_id)
-                self._trace_job_state(
-                    job_id, "FINISHED", self.clock.now(), reason)
+                self._trace_job_state(job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
                     trace_file,
                     job_finished(
@@ -1599,11 +1626,11 @@ class ClusterSimulator:
                 )
         terminal_jobs = [
             (job, JobStatus.WAITING)
-            for job in getattr(self.jobs, "waiting_jobs", lambda _: ()) (self.user_id)
+            for job in getattr(self.jobs, "waiting_jobs", lambda _: ())(self.user_id)
         ]
         terminal_jobs.extend(
             (job, JobStatus.PAUSED)
-            for job in getattr(self.jobs, "paused_jobs", lambda _: ()) (self.user_id)
+            for job in getattr(self.jobs, "paused_jobs", lambda _: ())(self.user_id)
         )
         for terminal_job, previous_status in terminal_jobs:
             job_id = terminal_job.job_id
@@ -1627,8 +1654,7 @@ class ClusterSimulator:
             if trace_file is not None:
                 deadline_slo_met = self._hard_stop_deadline_slo(job_id, tick_limited)
                 request_outcome = self._terminal_request_outcome(job_id)
-                self._trace_job_state(
-                    job_id, "FINISHED", self.clock.now(), reason)
+                self._trace_job_state(job_id, "FINISHED", self.clock.now(), reason)
                 append_event(
                     trace_file,
                     job_finished(
@@ -1678,8 +1704,10 @@ class ClusterSimulator:
         from_status = states.get(job_id)
         if from_status == to_status:
             return
-        append_event(trace_file, job_state_changed(
-            job_id, from_status, to_status, at.isoformat(), reason))
+        append_event(
+            trace_file,
+            job_state_changed(job_id, from_status, to_status, at.isoformat(), reason),
+        )
         states[job_id] = to_status
 
 
@@ -1776,9 +1804,7 @@ def _batch_request_rate_per_second(
     if not measurements:
         return None
     return sum(
-        measurement.completed_request_count
-        * 1_000_000_000
-        / measurement.horizon_ns
+        measurement.completed_request_count * 1_000_000_000 / measurement.horizon_ns
         for measurement in measurements
     )
 
@@ -1791,10 +1817,7 @@ def _batch_outcome_rates(
     task: object,
 ) -> dict[str, int | float | None]:
     """Return per-second batch outcomes weighted by each rank's probe horizon."""
-    results_by_rank = {
-        result.deployment.rank_name: result
-        for result in results
-    }
+    results_by_rank = {result.deployment.rank_name: result for result in results}
     rates: dict[str, int | float | None] = {
         "completed_request_count": 0.0,
         "ttft_pass_count": 0.0,
