@@ -16,7 +16,8 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Protocol, cast
 
 from llm_usage import LlmUsage, OpenAIUsageClient
-from models import CreatedPlan, PlannerResult, Scenario
+from models import BatchJob, CreatedPlan, PlannerResult, Scenario
+from outcome_feedback import OutcomeFeedback, PlacementFingerprint, fingerprint
 from policy import ConfigPolicy, load_config_policy
 from rank_ids import active_rank_id, rank_id
 from vram import (
@@ -74,7 +75,7 @@ online for the current simulator control tick.
 Return a usable program within the strict five-minute planning budget.
 
 Improve only compute_placement(payload). The input uses schema
-tandemn-evox-placement/v2 and contains public static facts: jobs, each job's
+tandemn-evox-placement/v3 and contains public static facts: jobs, each job's
 lifecycle, active rank identity and current deployment when it is running,
 priority and feasible policy-compliant candidates, and nested resource
 capacities. Each candidate includes exact capacity consumption, its per-replica
@@ -82,7 +83,10 @@ GPU shape, replica count, total reservation footprint, VRAM demand,
 model-weight memory, estimated KV demand, and hourly price. The model_catalog
 contains authoritative Store runtime and weight configuration resolved for each
 candidate model and exact target GPU. Use it as supplementary model workload
-context, but return only candidate IDs.
+context, but return only candidate IDs. Each candidate's feedback is null when
+no outcome is known, or contains the latest Store-observed telemetry outcome
+and reward for that exact job placement. Use observed feedback to prefer proven
+outcomes while treating unknown feedback as neutral.
 
 Return {"placements": [{"job_id": str, "candidate_id": str | null}, ...]} with
 exactly one entry for every input job. A non-null candidate must belong to that
@@ -95,9 +99,9 @@ and use no third-party packages or hidden runtime state.
 
 The evaluator rejects malformed or infeasible output and exposes a
 larger-is-better combined_score. Preserve high-priority admission before
-improving lower-priority admission, then seek lower cost and capacity usage.
-Explore better global assignment, packing, ordering, and tie-breaking rather
-than adding prose or external calls.
+improving lower-priority admission, then improve mean known observed reward,
+then seek lower cost and capacity usage. Explore better global assignment,
+packing, ordering, and tie-breaking rather than adding prose or external calls.
 """
 
 EVOX_INITIAL_PROGRAM = '''\
@@ -271,6 +275,7 @@ class EvoxClient(Protocol):
         tick_number: int,
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
+        feedback: Mapping[object, Mapping[str, object] | None] | None = None,
     ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]: ...
 
 
@@ -320,10 +325,11 @@ class OnlineSkyDiscoverEvoxClient:
         tick_number: int,
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
+        feedback: Mapping[object, Mapping[str, object] | None] | None = None,
     ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]:
         """Evolve, verify, and execute the current tick's winning program."""
-        evaluator = OnlineEvoxEvaluator(problems, capacities)
-        payload = build_evox_payload(problems, capacities)
+        evaluator = OnlineEvoxEvaluator(problems, capacities, feedback)
+        payload = build_evox_payload(problems, capacities, feedback)
         catalog_json = json.dumps(
             payload["model_catalog"], sort_keys=True, separators=(",", ":")
         )
@@ -351,7 +357,7 @@ class OnlineSkyDiscoverEvoxClient:
             self.tick_number += 1
             return {}, llm_usage
         policy = load_policy_source(best_solution)
-        selected = select_evox_placements(policy, problems, capacities)
+        selected = select_evox_placements(policy, problems, capacities, feedback)
         self.initial_program = best_solution
         self.tick_number += 1
         return selected, llm_usage
@@ -364,10 +370,12 @@ class OnlineEvoxEvaluator:
         self,
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
+        feedback: Mapping[object, Mapping[str, object] | None] | None = None,
     ) -> None:
         """Freeze the current tick throughout one online evolution run."""
         self.problems = tuple(problems)
         self.capacities = dict(capacities)
+        self.feedback = {} if feedback is None else feedback
         self.best_solution: str | None = None
         self.best_score = -math.inf
 
@@ -379,12 +387,16 @@ class OnlineEvoxEvaluator:
                 policy,
                 self.problems,
                 self.capacities,
+                self.feedback,
             )
         except Exception:
             return {
                 "combined_score": 0.0,
                 "feasible": 0.0,
                 "invalid_program": 1.0,
+                "mean_observed_reward": 0.0,
+                "observed_feedback_count": 0.0,
+                "feedback": {},
             }
 
         priority_base = len(self.problems) + 1
@@ -396,16 +408,38 @@ class OnlineEvoxEvaluator:
         )
         price = sum(candidate.price_per_hour for candidate in selected.values())
         footprint = sum(candidate.footprint for candidate in selected.values())
+        problem_by_id = {problem.job_id: problem for problem in self.problems}
+        selected_feedback = {
+            job_id: _candidate_feedback(
+                self.feedback,
+                problem_by_id[job_id],
+                candidate,
+            )
+            for job_id, candidate in selected.items()
+        }
+        observed_rewards = [
+            reward
+            for outcome in selected_feedback.values()
+            if (reward := _observed_reward(outcome)) is not None
+        ]
+        mean_observed_reward = (
+            sum(observed_rewards) / len(observed_rewards) if observed_rewards else 0.0
+        )
         tie_break = 0.0
         if selected:
             tie_break = 1 / (1 + price) + 1 / (1_000 * (1 + footprint))
         metrics = {
-            "combined_score": float(2 * priority_score + tie_break),
+            "combined_score": float(
+                4 * priority_score + mean_observed_reward + tie_break
+            ),
             "feasible": 1.0,
             "admitted_jobs": float(len(selected)),
             "priority_score": float(priority_score),
+            "mean_observed_reward": float(mean_observed_reward),
+            "observed_feedback_count": float(len(observed_rewards)),
             "hourly_price": float(price),
             "gpu_footprint": float(footprint),
+            "feedback": selected_feedback,
         }
         if metrics["combined_score"] > self.best_score:
             self.best_score = metrics["combined_score"]
@@ -435,6 +469,9 @@ class EvoxPlannerDriver:
         self.benchmark_name = scenario.benchmark_name
         jobs = (*scenario.online_jobs, *scenario.batch_jobs)
         self.benchmark_job_ids = {job.store_job_id: job.name for job in jobs}
+        self._job_is_batch = {
+            job.store_job_id: isinstance(job, BatchJob) for job in jobs
+        }
         self.job_store = job_store
         self.resource_map_store = resource_map_store
         self.model_catalog_store = model_catalog_store
@@ -442,6 +479,7 @@ class EvoxPlannerDriver:
         self.backend = backend
         self.config_policy = config_policy
         self.client = client
+        self.feedback = OutcomeFeedback(user_id)
 
     @classmethod
     def build(
@@ -454,12 +492,14 @@ class EvoxPlannerDriver:
     ) -> EvoxPlannerDriver:
         """Build online EvoX with Store clients and SkyDiscover settings."""
         from tandemn_system_data.clients import (
+            GpuMetricStore,
             JobStore,
             ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
         )
+        from tandemn_system_data.clients.event_log import PostgresEventLog
 
         model = _required_text(settings.get("model"), "model")
         iterations = _positive_int(settings.get("iterations", 5), "iterations")
@@ -468,7 +508,7 @@ class EvoxPlannerDriver:
         )
         api_base = _optional_text(settings.get("api_base"))
         postgres = postgres_client or PostgresClient()
-        return cls(
+        driver = cls(
             user_id=user_id,
             scenario=scenario,
             job_store=JobStore(postgres),
@@ -485,6 +525,8 @@ class EvoxPlannerDriver:
                 api_base=api_base,
             ),
         )
+        driver.feedback.bind(GpuMetricStore(postgres), PostgresEventLog(postgres))
+        return driver
 
     def create_plans(
         self,
@@ -492,10 +534,11 @@ class EvoxPlannerDriver:
         logical_time: datetime,
     ) -> PlannerResult:
         """Read one Store snapshot, persist one plan, and return its identity."""
-        del logical_time
         self._tick_number = tick_number
         self._llm_usage: tuple[LlmUsage, ...] = ()
         try:
+            self.feedback.observe(logical_time)
+            self._feedback_window_start = logical_time
             snapshot = self._read_store_snapshot()
             actions = self._build_actions(snapshot)
             if not actions:
@@ -518,6 +561,7 @@ class EvoxPlannerDriver:
                 actions=actions,
             )
             self.plan_store.create(plan)
+            self._record_action_feedback(actions, logical_time)
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(CreatedPlan(plan_id=plan.plan_id),),
@@ -561,6 +605,15 @@ class EvoxPlannerDriver:
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
         """Select waiting placements and eligible running-job swaps."""
         resources = deepcopy(snapshot.resources)
+        feedback = getattr(self, "feedback", None)
+        eligible_running_jobs = tuple(
+            running
+            for running in snapshot.running_jobs
+            if feedback is None
+            or not feedback.has_pending_batch(
+                _required_text(running.get("job_id"), "running Store job_id")
+            )
+        )
         problems = build_placement_problems(
             snapshot.waiting_jobs,
             resources,
@@ -568,7 +621,7 @@ class EvoxPlannerDriver:
             self.benchmark_job_ids,
             self.config_policy,
             snapshot.model_catalogs,
-            running_jobs=snapshot.running_jobs,
+            running_jobs=eligible_running_jobs,
         )
         capacities = capacity_limits(resources)
         selected = dict(self._select_placements(problems, capacities))
@@ -617,12 +670,75 @@ class EvoxPlannerDriver:
         """Evolve and validate the current tick's placement response."""
         if not problems:
             return {}
+        feedback = self._candidate_feedback(problems)
         selected, self._llm_usage = self.client.select(
             self._tick_number,
             problems,
             capacities,
+            feedback,
         )
         return selected
+
+    def _candidate_feedback(
+        self,
+        problems: Sequence[PlacementProblem],
+    ) -> dict[PlacementFingerprint, dict[str, object]]:
+        """Freeze known outcomes for every candidate before online selection."""
+        feedback = getattr(self, "feedback", None)
+        if feedback is None:
+            return {}
+        outcomes = {}
+        for problem in problems:
+            for candidate in problem.candidates:
+                placement = _placement_fingerprint(problem, candidate)
+                outcome = feedback.for_fingerprint(placement)
+                if outcome is not None:
+                    outcomes[placement] = outcome
+        return outcomes
+
+    def _record_action_feedback(
+        self,
+        actions: Sequence[Mapping[str, object]],
+        logical_time: datetime,
+    ) -> None:
+        """Track persisted canonical place and swap ladders for later outcomes."""
+        feedback = getattr(self, "feedback", None)
+        if feedback is None:
+            return
+        for action in actions:
+            if action.get("type") not in {"place", "swap"}:
+                continue
+            job_id = _required_text(action.get("job_id"), "plan job_id")
+            ladder = action.get("ladder")
+            if not isinstance(ladder, list) or len(ladder) != 1:
+                raise ValueError("placement actions require one ladder rank")
+            rank = ladder[0]
+            if not isinstance(rank, Mapping):
+                raise ValueError("placement ladder rank must be an object")
+            config = rank.get("config")
+            if not isinstance(config, Mapping):
+                raise ValueError("placement ladder config must be an object")
+            environment = rank.get("env")
+            if not isinstance(environment, (list, tuple, str)):
+                raise ValueError("placement ladder is missing environment")
+            feedback.record(
+                fingerprint=fingerprint(
+                    job_id=job_id,
+                    model_id=_required_text(config.get("model_id"), "model_id"),
+                    environment=_env_key(environment),
+                    instance_type=_optional_text(config.get("instance_type")),
+                    gpu_type=_required_text(config.get("gpu_type"), "gpu_type"),
+                    tp=_positive_int(config.get("tp"), "tp"),
+                    pp=_positive_int(config.get("pp"), "pp"),
+                    dp=_positive_int(config.get("dp"), "dp"),
+                ),
+                rank_id=_required_text(rank.get("rank_id"), "placement rank_id"),
+                window_start=logical_time,
+                is_batch=getattr(self, "_job_is_batch", {}).get(job_id, False),
+                required_tps=_number(action.get("target_tps")),
+                ttft_target_ms=_number(action.get("target_p99_ttft_ms")),
+                tpot_target_ms=_number(action.get("target_p99_tpot_ms")),
+            )
 
     def _build_place_plan(
         self,
@@ -690,6 +806,49 @@ def build_evox_plan(
             }
         ],
     }
+
+
+def _placement_fingerprint(
+    problem: PlacementProblem,
+    candidate: PlacementCandidate,
+) -> PlacementFingerprint:
+    """Build the stable feedback identity for one placement candidate."""
+    return fingerprint(
+        job_id=problem.job_id,
+        model_id=problem.model_id,
+        environment=candidate.target.environment_key,
+        instance_type=candidate.target.instance_type,
+        gpu_type=candidate.target.gpu_type,
+        tp=candidate.tp,
+        pp=candidate.pp,
+        dp=candidate.dp,
+    )
+
+
+def _candidate_feedback(
+    feedback: Mapping[object, Mapping[str, object] | None] | None,
+    problem: PlacementProblem,
+    candidate: PlacementCandidate,
+) -> dict[str, object] | None:
+    """Return the frozen observed outcome for one payload candidate."""
+    if feedback is None:
+        return None
+    outcome = feedback.get(_placement_fingerprint(problem, candidate))
+    if outcome is None:
+        outcome = feedback.get((problem.job_id, candidate.candidate_id))
+    if outcome is None:
+        outcome = feedback.get(candidate.candidate_id)
+    return dict(outcome) if isinstance(outcome, Mapping) else None
+
+
+def _observed_reward(outcome: Mapping[str, object] | None) -> float | None:
+    """Read a bounded reward from one public feedback outcome."""
+    if outcome is None:
+        return None
+    reward = _finite_number(outcome.get("reward"))
+    if reward is None:
+        return None
+    return max(-1.0, min(1.0, reward))
 
 
 def build_placement_problems(
@@ -836,6 +995,13 @@ def _current_deployment(problem: PlacementProblem) -> dict[str, object] | None:
         "dp": shape.get("dp"),
         "n_replicas": active_rank.get("n_replicas"),
     }
+
+
+def _env_key(value: object) -> str:
+    """Return one canonical pipe-delimited environment key."""
+    if isinstance(value, (list, tuple)):
+        return "|".join(str(part) for part in value)
+    return str(value)
 
 
 def enumerate_candidates(
@@ -1076,6 +1242,7 @@ def verify_place_plan(
 def build_evox_payload(
     problems: Sequence[PlacementProblem],
     capacities: Mapping[str, int],
+    feedback: Mapping[object, Mapping[str, object] | None] | None = None,
 ) -> dict[str, object]:
     """Serialize public placement facts for current-tick evolution."""
     jobs = []
@@ -1106,6 +1273,7 @@ def build_evox_payload(
                     "model_weight_gib": candidate.model_weight_gib,
                     "kv_demand": candidate.kv_demand,
                     "price_per_hour": candidate.price_per_hour,
+                    "feedback": _candidate_feedback(feedback, problem, candidate),
                     "consumption": {
                         key: candidate.footprint for key in candidate.capacity_keys
                     },
@@ -1124,7 +1292,7 @@ def build_evox_payload(
             }
         )
     return {
-        "schema_version": "tandemn-evox-placement/v2",
+        "schema_version": "tandemn-evox-placement/v3",
         "capacities": [
             {"capacity_id": key, "available": value}
             for key, value in sorted(capacities.items())
@@ -1138,9 +1306,10 @@ def select_evox_placements(
     policy: EvoxPolicy,
     problems: Sequence[PlacementProblem],
     capacities: Mapping[str, int],
+    feedback: Mapping[object, Mapping[str, object] | None] | None = None,
 ) -> dict[str, PlacementCandidate]:
     """Run and strictly validate one evolved program's output."""
-    result = policy(build_evox_payload(problems, capacities))
+    result = policy(build_evox_payload(problems, capacities, feedback))
     if not isinstance(result, Mapping) or set(result) != {"placements"}:
         raise ValueError("EvoX policy must return only placements")
     values = result.get("placements")
