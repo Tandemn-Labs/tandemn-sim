@@ -138,6 +138,48 @@ class CpSatPlannerDriverTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 1)
         self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
+    def test_selected_candidate_uses_canonical_a100_catalog_profile(self) -> None:
+        candidate = PlacementCandidate(
+            candidate_id="candidate",
+            job_id="job",
+            target=ResourceTarget(
+                environment_key="reserved|azure|westus2|1|A100-40GB",
+                environment={},
+                pool=None,
+                gpu_type="A100-40GB",
+                instance_type="Standard_NC96ads_A100_v4",
+            ),
+            tp=1,
+            pp=1,
+            dp=1,
+            footprint=1,
+            memory_gib=40.0,
+            required_vram_gib=1.0,
+            model_weight_gib=1.0,
+            kv_demand=0.0,
+            price_per_hour=1.0,
+        )
+        catalogs = _catalogs()
+        for field in (
+            "max_num_seq",
+            "max_num_batched_tokens",
+            "block_size",
+            "kvcache_dtype",
+        ):
+            catalogs[MODEL_ID][field].append(
+                {"gpu_type": "A100-40GB", "value": _launch_config()[field]}
+            )
+
+        plan = build_cp_sat_plan(
+            _store_job("job"),
+            candidate,
+            catalogs,
+            load_config_policy(),
+        )
+
+        self.assertEqual(plan["ladder"][0]["config"]["gpu_type"], "A100-40GB")
+        self.assertEqual(plan["ladder"][0]["config"]["max_num_seq"], 256)
+
     def test_solver_respects_capacity_and_prefers_higher_priority(self) -> None:
         """Use the installed OR-Tools solver for the global admission choice."""
         target = ResourceTarget(

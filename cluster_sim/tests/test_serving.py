@@ -653,6 +653,46 @@ class ServingInputTest(unittest.TestCase):
             },
         )
 
+    def test_store_hardware_catalog_resolves_canonical_a100_profile(self) -> None:
+        deployment = RankDeployment(
+            "job-a",
+            "rank-a",
+            "model-a",
+            {
+                "env": ["reserved", "azure", "westus2", "1", "A100-40GB"],
+                "instance_type": "Standard_NC96ads_A100_v4",
+            },
+            (),
+        )
+        catalog = {
+            "regions": [
+                {
+                    "cloud": "azure",
+                    "region": "westus2",
+                    "instance_types": [
+                        {
+                            "instance_type": "Standard_NC96ads_A100_v4",
+                            "accelerators": [
+                                {
+                                    "name": "A100-40GB",
+                                    "canonical_gpu_name": "A100-40GB",
+                                    "memory_mib_each": 40_960,
+                                    "gpu_bandwidth_gbps": 1_935,
+                                    "pcie_bandwidth_gbps": 64,
+                                }
+                            ],
+                            "network": {"network_cards": []},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        hardware = resolve_rank_hardware(deployment, catalog)
+
+        self.assertEqual(hardware["profile"], "A100-40GB")
+        self.assertEqual(hardware["memory_gb"], 40)
+
     def test_store_hardware_catalog_reuses_same_cloud_instance_across_regions(self) -> None:
         """Use identical cloud instance facts when a catalog omits one region."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]

@@ -24,7 +24,7 @@ from benchmarks.benchmark_static_seed import (
     reset_store,
     seed_baseline_databases,
 )
-from benchmarks.seed_benchmark_store import load_resource_map
+from benchmarks.seed_benchmark_store import load_catalogs, load_resource_map
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -125,6 +125,26 @@ class StaticSeedTest(unittest.TestCase):
             200,
         )
 
+    def test_catalog_profiles_use_canonical_a100_names(self) -> None:
+        catalogs = load_catalogs(
+            ROOT / "benchmarks/model_catalogs.csv",
+            ROOT / "benchmarks/model_catalog_gpu_profiles.csv",
+        )
+        profile_names = {
+            profile["gpu_type"]
+            for catalog in catalogs
+            for field in (
+                "max_num_seq",
+                "max_num_batched_tokens",
+                "block_size",
+                "kvcache_dtype",
+            )
+            for profile in getattr(catalog, field)
+        }
+
+        self.assertTrue({"A100-40GB", "A100-80GB"} <= profile_names)
+        self.assertFalse({"A100", "A100_40GB", "A100_80GB"} & profile_names)
+
     def test_uses_the_repository_catalog_snapshot_directory_by_default(self) -> None:
         self.assertEqual(
             parse_args(["--benchmark-id", "simulation_3h"]).catalog_dir,
@@ -189,6 +209,19 @@ class StaticSeedTest(unittest.TestCase):
             sum(pool.total_gpus for *_, pool in resource_map.iter_machine_pools()),
             400,
         )
+
+    def test_real_a100_40gb_pool_has_40_gib(self) -> None:
+        _, resource_map = load_resource_map(
+            ROOT / "benchmarks/resource_map_benchmarking.jsonl",
+            "real_12h",
+        )
+        pools = {
+            instance_type: pool
+            for *_, instance_type, pool in resource_map.iter_machine_pools()
+        }
+
+        self.assertEqual(pools["a2-highgpu-4g"].gpu_type, "A100-40GB")
+        self.assertEqual(pools["a2-highgpu-4g"].gpu_memory_gb, 40)
 
     def test_rejects_catalog_without_a_benchmark_pool(self) -> None:
         _, resource_map = load_resource_map(
