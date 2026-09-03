@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,7 +19,6 @@ from pathlib import Path
 from typing import BinaryIO, Protocol, TextIO
 
 import yaml
-from tandemn_orca.scripts.endpoint import check_ready, resolve_endpoint
 from tandemn_system_data.clients import JobStore, PostgresClient
 from tandemn_system_data.models import JobStatus, ReasonCode
 
@@ -30,6 +32,37 @@ from data_generation.controller import (
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_ROUTER_CONFIG_DIR = "~/.tandemn/router-configs"
+
+
+def resolve_endpoint(job_id: str, config_dir: Path) -> str:
+    """Read one real deployment's router endpoint from its config file."""
+    path = config_dir / f"{job_id}.json"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(
+            f"no router config for {job_id!r} in {config_dir} - is the job placed?"
+        ) from None
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"unreadable router config {path}: {error}") from None
+    port = config.get("listen_port") or _router_listen_port(job_id)
+    if not isinstance(port, int) or not 0 < port < 65536:
+        raise SystemExit(f"router config {path} has invalid listen_port {port!r}")
+    return f"http://127.0.0.1:{port}"
+
+
+def check_ready(endpoint: str, timeout: float = 2.0) -> bool:
+    """Return whether one router responds to its readiness endpoint."""
+    try:
+        with urllib.request.urlopen(f"{endpoint}/readyz", timeout=timeout) as response:
+            return bool(response.status == 200)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def _router_listen_port(job_id: str) -> int:
+    digest = hashlib.sha256(job_id.encode()).digest()
+    return 28_000 + int.from_bytes(digest[:4], "big") % 1_000
 
 
 class State(StrEnum):
