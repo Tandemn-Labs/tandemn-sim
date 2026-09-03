@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,6 +20,7 @@ from evox import (
     EVOX_INITIAL_PROGRAM,
     EvoxDeadlineExceeded,
     EvoxPlannerDriver,
+    OnlineEvoxEvaluator,
     OnlineSkyDiscoverEvoxClient,
     StoreSnapshot,
     build_evox_payload,
@@ -30,6 +32,7 @@ from evox import (
     verify_place_plan,
 )
 from llm_usage import LlmUsage
+from outcome_feedback import fingerprint
 from policy import load_config_policy
 
 
@@ -187,7 +190,7 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         self.assertEqual(rank["config"]["count"], 1)
         verify_place_plan(plan, candidate, policy)
 
-    def test_v2_payload_maps_compact_decisions_to_place_and_swap(self) -> None:
+    def test_v3_payload_maps_compact_decisions_to_place_and_swap(self) -> None:
         """Map candidate-or-null policy output according to each job lifecycle."""
         policy = load_config_policy()
         resources = _resources()
@@ -218,7 +221,7 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         )
         payload = build_evox_payload(problems, capacities)
 
-        self.assertEqual(payload["schema_version"], "tandemn-evox-placement/v2")
+        self.assertEqual(payload["schema_version"], "tandemn-evox-placement/v3")
         jobs = {job["job_id"]: job for job in payload["jobs"]}
         self.assertEqual(jobs["waiting"]["lifecycle"], "waiting")
         self.assertIsNone(jobs["waiting"]["current_deployment"])
@@ -353,6 +356,172 @@ class EvoxPlannerDriverTest(unittest.TestCase):
                 {"job_id": "multiple", "type": "keep"},
             ],
         )
+
+    def test_v3_payload_serializes_feedback_for_exact_candidate(self) -> None:
+        """Expose a known outcome only on its matching placement candidate."""
+        policy = load_config_policy()
+        resources = _resources()
+        problem = build_placement_problems(
+            (_store_job(),),
+            resources,
+            "test",
+            {},
+            policy,
+            _catalogs(),
+        )[0]
+        candidate = problem.candidates[0]
+        outcome = {"reward": 0.75, "sample_count": 3}
+        feedback = {
+            _candidate_fingerprint(problem, candidate): outcome,
+        }
+
+        payload = build_evox_payload(
+            (problem,),
+            capacity_limits(resources),
+            feedback,
+        )
+
+        serialized = next(
+            value
+            for value in payload["jobs"][0]["candidates"]
+            if value["candidate_id"] == candidate.candidate_id
+        )
+        self.assertEqual(payload["schema_version"], "tandemn-evox-placement/v3")
+        self.assertEqual(serialized["feedback"], outcome)
+
+    def test_evaluator_uses_observed_reward_after_priority_admission(self) -> None:
+        """Prefer an observed positive outcome over an otherwise cheaper shape."""
+        policy = load_config_policy()
+        resources = _resources()
+        problem = build_placement_problems(
+            (_store_job(),),
+            resources,
+            "test",
+            {},
+            policy,
+            _catalogs(),
+        )[0]
+        lower_footprint = next(
+            candidate for candidate in problem.candidates if candidate.dp == 1
+        )
+        rewarded = next(
+            candidate for candidate in problem.candidates if candidate.dp == 2
+        )
+        feedback = {
+            _candidate_fingerprint(problem, rewarded): {"reward": 0.8},
+        }
+        evaluator = OnlineEvoxEvaluator(
+            (problem,),
+            capacity_limits(resources),
+            feedback,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            lower_path = Path(directory) / "lower.py"
+            rewarded_path = Path(directory) / "rewarded.py"
+            lower_path.write_text(
+                _program_for_candidate("waiting", lower_footprint.candidate_id),
+                encoding="utf-8",
+            )
+            rewarded_path.write_text(
+                _program_for_candidate("waiting", rewarded.candidate_id),
+                encoding="utf-8",
+            )
+            lower_metrics = evaluator.evaluate(str(lower_path))
+            rewarded_metrics = evaluator.evaluate(str(rewarded_path))
+
+        self.assertGreater(
+            rewarded_metrics["combined_score"],
+            lower_metrics["combined_score"],
+        )
+        self.assertEqual(rewarded_metrics["mean_observed_reward"], 0.8)
+        self.assertEqual(rewarded_metrics["observed_feedback_count"], 1.0)
+        self.assertEqual(rewarded_metrics["feedback"], {"waiting": {"reward": 0.8}})
+
+    def test_pending_batch_running_job_keeps_without_swap_candidates(self) -> None:
+        """Do not replace a batch rank before its terminal outcome is observed."""
+        policy = load_config_policy()
+        running = _running_store_job()
+        waiting = _store_job("waiting-batch")
+        running["kind"] = "batch"
+        waiting["kind"] = "batch"
+        driver = _driver(policy)
+        driver.feedback = SimpleNamespace(
+            has_pending_batch=lambda job_id: job_id == "running",
+        )
+        seen = []
+
+        def select(problems, _capacities):
+            seen.extend(problems)
+            return {}
+
+        driver._select_placements = select
+
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=_resources(),
+                running_jobs=(running,),
+                waiting_jobs=(waiting,),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        self.assertEqual([problem.job_id for problem in seen], ["waiting-batch"])
+        self.assertEqual(seen[0].action_type, "place")
+        self.assertTrue(seen[0].candidates)
+        self.assertEqual(
+            actions,
+            [
+                {"job_id": "running", "type": "keep"},
+                {"job_id": "waiting-batch", "type": "defer"},
+            ],
+        )
+
+    def test_final_placement_records_outcome_feedback(self) -> None:
+        """Record the exact verified rank configuration after a place action."""
+        policy = load_config_policy()
+        resources = _resources()
+        driver = _driver(policy)
+        records = []
+        driver.feedback = SimpleNamespace(
+            has_pending_batch=lambda _job_id: False,
+            record=lambda **kwargs: records.append(kwargs),
+        )
+
+        def select(problems, _capacities):
+            problem = problems[0]
+            candidate = next(value for value in problem.candidates if value.dp == 1)
+            return {problem.job_id: candidate}
+
+        driver._select_placements = select
+
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=resources,
+                running_jobs=(),
+                waiting_jobs=(_store_job(),),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        self.assertEqual(actions[0]["type"], "place")
+        driver._record_action_feedback(
+            actions,
+            datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["fingerprint"].job_id, "waiting")
+        self.assertEqual(record["rank_id"], actions[0]["ladder"][0]["rank_id"])
+        self.assertEqual(record["window_start"], datetime(2026, 1, 1, tzinfo=UTC))
+        self.assertFalse(record["is_batch"])
+        self.assertIsNone(record["required_tps"])
+        self.assertEqual(record["ttft_target_ms"], 700.0)
+        self.assertEqual(record["tpot_target_ms"], 55.0)
 
     def test_timeout_without_valid_program_returns_no_placements(self) -> None:
         """Let the driver keep running jobs and defer the rest after timeout."""
@@ -553,6 +722,32 @@ def _catalogs() -> dict[str, dict[str, object]]:
     ):
         catalog[field] = [{"gpu_type": "H100", "value": catalog[field]}]
     return {"meta-llama/Llama-3.2-1B-Instruct": catalog}
+
+
+def _candidate_fingerprint(problem, candidate):
+    """Return the feedback identity for one fixture candidate."""
+    return fingerprint(
+        job_id=problem.job_id,
+        model_id=problem.model_id,
+        environment=candidate.target.environment_key,
+        instance_type=candidate.target.instance_type,
+        gpu_type=candidate.target.gpu_type,
+        tp=candidate.tp,
+        pp=candidate.pp,
+        dp=candidate.dp,
+    )
+
+
+def _program_for_candidate(job_id: str, candidate_id: str) -> str:
+    """Return a minimal valid evolved policy selecting one candidate."""
+    return (
+        "def compute_placement(payload):\n"
+        "    return {\n"
+        "        'placements': [\n"
+        f"            {{'job_id': {job_id!r}, 'candidate_id': {candidate_id!r}}}\n"
+        "        ]\n"
+        "    }\n"
+    )
 
 
 if __name__ == "__main__":
