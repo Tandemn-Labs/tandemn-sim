@@ -19,7 +19,6 @@ dependencies = [
     "skydiscover",
     "sqlalchemy>=2.0",
     "tandemn-store",
-    "tandemn-orca",
 ]
 
 [project.scripts]
@@ -40,7 +39,6 @@ dev = [
 [tool.uv.sources]
 skydiscover = { git = "https://github.com/skydiscover-ai/skydiscover.git", rev = "59643ef8e7aa9ae071e86028d9ba56849fad0d80" }
 tandemn-store = { path = "../tandemn-store", editable = true }
-tandemn-orca = { path = "../tandemn-system", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -58,5 +56,5 @@ files = ["src"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["tandemn_orca.*", "tandemn_system_data.*"]
+module = ["tandemn_system_data.*"]
 ignore_missing_imports = true

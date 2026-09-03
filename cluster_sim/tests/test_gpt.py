@@ -29,7 +29,7 @@ from gpt import (
 from models import OnlineJob, Scenario
 from policy import load_config_policy
 from serving import build_rank_cluster
-from tandemn_orca.orca import ladder_to_ranks
+from simulation_orca import ladder_to_ranks
 from tandemn_system_data.models import Plan
 
 

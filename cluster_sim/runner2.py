@@ -207,7 +207,7 @@ def _submit_waiting_job(
     prefix_cache_enabled: bool = False,
 ) -> None:
     """Submit one released benchmark job to Store."""
-    from tandemn_orca.scripts.submit_job import normalize_job_spec
+    from simulation_orca import normalize_job_spec
     from tandemn_system_data.models import Job, JobKind
 
     kind = JobKind.ONLINE if isinstance(job, OnlineJob) else JobKind.BATCH
@@ -233,10 +233,9 @@ def _submit_waiting_job(
 
 def _apply_pending_plans(user_id: str, postgres: object) -> int:
     """Apply Store plans without launching Kubernetes or GPU workloads."""
-    from tandemn_orca.launcher import NoopLauncher
-    from tandemn_orca.orca import Orca
+    from simulation_orca import apply_pending_plans
 
-    return Orca(postgres, launcher=NoopLauncher()).apply_pending(user_id)
+    return apply_pending_plans(user_id, postgres)
 
 
 def _benchmark_path(value: str) -> Path:
