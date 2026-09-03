@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import BinaryIO, Protocol, TextIO
+from uuid import NAMESPACE_URL, uuid5
 
 import yaml
 from tandemn_system_data.clients import JobStore, PostgresClient
@@ -32,6 +33,17 @@ from data_generation.controller import (
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_ROUTER_CONFIG_DIR = "~/.tandemn/router-configs"
+_CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def stable_store_id(benchmark_id: str, job_name: str) -> str:
+    raw = b"\x00" * 6 + uuid5(
+        NAMESPACE_URL, f"tandemn-sim:{benchmark_id}:{job_name}"
+    ).bytes[:10]
+    value = int.from_bytes(raw, "big")
+    return "".join(
+        _CROCKFORD_BASE32[(value >> shift) & 31] for shift in range(125, -1, -5)
+    )
 
 
 def resolve_endpoint(job_id: str, config_dir: Path) -> str:
@@ -261,8 +273,10 @@ def run_scenario(
                     _transition(job, State.FAILED, "router readiness timed out", events)
                     continue
 
-                found = by_id.get(job.manifest.job_id) or by_name.get(
-                    job.manifest.job_id
+                found = (
+                    by_id.get(job.manifest.job_id)
+                    or by_id.get(stable_store_id(manifest.benchmark_id, job.manifest.job_id))
+                    or by_name.get(job.manifest.job_id)
                 )
                 if found is None:
                     continue

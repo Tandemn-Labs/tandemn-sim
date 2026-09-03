@@ -20,6 +20,7 @@ from data_generation.real_scenario import (
     StoreJob,
     load_manifest,
     run_scenario,
+    stable_store_id,
 )
 
 JOB_PATH = ROOT / "benchmarks" / "15min_real" / "jobs" / "code-chat.yaml"
@@ -153,6 +154,25 @@ class RealScenarioTests(unittest.TestCase):
         self.assertEqual(events[-1]["state"], State.DONE)
         self.assertEqual(events[-1]["exit_code"], 0)
         self.assertEqual(store.finished, [("authored-job", None)])
+
+    @mock.patch("data_generation.real_scenario.subprocess.Popen")
+    @mock.patch("data_generation.real_scenario.check_ready", return_value=True)
+    @mock.patch(
+        "data_generation.real_scenario.resolve_endpoint",
+        return_value="http://127.0.0.1:28001",
+    )
+    def test_matches_runner_deterministic_store_id(
+        self,
+        _resolve: mock.Mock,
+        _ready: mock.Mock,
+        popen: mock.Mock,
+    ) -> None:
+        popen.return_value = process(0)
+        store_id = stable_store_id("test", "authored-job")
+        store = FakeStore([(StoreJob(store_id, JobStatus.RUNNING, None),)])
+
+        self.assertEqual(self.run_daemon(store), 0)
+        self.assertEqual(store.finished, [(store_id, None)])
 
     @mock.patch("data_generation.real_scenario.check_ready", return_value=False)
     @mock.patch(
