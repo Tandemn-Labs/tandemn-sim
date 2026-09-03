@@ -116,13 +116,7 @@ class PlanRunner:
 
         LOGGER.info("tick %d: planning placements", tick_number)
         result = self.planner.create_plans(tick_number, start)
-        applied = _apply_pending_plans(self.user_id, self.postgres)
-        LOGGER.info(
-            "tick %d: created %d plan(s), applied %d",
-            tick_number,
-            len(result.plans),
-            applied,
-        )
+        LOGGER.info("tick %d: created %d plan(s)", tick_number, len(result.plans))
         if result.error is not None:
             LOGGER.warning("tick %d planner error: %s", tick_number, result.error)
 
@@ -229,13 +223,6 @@ def _submit_waiting_job(
             created_at=submitted_at,
         )
     )
-
-
-def _apply_pending_plans(user_id: str, postgres: object) -> int:
-    """Apply Store plans without launching Kubernetes or GPU workloads."""
-    from simulation_orca import apply_pending_plans
-
-    return apply_pending_plans(user_id, postgres)
 
 
 def _benchmark_path(value: str) -> Path:
