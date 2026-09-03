@@ -70,7 +70,7 @@ class StoreSmokeTest(unittest.TestCase):
                 ladder=[
                     {
                         "role": "aggregate",
-                        "rank_id": "rank_0",
+                        "rank_id": "rank_01JBM2YQYZ1KQ9C8GZP1XB6V5T",
                         "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
                         "config": {
                             "instance_type": "sim.h100.8gpu",
@@ -137,7 +137,7 @@ class StoreSmokeTest(unittest.TestCase):
                 ladder=[
                     {
                         "role": "aggregate",
-                        "rank_id": "rank_0",
+                        "rank_id": "rank_01JBM2YQYZ1KQ9C8GZP1XB6V5T",
                         "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
                         "config": {
                             "instance_type": "sim.h100.8gpu",

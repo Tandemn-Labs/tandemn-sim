@@ -577,6 +577,7 @@ def _place_action(
     """Combine deterministic job fields with one AIC placement."""
     known = _known_job_fields(store_job)
     per_replica_gpu_count = placement.tp * placement.pp
+    effective_dp = placement.replicas * placement.dp
     rank_config: dict[str, object] = {
         "model_id": known.get("model_id"),
         "engine_name": known.get("engine_name") or backend,
@@ -586,7 +587,7 @@ def _place_action(
         "count": per_replica_gpu_count,
         "tp": placement.tp,
         "pp": placement.pp,
-        "dp": placement.dp,
+        "dp": effective_dp,
         "ep": known.get("ep") or 1,
         "max_num_seq": placement.max_num_seq,
         "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
@@ -606,7 +607,7 @@ def _place_action(
                 "rank_id": rank_id(known),
                 "env": placement.target.environment_key.split("|"),
                 "config": rank_config,
-                "n_replicas": placement.replicas * placement.dp,
+                "n_replicas": effective_dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],

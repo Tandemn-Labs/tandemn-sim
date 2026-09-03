@@ -281,30 +281,31 @@ class AicPlannerDriverTest(unittest.TestCase):
             with self.subTest(hardware=hardware):
                 self.assertEqual(_aic_system({}, None, hardware, {}), expected)
 
-    def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
-        """Keep DP in replica count rather than one ServingSim rank shape."""
-        client = FakeAicClient(tp=2, dp=3)
+    def test_aic_replicas_fold_into_canonical_data_parallelism(self) -> None:
+        """Flatten AIC replica and DP factors into the canonical rank replica count."""
+        client = FakeAicClient(tp=2, dp=3, replicas=2)
         actions = _driver((_job("job_1"),), client)._build_actions(
-            _snapshot(waiting=({"job_id": "job_1"},), h100_free=6)
+            _snapshot(waiting=({"job_id": "job_1"},), h100_free=12)
         )
 
         placed = actions[0]
         shape = placed["ladder"][0]["config"]
         self.assertEqual(shape["count"], 2)
         self.assertEqual(shape["gpu_count"], 2)
-        self.assertEqual(placed["ladder"][0]["n_replicas"], 3)
+        self.assertEqual(shape["dp"], 6)
+        self.assertEqual(placed["ladder"][0]["n_replicas"], 6)
         Plan(user_id="tenant", actions=[placed])
         cluster = build_rank_cluster(
             SimpleNamespace(
                 rank_name=placed["ladder"][0]["rank_id"],
                 model_name=shape["model_id"],
                 shape=shape,
-                chains=(object(),) * 3,
+                chains=(object(),) * 6,
             ),
             _SERVINGSIM_HARDWARE,
         )
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
-        self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
+        self.assertEqual(cluster["nodes"][0]["num_instances"], 6)
 
 
 class FakeAicClient:
