@@ -302,6 +302,16 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         )
         self.assertEqual([action["type"] for action in actions], ["swap", "defer"])
         self.assertEqual(actions[0]["ladder"][0]["rank_id"], active_rank)
+        with self.assertRaisesRegex(ValueError, "swaps require the active rank ID"):
+            _place_action(
+                "running",
+                snapshot.running_jobs[0],
+                driver.jobs["running"],
+                placements[0],
+                snapshot.resources,
+                snapshot.model_catalogs,
+                action_type="swap",
+            )
 
     def test_noop_swap_is_kept(self) -> None:
         """Do not materialize a swap whose physical ladder is unchanged."""
