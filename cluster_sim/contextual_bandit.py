@@ -381,6 +381,7 @@ class ContextualBanditPlannerDriver:
                 snapshot.model_catalogs,
                 self.config_policy,
                 action_type=problem.action_type,
+                rank_name=problem.rank_id,
             )
             reserve_vram_placement(
                 candidate.target,
@@ -765,6 +766,8 @@ def build_contextual_bandit_plan(
     """Return one complete contextual-bandit placement or swap plan."""
     if action_type not in {"place", "swap"}:
         raise ValueError("contextual bandit action type must be place or swap")
+    if action_type == "swap" and rank_name is None:
+        raise ValueError("contextual bandit swaps require the active rank ID")
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
     try:
@@ -788,7 +791,7 @@ def build_contextual_bandit_plan(
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": rank_name or rank_id(known),
+                "rank_id": rank_name if rank_name is not None else rank_id(known),
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
                     **launch_config,
@@ -818,6 +821,7 @@ def verify_place_plan(
     config_policy: ConfigPolicy,
     *,
     action_type: str | None = None,
+    rank_name: str | None = None,
 ) -> None:
     """Verify one complete per-job placement or swap plan before returning it."""
     required_plan_keys = {
@@ -853,6 +857,8 @@ def verify_place_plan(
     }
     if set(rank) != required_rank_keys:
         raise ValueError("placement ladder rank has incomplete fields")
+    if rank_name is not None and rank.get("rank_id") != rank_name:
+        raise ValueError("placement plan does not retain the active rank ID")
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
     if rank.get("n_replicas") != candidate.dp:

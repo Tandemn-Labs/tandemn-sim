@@ -209,6 +209,14 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
         verify_place_plan(plan, candidate, catalogs, policy)
+        with self.assertRaisesRegex(ValueError, "swaps require the active rank ID"):
+            build_contextual_bandit_plan(
+                _store_job("job"),
+                candidate,
+                catalogs,
+                policy,
+                action_type="swap",
+            )
 
     def test_data_parallel_candidates_use_per_replica_ladder_shape(self) -> None:
         """Represent DP as replicas while reserving the total GPU footprint."""

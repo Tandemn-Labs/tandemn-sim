@@ -687,6 +687,10 @@ def _place_action(
     existing_rank_id: str | None = None,
 ) -> dict[str, object]:
     """Combine deterministic job fields with one place or swap decision."""
+    if action_type not in {"place", "swap"}:
+        raise ValueError("OpenEvolve action type must be place or swap")
+    if action_type == "swap" and existing_rank_id is None:
+        raise ValueError("OpenEvolve swaps require the active rank ID")
     known = _known_job_fields(store_job, scenario_job)
     target_tps = _number(known.get("target_tps"))
     return {
