@@ -100,6 +100,22 @@ class BaselineUserSetupTest(unittest.TestCase):
 
         self.assertEqual(args.benchmark_id, "15min_real")
 
+    def test_accepts_an_explicit_postgres_url(self) -> None:
+        args = parse_args(
+            [
+                "--baseline",
+                "bestfit",
+                "--run-id",
+                "run-1",
+                "--benchmark-id",
+                "simulation_3h",
+                "--postgres-url",
+                "postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_3h_bestfit",
+            ]
+        )
+
+        self.assertEqual(args.postgres_url.rsplit("/", 1)[-1], "tandemn_3h_bestfit")
+
     @unittest.skipUnless(
         os.getenv("BASELINE_USER_SETUP_SMOKE") == "1",
         "set BASELINE_USER_SETUP_SMOKE=1 after static Store seeding",

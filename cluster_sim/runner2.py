@@ -251,6 +251,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", default="simulation_3h")
     parser.add_argument("--user-id", required=True)
+    parser.add_argument("--postgres-url")
     parser.add_argument("--planner", required=True, choices=PLANNERS)
     parser.add_argument("--logical-epoch", default="2026-01-01T00:00:00+00:00")
     parser.add_argument("--ticks", type=int)
@@ -270,7 +271,7 @@ def main(argv: list[str] | None = None) -> None:
 
     scenario = stable_store_job_ids(load_scenario(_benchmark_path(args.benchmark)))
     clock = LogicalClock(epoch.astimezone(UTC))
-    postgres = PostgresClient()
+    postgres = PostgresClient(args.postgres_url)
     planner = build_planner(
         args.planner,
         argparse.Namespace(

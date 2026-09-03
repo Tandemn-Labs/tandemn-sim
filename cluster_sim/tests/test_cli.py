@@ -1,5 +1,7 @@
 """Test standalone cluster-simulator CLI setup without running a simulation."""
 
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 import sys
@@ -28,6 +30,8 @@ class CliTest(unittest.TestCase):
                 "usr_sim",
                 "--planner",
                 "first-fit",
+                "--postgres-url",
+                "postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_3h_bestfit",
                 "--parallel-simulators",
                 "6",
                 "--ticks",
@@ -43,6 +47,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(args.user_id, "usr_sim")
         self.assertEqual(args.planner, "first-fit")
+        self.assertEqual(args.postgres_url.rsplit("/", 1)[-1], "tandemn_3h_bestfit")
         self.assertEqual(args.parallel_simulators, 6)
         self.assertEqual(args.ticks, 5)
         self.assertEqual(args.trace_root, Path("traces"))
@@ -92,7 +97,10 @@ class CliTest(unittest.TestCase):
         with (
             patch("tandemn_system_data.clients.PostgresClient", return_value=object()),
             patch("cli.load_scenario", return_value=scenario),
-            patch("cli.build_planner", return_value=SimpleNamespace(method_name="first-fit")),
+            patch(
+                "cli.build_planner",
+                return_value=SimpleNamespace(method_name="first-fit"),
+            ),
             patch("cli.ClusterSimulator", return_value=simulator) as simulator_class,
         ):
             main(

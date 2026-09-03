@@ -101,6 +101,32 @@ cluster_sim/cli.py      --benchmark X
 `baseline_user_setup.py` requires `--benchmark-id`; it must never infer a
 benchmark from a default.
 
+## Isolated Baseline Databases
+
+To run baselines concurrently, create one PostgreSQL database per baseline.
+This prevents global Store job-ID collisions and keeps all jobs, plans, ranks,
+metrics, evidence, and resource maps isolated. Docker is reset once; Postgres
+and MinIO containers are shared.
+
+```bash
+uv run python benchmarks/benchmark_static_seed.py \
+  --full-reset \
+  --benchmark-id simulation_3h \
+  --baselines bestfit contextual_bandit cp_sat dynamo_aic edf evox gpt_only openevolve prism vram
+```
+
+The command creates fixed database names such as:
+
+```text
+tandemn_3h_bestfit
+tandemn_3h_dynamo_aic
+tandemn_3h_gpt_only
+```
+
+It prints one JSON object mapping each baseline to its isolated Store user ID.
+It already performs the equivalent of `baseline_user_setup.py` in each
+database, so do not run that script again for these baselines.
+
 ## Static Seed
 
 This command destroys local Tandemn Store volumes, starts Postgres and MinIO,
@@ -239,6 +265,7 @@ manually; no shell variables or process-manager commands are required.
 ```bash
 uv run python cluster_sim/cli.py \
   --benchmark <simulation_3h|simulation_12h|simulation_24h> \
+  --postgres-url postgresql+psycopg://tandemn:tandemn@localhost:55432/<BASELINE_DATABASE> \
   --user-id <USER_ID> \
   --planner <BASELINE> \
   --logical-epoch 2026-08-22T00:00:00+00:00 \
