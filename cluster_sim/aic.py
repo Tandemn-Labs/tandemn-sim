@@ -21,7 +21,7 @@ from models import CreatedPlan, PlannerResult, Scenario
 from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
-_AIC_CANDIDATE_LIMIT = 1000
+_AIC_CANDIDATE_LIMIT = 10
 _AIC_FALLBACK_MODES = ("HYBRID", "EMPIRICAL", "SOL")
 _AIC_PROFILE_BACKENDS = (("vllm", "0.22.0"), ("sglang", "0.5.14"))
 _A10G_PROFILE_FALLBACK_SYSTEMS = ("l40s", "a100_sxm", "h100_sxm", "h200_sxm")
