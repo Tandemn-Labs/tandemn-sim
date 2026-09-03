@@ -23,6 +23,7 @@ from gpt import (
     OpenAIResponsesClient,
     StoreSnapshot,
     _build_user_prompt,
+    _parse_placements,
     _resources_with_free_capacity,
 )
 from models import OnlineJob, Scenario
@@ -43,6 +44,7 @@ class GptPlannerDriverTest(unittest.TestCase):
                 {
                     "placements": [
                         {
+                            "lifecycle": "waiting",
                             "decision": "defer",
                             "environment": None,
                             "instance_type": None,
@@ -75,27 +77,69 @@ class GptPlannerDriverTest(unittest.TestCase):
         self.assertEqual(usage[0].output_tokens, 10)
         self.assertEqual(usage[0].model, "gpt-used")
 
+    def test_parser_rejects_an_invalid_lifecycle_decision(self) -> None:
+        """Do not accept a waiting action for a running lifecycle entry."""
+        with self.assertRaisesRegex(
+            ValueError,
+            "running jobs cannot use place decisions",
+        ):
+            _parse_placements(
+                {
+                    "placements": [
+                        {
+                            "lifecycle": "running",
+                            "decision": "place",
+                            "environment": None,
+                            "instance_type": None,
+                            "configuration": None,
+                        }
+                    ]
+                }
+            )
+
     def test_schema_requires_every_catalog_field(self) -> None:
         """Keep the OpenAI strict schema aligned with the rank launch config."""
-        placement = PLACEMENT_SCHEMA["properties"]["placements"]["items"]
-        configuration = placement["properties"]["configuration"]["anyOf"][0]
+        variants = PLACEMENT_SCHEMA["properties"]["placements"]["items"][
+            "anyOf"
+        ]
 
+        self.assertEqual(len(variants), 4)
         self.assertEqual(
-            set(configuration["required"]),
-            set(configuration["properties"]),
+            {
+                (
+                    variant["properties"]["lifecycle"]["enum"][0],
+                    variant["properties"]["decision"]["enum"][0],
+                )
+                for variant in variants
+            },
+            {
+                ("waiting", "place"),
+                ("waiting", "defer"),
+                ("running", "keep"),
+                ("running", "swap"),
+            },
         )
-        self.assertFalse(configuration["additionalProperties"])
+        for variant in variants:
+            self.assertEqual(
+                set(variant["required"]),
+                set(variant["properties"]),
+            )
+            self.assertFalse(variant["additionalProperties"])
+        for variant in (variants[0], variants[3]):
+            configuration = variant["properties"]["configuration"]
+            self.assertEqual(
+                set(configuration["required"]),
+                set(configuration["properties"]),
+            )
+            self.assertFalse(configuration["additionalProperties"])
 
-    def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
-        """Use the existing planner Store connection for tick catalog context."""
-        driver = _driver(("first", "second"))
+    def test_snapshot_reads_active_candidate_model_catalog(self) -> None:
+        """Load model context for a running scenario job without waiting jobs."""
+        driver = _driver(("first",))
         requested = []
         driver.job_store = SimpleNamespace(
-            running_jobs=lambda _user_id: (),
-            waiting_jobs=lambda _user_id: (
-                _store_job("first"),
-                _store_job("second"),
-            ),
+            running_jobs=lambda _user_id: (_running_job_aggregate("first"),),
+            waiting_jobs=lambda _user_id: (),
             paused_jobs=lambda _user_id: (),
         )
         driver.resource_map_store = SimpleNamespace(
@@ -142,6 +186,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
+            lifecycle="waiting",
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type="p5.48xlarge",
@@ -218,7 +263,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             1,
             datetime(2026, 1, 1, tzinfo=UTC),
             snapshot,
-            tuple(driver.jobs.values()),
+            tuple(("waiting", job) for job in driver.jobs.values()),
             load_config_policy(),
         )
 
@@ -248,9 +293,10 @@ class GptPlannerDriverTest(unittest.TestCase):
         self.assertIn("global constraint across every placement", SYSTEM_PROMPT)
         self.assertIn("replica consumes one whole instance", SYSTEM_PROMPT)
         self.assertIn("PP must never exceed 4", SYSTEM_PROMPT)
+        self.assertEqual(document["jobs_for_tick"][0]["lifecycle"], "waiting")
         pp_schema = PLACEMENT_SCHEMA["properties"]["placements"]["items"][
-            "properties"
-        ]["configuration"]["anyOf"][0]["properties"]["pp"]
+            "anyOf"
+        ][0]["properties"]["configuration"]["properties"]["pp"]
         self.assertEqual(pp_schema["maximum"], 4)
 
     def test_defers_only_placement_that_exceeds_cumulative_capacity(self) -> None:
@@ -281,6 +327,7 @@ class GptPlannerDriverTest(unittest.TestCase):
         )
         placements = tuple(
             GptPlacement(
+                lifecycle="waiting",
                 decision="place",
                 environment=environment,
                 instance_type="p5.48xlarge",
@@ -315,6 +362,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
+            lifecycle="waiting",
             decision="place",
             environment="reserved|aws|us-east|use1-az1|H100",
             instance_type=None,
@@ -324,7 +372,7 @@ class GptPlannerDriverTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tp=3 is not allowed"):
             driver._build_actions(snapshot, (placement,))
 
-    def test_gpt_ladder_uses_per_replica_gpu_count(self) -> None:
+    def test_gpt_ladder_uses_dp_as_canonical_replica_count(self) -> None:
         """Serialize GPT DP width as canonical Koi/Orca replicas."""
         driver = _driver()
         environment = "reserved|aws|us-east|use1-az1|H100"
@@ -352,10 +400,11 @@ class GptPlannerDriverTest(unittest.TestCase):
             model_catalogs=_catalogs(),
         )
         placement = GptPlacement(
+            lifecycle="waiting",
             decision="place",
             environment=environment,
             instance_type="p5.48xlarge",
-            configuration=_configuration(replicas_needed=2, tp=2, dp=3),
+            configuration=_configuration(tp=2, dp=3),
         )
 
         ladder = driver._build_actions(snapshot, (placement,))[0]["ladder"]
@@ -363,9 +412,132 @@ class GptPlannerDriverTest(unittest.TestCase):
 
         self.assertEqual(ladder[0]["config"]["count"], 2)
         self.assertEqual(ladder[0]["config"]["gpu_count"], 2)
-        self.assertEqual(ladder[0]["n_replicas"], 6)
+        self.assertEqual(ladder[0]["n_replicas"], 3)
         self.assertEqual(rank.shape_json["count"], 2)
-        self.assertEqual(rank.n_replicas, 6)
+        self.assertEqual(rank.n_replicas, 3)
+
+    def test_swap_retains_the_active_rank_id(self) -> None:
+        """Build a full replacement ladder for a changed running job."""
+        driver = _driver(("running",))
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        snapshot = StoreSnapshot(
+            resources={
+                environment: {
+                    "gpu_type": "H100",
+                    "total": 16,
+                    "free": 8,
+                    "pools": [
+                        {
+                            "allocation_kind": "gpu",
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 16,
+                            "free": 8,
+                        }
+                    ],
+                }
+            },
+            running_jobs=(_running_job("running"),),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        placement = GptPlacement(
+            lifecycle="running",
+            decision="swap",
+            environment=environment,
+            instance_type="p5.48xlarge",
+            configuration=_configuration(tp=2),
+        )
+
+        action = driver._build_actions(snapshot, (placement,))[0]
+
+        self.assertEqual(action["type"], "swap")
+        self.assertEqual(len(action["ladder"]), 1)
+        self.assertEqual(action["ladder"][0]["rank_id"], _ACTIVE_RANK_ID)
+        self.assertEqual(action["ladder"][0]["config"]["tp"], 2)
+        self.assertEqual(action["ladder"][0]["n_replicas"], 1)
+
+    def test_running_keep_and_waiting_defer_follow_candidate_order(self) -> None:
+        """Accept the lifecycle-specific no-op decisions in order."""
+        driver = _driver(("running", "waiting"))
+        snapshot = StoreSnapshot(
+            resources={},
+            running_jobs=(_running_job("running"),),
+            waiting_jobs=(_store_job("waiting"),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        placements = (
+            GptPlacement("running", "keep", None, None, None),
+            GptPlacement("waiting", "defer", None, None, None),
+        )
+
+        actions = driver._build_actions(snapshot, placements)
+
+        self.assertEqual(
+            [(action["job_id"], action["type"]) for action in actions],
+            [("running", "keep"), ("waiting", "defer")],
+        )
+
+    def test_noop_swap_is_normalized_to_keep_without_free_capacity(self) -> None:
+        """Avoid submitting a replacement that preserves the active shape."""
+        driver = _driver(("running",))
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        snapshot = StoreSnapshot(
+            resources={
+                environment: {
+                    "gpu_type": "H100",
+                    "total": 8,
+                    "free": 0,
+                    "pools": [
+                        {
+                            "allocation_kind": "gpu",
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 8,
+                            "free": 0,
+                        }
+                    ],
+                }
+            },
+            running_jobs=(_running_job("running"),),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        placement = GptPlacement(
+            lifecycle="running",
+            decision="swap",
+            environment=environment,
+            instance_type="p5.48xlarge",
+            configuration=_configuration(),
+        )
+
+        actions = driver._build_actions(snapshot, (placement,))
+
+        self.assertEqual(actions, [{"job_id": "running", "type": "keep"}])
+
+    def test_rejects_a_lifecycle_mismatched_decision(self) -> None:
+        """Do not apply a running decision to a waiting Store job."""
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={},
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "lifecycle does not match"):
+            driver._build_actions(
+                snapshot,
+                (GptPlacement("running", "keep", None, None, None),),
+            )
 
     def test_active_replicas_reduce_gpt_gpu_pool_capacity(self) -> None:
         """Subtract every active Koi/Orca replica from GPT's free GPU pool."""
@@ -415,7 +587,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             model_catalogs=_catalogs(),
         )
 
-        with self.assertRaisesRegex(ValueError, "decide every waiting job"):
+        with self.assertRaisesRegex(ValueError, "decide every actionable job"):
             driver._build_actions(snapshot, ())
 
 
@@ -469,6 +641,41 @@ def _store_job(job_id: str = "waiting") -> dict[str, object]:
     }
 
 
+_ACTIVE_RANK_ID = "rank_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+def _running_job(job_id: str = "running") -> dict[str, object]:
+    """Create one flattened running Store job with its active rank."""
+    environment = "reserved|aws|us-east|use1-az1|H100"
+    return {
+        **_store_job(job_id),
+        "active_ranks": [
+            {
+                "rank_id": _ACTIVE_RANK_ID,
+                "n_replicas": 1,
+                "shape_json": {
+                    "env": environment.split("|"),
+                    "instance_type": "p5.48xlarge",
+                    "gpu_type": "H100",
+                    "gpu_count": 1,
+                    "count": 1,
+                    "tp": 1,
+                    "pp": 1,
+                    "dp": 1,
+                },
+            }
+        ],
+    }
+
+
+def _running_job_aggregate(job_id: str) -> dict[str, object]:
+    """Create the Store aggregate used while reading a running job snapshot."""
+    return {
+        "job": _store_job(job_id),
+        "ranks": _running_job(job_id)["active_ranks"],
+    }
+
+
 def _launch_config() -> dict[str, object]:
     """Return one resolved H100 launch profile from Tandemn Store."""
     return {
@@ -508,14 +715,12 @@ def _catalogs() -> dict[str, dict[str, object]]:
 
 def _configuration(
     *,
-    replicas_needed: int = 1,
     tp: int = 1,
     pp: int = 1,
     dp: int = 1,
 ) -> dict[str, object]:
     """Return GPT output that copies its supplied Store launch profile."""
     return {
-        "replicas_needed": replicas_needed,
         "tp": tp,
         "pp": pp,
         "dp": dp,

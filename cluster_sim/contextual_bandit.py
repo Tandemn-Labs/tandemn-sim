@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
-from rank_ids import rank_id
+from rank_ids import active_rank_id, rank_id
 from vram import (
     _HARDWARE_MEMORY_GIB,
     LAUNCH_FIELDS,
@@ -68,7 +68,7 @@ class StoreSnapshot:
 
 @dataclass(frozen=True)
 class PlacementCandidate:
-    """One policy-compliant placement for one waiting job."""
+    """One policy-compliant placement for one Store job."""
 
     candidate_id: str
     job_id: str
@@ -85,8 +85,8 @@ class PlacementCandidate:
 
     @property
     def gpu_count(self) -> int:
-        """Return the logical accelerator count in the serving shape."""
-        return self.tp * self.pp * self.dp
+        """Return the accelerator count for each serving replica."""
+        return self.tp * self.pp
 
     @property
     def target_id(self) -> str:
@@ -105,13 +105,15 @@ class PlacementCandidate:
 
 @dataclass(frozen=True)
 class PlacementProblem:
-    """Public static facts and feasible candidates for one waiting job."""
+    """Public static facts and feasible candidates for one Store job."""
 
     job_id: str
     priority: int
     priority_class: str
     store_job: dict[str, Any]
     candidates: tuple[PlacementCandidate, ...]
+    action_type: str = "place"
+    rank_id: str | None = None
 
 
 class JobStoreClient(Protocol):
@@ -327,10 +329,11 @@ class ContextualBanditPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        running_jobs = tuple(_running_job_payload(job) for job in running)
         waiting_jobs = tuple(_model_payload(job) for job in waiting)
         model_ids = {
             _required_text(_known_job_fields(job).get("model_id"), "model_id")
-            for job in waiting_jobs
+            for job in (*running_jobs, *waiting_jobs)
         }
         model_catalogs = {}
         for model_id in sorted(model_ids):
@@ -340,7 +343,7 @@ class ContextualBanditPlannerDriver:
             model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
-            running_jobs=tuple(_running_job_payload(job) for job in running),
+            running_jobs=running_jobs,
             waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
@@ -348,7 +351,7 @@ class ContextualBanditPlannerDriver:
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
-        """Select waiting placements and include every lifecycle action."""
+        """Select waiting placements and running-job swaps for one tick."""
         resources = deepcopy(snapshot.resources)
         problems = build_placement_problems(
             snapshot.waiting_jobs,
@@ -356,19 +359,17 @@ class ContextualBanditPlannerDriver:
             self.benchmark_name,
             self.benchmark_job_ids,
             self.config_policy,
+            running_jobs=snapshot.running_jobs,
         )
         capacities = capacity_limits(resources)
         selected = dict(self._select_placements(problems, capacities))
         validate_selection(problems, selected, capacities)
+        problems_by_id = {problem.job_id: problem for problem in problems}
 
-        actions: list[dict[str, object]] = []
-        for running in snapshot.running_jobs:
-            actions.append({"job_id": running["job_id"], "type": "keep"})
-        for problem in problems:
+        def selected_plan(problem: PlacementProblem) -> dict[str, object] | None:
             candidate = selected.get(problem.job_id)
             if candidate is None:
-                actions.append({"job_id": problem.job_id, "type": "defer"})
-                continue
+                return None
             plan = self._build_place_plan(
                 problem,
                 candidate,
@@ -379,9 +380,26 @@ class ContextualBanditPlannerDriver:
                 candidate,
                 snapshot.model_catalogs,
                 self.config_policy,
+                action_type=problem.action_type,
             )
-            reserve_vram_placement(candidate.target, candidate.gpu_count)
-            actions.append(plan)
+            reserve_vram_placement(
+                candidate.target,
+                candidate.gpu_count,
+                candidate.dp,
+            )
+            return plan
+
+        actions: list[dict[str, object]] = []
+        for running in snapshot.running_jobs:
+            job_id = _text(running.get("job_id"), "running Store job_id")
+            problem = problems_by_id.get(job_id)
+            plan = None if problem is None else selected_plan(problem)
+            actions.append(plan or {"job_id": job_id, "type": "keep"})
+        for waiting in snapshot.waiting_jobs:
+            job_id = _text(waiting.get("job_id"), "waiting Store job_id")
+            problem = problems_by_id[job_id]
+            plan = selected_plan(problem)
+            actions.append(plan or {"job_id": job_id, "type": "defer"})
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
         _validate_complete_job_actions(snapshot, actions)
@@ -439,7 +457,7 @@ class ContextualBanditPlannerDriver:
             kind = getattr(known.get("kind"), "value", known.get("kind"))
             self._pending[problem.job_id] = _PendingObservation(
                 features=features,
-                rank_id=rank_id(known),
+                rank_id=problem.rank_id or rank_id(known),
                 window_start=self._feedback_start,
                 required_tps=_target_tps(known),
                 is_batch=kind == "batch",
@@ -454,13 +472,18 @@ class ContextualBanditPlannerDriver:
         candidate: PlacementCandidate,
         model_catalogs: Mapping[str, Mapping[str, Any]],
     ) -> dict[str, object]:
-        """Build a policy-compliant single-rank placement plan."""
+        """Build a policy-compliant placement or swap plan."""
+        pending = self._pending.get(candidate.job_id)
         return build_contextual_bandit_plan(
             problem.store_job,
             candidate,
             model_catalogs,
             self.config_policy,
-            rank_name=self._pending[candidate.job_id].rank_id,
+            rank_name=(
+                getattr(problem, "rank_id", None)
+                or (None if pending is None else pending.rank_id)
+            ),
+            action_type=getattr(problem, "action_type", "place"),
         )
 
     def observe_results(
@@ -519,13 +542,22 @@ def build_placement_problems(
     benchmark_name: str,
     benchmark_job_ids: Mapping[str, str],
     config_policy: ConfigPolicy,
+    *,
+    running_jobs: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[PlacementProblem, ...]:
-    """Build feasible static candidates for every waiting Store job."""
+    """Build feasible static candidates for waiting jobs and running swaps."""
     requirements = VRAM_REQUIREMENTS_GIB.get(benchmark_name, {})
     problems = []
-    for waiting in waiting_jobs:
-        store_job = dict(waiting)
-        job_id = _text(store_job.get("job_id"), "waiting Store job_id")
+
+    def add_problem(
+        job: Mapping[str, Any],
+        *,
+        action_type: str,
+        rank_name: str | None = None,
+        active_rank: Mapping[str, Any] | None = None,
+    ) -> None:
+        store_job = dict(job)
+        job_id = _text(store_job.get("job_id"), "Store job_id")
         known = _known_job_fields(store_job)
         benchmark_job_id = benchmark_job_ids.get(job_id, job_id)
         required_vram_gib = _required_vram_gib(
@@ -543,6 +575,12 @@ def build_placement_problems(
                 resources,
                 config_policy,
             )
+            if active_rank is not None:
+                candidates = tuple(
+                    candidate
+                    for candidate in candidates
+                    if not _matches_active_shape(candidate, active_rank)
+                )
         priority_class, priority = _priority(known)
         problems.append(
             PlacementProblem(
@@ -551,9 +589,67 @@ def build_placement_problems(
                 priority_class=priority_class,
                 store_job=store_job,
                 candidates=candidates,
+                action_type=action_type,
+                rank_id=rank_name,
             )
         )
+
+    for waiting in waiting_jobs:
+        add_problem(waiting, action_type="place")
+    for running in running_jobs:
+        rank_name = active_rank_id(running)
+        if rank_name is None:
+            continue
+        active_rank = _active_rank(running, rank_name)
+        add_problem(
+            running,
+            action_type="swap",
+            rank_name=rank_name,
+            active_rank=active_rank,
+        )
     return tuple(problems)
+
+
+def _active_rank(
+    running_job: Mapping[str, Any],
+    rank_name: str,
+) -> Mapping[str, Any] | None:
+    """Return the sole active rank payload selected for a running-job swap."""
+    active_ranks = running_job.get("active_ranks")
+    if not isinstance(active_ranks, list):
+        return None
+    for active_rank in active_ranks:
+        if isinstance(active_rank, Mapping) and active_rank.get("rank_id") == rank_name:
+            return active_rank
+    return None
+
+
+def _matches_active_shape(
+    candidate: PlacementCandidate,
+    active_rank: Mapping[str, Any],
+) -> bool:
+    """Return whether a candidate would leave the active physical shape unchanged."""
+    shape = active_rank.get("shape_json")
+    if not isinstance(shape, Mapping):
+        return False
+    environment = shape.get("env") or shape.get("pool_id")
+    if isinstance(environment, str):
+        environment = environment.split("|")
+    if not isinstance(environment, (list, tuple)):
+        return False
+    expected = {
+        "instance_type": candidate.target.instance_type,
+        "gpu_type": candidate.target.gpu_type,
+        "gpu_count": candidate.gpu_count,
+        "count": candidate.gpu_count,
+        "tp": candidate.tp,
+        "pp": candidate.pp,
+    }
+    return (
+        list(environment) == candidate.target.environment_key.split("|")
+        and active_rank.get("n_replicas") == candidate.dp
+        and all(shape.get(key) == value for key, value in expected.items())
+    )
 
 
 def enumerate_candidates(
@@ -578,35 +674,41 @@ def enumerate_candidates(
             pp = math.ceil(minimum_gpus / tp)
             if not rule.allows_parallelism(tp, pp):
                 continue
+            per_replica_gpu_count = tp * pp
             dp = 1
-            gpu_count = tp * pp * dp
-            footprint = _target_footprint(target, gpu_count)
-            if footprint is None or footprint > _target_available(target):
-                continue
-            candidate_id = (
-                f"{target.environment_key}::{target.instance_type or 'aggregate'}::"
-                f"tp{tp}-pp{pp}-dp{dp}"
-            )
-            candidates.append(
-                PlacementCandidate(
-                    candidate_id=candidate_id,
-                    job_id=job_id,
-                    target=target,
-                    tp=tp,
-                    pp=pp,
-                    dp=dp,
-                    footprint=footprint,
-                    memory_gib=memory_gib,
-                    required_vram_gib=required_vram_gib,
-                    model_weight_gib=_model_weight_gib(
-                        model_id,
-                        rule.precision,
-                        required_vram_gib,
-                    ),
-                    kv_demand=_kv_demand(model_id, rule.precision, known),
-                    price_per_hour=_placement_price(target, footprint),
+            while True:
+                footprint = _target_footprint(
+                    target,
+                    per_replica_gpu_count,
+                    dp,
                 )
-            )
+                if footprint is None or footprint > _target_available(target):
+                    break
+                candidate_id = (
+                    f"{target.environment_key}::{target.instance_type or 'aggregate'}::"
+                    f"tp{tp}-pp{pp}-dp{dp}"
+                )
+                candidates.append(
+                    PlacementCandidate(
+                        candidate_id=candidate_id,
+                        job_id=job_id,
+                        target=target,
+                        tp=tp,
+                        pp=pp,
+                        dp=dp,
+                        footprint=footprint,
+                        memory_gib=memory_gib,
+                        required_vram_gib=required_vram_gib,
+                        model_weight_gib=_model_weight_gib(
+                            model_id,
+                            rule.precision,
+                            required_vram_gib,
+                        ),
+                        kv_demand=_kv_demand(model_id, rule.precision, known),
+                        price_per_hour=_placement_price(target, footprint),
+                    )
+                )
+                dp += 1
     return tuple(sorted(candidates, key=lambda candidate: candidate.candidate_id))
 
 
@@ -658,8 +760,11 @@ def build_contextual_bandit_plan(
     config_policy: ConfigPolicy,
     *,
     rank_name: str | None = None,
+    action_type: str = "place",
 ) -> dict[str, object]:
-    """Return one complete contextual-bandit placement plan."""
+    """Return one complete contextual-bandit placement or swap plan."""
+    if action_type not in {"place", "swap"}:
+        raise ValueError("contextual bandit action type must be place or swap")
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
     try:
@@ -673,9 +778,10 @@ def build_contextual_bandit_plan(
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
     if rule is None or not rule.allows_parallelism(candidate.tp, candidate.pp):
         raise ValueError("contextual bandit selected a policy-invalid placement")
+    per_replica_gpu_count = candidate.gpu_count
     return {
         "job_id": candidate.job_id,
-        "type": "place",
+        "type": action_type,
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
@@ -690,15 +796,15 @@ def build_contextual_bandit_plan(
                     "precision": rule.precision,
                     "instance_type": candidate.target.instance_type,
                     "gpu_type": candidate.target.gpu_type,
-                    "gpu_count": candidate.gpu_count,
-                    "count": candidate.gpu_count,
+                    "gpu_count": per_replica_gpu_count,
+                    "count": per_replica_gpu_count,
                     "tp": candidate.tp,
                     "pp": candidate.pp,
                     "dp": candidate.dp,
                     "ep": known.get("ep") or 1,
                     "rank_traffic_share": 1.0,
                 },
-                "n_replicas": 1,
+                "n_replicas": candidate.dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],
@@ -710,8 +816,10 @@ def verify_place_plan(
     candidate: PlacementCandidate,
     model_catalogs: Mapping[str, Mapping[str, Any]],
     config_policy: ConfigPolicy,
+    *,
+    action_type: str | None = None,
 ) -> None:
-    """Verify one complete per-job placement plan before it is returned."""
+    """Verify one complete per-job placement or swap plan before returning it."""
     required_plan_keys = {
         "job_id",
         "type",
@@ -722,7 +830,12 @@ def verify_place_plan(
     }
     if set(plan) != required_plan_keys:
         raise ValueError("placement plan has incomplete top-level fields")
-    if plan.get("job_id") != candidate.job_id or plan.get("type") != "place":
+    plan_action_type = plan.get("type")
+    if (
+        plan.get("job_id") != candidate.job_id
+        or plan_action_type not in {"place", "swap"}
+        or (action_type is not None and plan_action_type != action_type)
+    ):
         raise ValueError("placement plan has the wrong job or action type")
     ladder = plan.get("ladder")
     if not isinstance(ladder, list) or len(ladder) != 1:
@@ -742,8 +855,8 @@ def verify_place_plan(
         raise ValueError("placement ladder rank has incomplete fields")
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
-    if rank.get("n_replicas") != 1:
-        raise ValueError("placement plan must use one replica group")
+    if rank.get("n_replicas") != candidate.dp:
+        raise ValueError("placement plan has the wrong replica count")
     config = rank.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("placement ladder config must be an object")
@@ -806,7 +919,10 @@ def _features(
     known = _known_job_fields(problem.store_job)
     available = min(remaining[key] for key in candidate.capacity_keys)
     capacity_share = candidate.footprint / max(1, available)
-    memory_capacity = max(1.0, candidate.memory_gib * candidate.gpu_count)
+    memory_capacity = max(
+        1.0,
+        candidate.memory_gib * candidate.gpu_count * candidate.dp,
+    )
     latency_tightness = max(
         _tightness(known.get("target_p99_ttft_ms")),
         _tightness(known.get("target_p99_tpot_ms")),
@@ -1080,14 +1196,14 @@ def _tick_rationale(
     actions: Sequence[Mapping[str, object]],
 ) -> str:
     """Summarize one baseline's deterministic action set."""
-    counts = {"place": 0, "defer": 0, "keep": 0, "preempt": 0}
+    counts = {"place": 0, "swap": 0, "defer": 0, "keep": 0, "preempt": 0}
     for action in actions:
         action_type = action.get("type")
         if action_type in counts:
             counts[action_type] += 1
     return (
         f"{method_name} cluster simulator tick {tick_number}: "
-        f"place={counts['place']}, defer={counts['defer']}, "
+        f"place={counts['place']}, swap={counts['swap']}, defer={counts['defer']}, "
         f"keep={counts['keep']}, preempt={counts['preempt']}."
     )
 

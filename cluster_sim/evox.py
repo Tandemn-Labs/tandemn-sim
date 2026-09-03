@@ -18,7 +18,7 @@ from typing import Any, Protocol, cast
 from llm_usage import LlmUsage, OpenAIUsageClient
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
-from rank_ids import rank_id
+from rank_ids import active_rank_id, rank_id
 from vram import (
     _HARDWARE_MEMORY_GIB,
     MODEL_ARCHITECTURES,
@@ -74,19 +74,24 @@ online for the current simulator control tick.
 Return a usable program within the strict five-minute planning budget.
 
 Improve only compute_placement(payload). The input uses schema
-tandemn-evox-placement/v1 and contains public static facts: jobs, each job's
+tandemn-evox-placement/v2 and contains public static facts: jobs, each job's
+lifecycle, active rank identity and current deployment when it is running,
 priority and feasible policy-compliant candidates, and nested resource
-capacities. Each candidate includes its exact capacity consumption, GPU shape,
-VRAM demand, model-weight memory, estimated KV demand, and hourly price.
-The model_catalog contains authoritative Store runtime and weight configuration
-resolved for each candidate model and exact target GPU. Use it as supplementary
-model workload context, but return only candidate IDs.
+capacities. Each candidate includes exact capacity consumption, its per-replica
+GPU shape, replica count, total reservation footprint, VRAM demand,
+model-weight memory, estimated KV demand, and hourly price. The model_catalog
+contains authoritative Store runtime and weight configuration resolved for each
+candidate model and exact target GPU. Use it as supplementary model workload
+context, but return only candidate IDs.
 
 Return {"placements": [{"job_id": str, "candidate_id": str | null}, ...]} with
 exactly one entry for every input job. A non-null candidate must belong to that
-job. Across selected candidates, consumption for every capacity key must not
-exceed its available value. The program must be deterministic, self-contained,
-side-effect free, and use no third-party packages or hidden runtime state.
+job. Lifecycle maps the compact protocol to Store actions: a waiting job maps
+candidate/null to place/defer, and a running job maps candidate/null to
+swap/keep. A swap always retains the supplied active_rank_id. Across selected
+candidates, consumption for every capacity key must not exceed its available
+value. The program must be deterministic, self-contained, side-effect free,
+and use no third-party packages or hidden runtime state.
 
 The evaluator rejects malformed or infeasible output and exposes a
 larger-is-better combined_score. Preserve high-priority admission before
@@ -156,7 +161,7 @@ class StoreSnapshot:
 
 @dataclass(frozen=True)
 class PlacementCandidate:
-    """Represent one policy-compliant placement for a waiting EvoX job."""
+    """Represent one policy-compliant placement or swap configuration."""
 
     candidate_id: str
     job_id: str
@@ -174,8 +179,8 @@ class PlacementCandidate:
 
     @property
     def gpu_count(self) -> int:
-        """Return the logical accelerator count in the serving shape."""
-        return self.tp * self.pp * self.dp
+        """Return the accelerator count for each serving replica."""
+        return self.tp * self.pp
 
     @property
     def target_id(self) -> str:
@@ -194,7 +199,7 @@ class PlacementCandidate:
 
 @dataclass(frozen=True)
 class PlacementProblem:
-    """Hold public facts and feasible placements for one waiting EvoX job."""
+    """Hold public facts and feasible placements for one Store job."""
 
     job_id: str
     model_id: str
@@ -202,6 +207,18 @@ class PlacementProblem:
     priority_class: str
     store_job: dict[str, Any]
     candidates: tuple[PlacementCandidate, ...]
+    action_type: str = "place"
+    rank_id: str | None = None
+
+    @property
+    def lifecycle(self) -> str:
+        """Return the Store lifecycle represented by this placement problem."""
+        return "running" if self.action_type == "swap" else "waiting"
+
+    @property
+    def active_rank_id(self) -> str | None:
+        """Return the rank identity which a running-job swap must retain."""
+        return self.rank_id
 
 
 class JobStoreClient(Protocol):
@@ -520,10 +537,11 @@ class EvoxPlannerDriver:
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
         paused = tuple(self.job_store.paused_jobs(self.user_id))
+        running_jobs = tuple(_running_job_payload(job) for job in running)
         waiting_jobs = tuple(_model_payload(job) for job in waiting)
         model_ids = {
             _required_text(_known_job_fields(job).get("model_id"), "model_id")
-            for job in waiting_jobs
+            for job in (*running_jobs, *waiting_jobs)
         }
         model_catalogs = {}
         for model_id in sorted(model_ids):
@@ -533,7 +551,7 @@ class EvoxPlannerDriver:
             model_catalogs[model_id] = _model_payload(catalog)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
-            running_jobs=tuple(_running_job_payload(job) for job in running),
+            running_jobs=running_jobs,
             waiting_jobs=waiting_jobs,
             paused_jobs=tuple(_model_payload(job) for job in paused),
             finished_jobs=(),
@@ -541,7 +559,7 @@ class EvoxPlannerDriver:
         )
 
     def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
-        """Select waiting placements and include every lifecycle action."""
+        """Select waiting placements and eligible running-job swaps."""
         resources = deepcopy(snapshot.resources)
         problems = build_placement_problems(
             snapshot.waiting_jobs,
@@ -550,23 +568,42 @@ class EvoxPlannerDriver:
             self.benchmark_job_ids,
             self.config_policy,
             snapshot.model_catalogs,
+            running_jobs=snapshot.running_jobs,
         )
         capacities = capacity_limits(resources)
         selected = dict(self._select_placements(problems, capacities))
         validate_selection(problems, selected, capacities)
+        problems_by_id = {problem.job_id: problem for problem in problems}
+
+        def selected_plan(problem: PlacementProblem) -> dict[str, object] | None:
+            candidate = selected.get(problem.job_id)
+            if candidate is None:
+                return None
+            plan = self._build_place_plan(problem, candidate)
+            verify_place_plan(
+                plan,
+                candidate,
+                self.config_policy,
+                action_type=problem.action_type,
+                rank_name=problem.rank_id,
+            )
+            reserve_vram_placement(
+                candidate.target,
+                candidate.gpu_count,
+                candidate.dp,
+            )
+            return plan
 
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
-            actions.append({"job_id": running["job_id"], "type": "keep"})
-        for problem in problems:
-            candidate = selected.get(problem.job_id)
-            if candidate is None:
-                actions.append({"job_id": problem.job_id, "type": "defer"})
-                continue
-            plan = self._build_place_plan(problem, candidate)
-            verify_place_plan(plan, candidate, self.config_policy)
-            reserve_vram_placement(candidate.target, candidate.gpu_count)
-            actions.append(plan)
+            job_id = _required_text(running.get("job_id"), "running Store job_id")
+            problem = problems_by_id.get(job_id)
+            plan = None if problem is None else selected_plan(problem)
+            actions.append(plan or {"job_id": job_id, "type": "keep"})
+        for waiting in snapshot.waiting_jobs:
+            job_id = _required_text(waiting.get("job_id"), "waiting Store job_id")
+            plan = selected_plan(problems_by_id[job_id])
+            actions.append(plan or {"job_id": job_id, "type": "defer"})
         for paused in snapshot.paused_jobs:
             actions.append({"job_id": paused["job_id"], "type": "defer"})
         _validate_complete_job_actions(snapshot, actions)
@@ -592,12 +629,14 @@ class EvoxPlannerDriver:
         problem: PlacementProblem,
         candidate: PlacementCandidate,
     ) -> dict[str, object]:
-        """Build EvoX's complete per-job placement plan."""
+        """Build EvoX's complete per-job placement or swap plan."""
         return build_evox_plan(
             problem.store_job,
             candidate,
             self.backend,
             self.config_policy,
+            action_type=problem.action_type,
+            rank_name=problem.rank_id,
         )
 
 
@@ -606,23 +645,31 @@ def build_evox_plan(
     candidate: PlacementCandidate,
     backend: str,
     config_policy: ConfigPolicy,
+    *,
+    action_type: str = "place",
+    rank_name: str | None = None,
 ) -> dict[str, object]:
-    """Return one complete online-EvoX placement plan."""
+    """Return one complete online-EvoX placement or swap plan."""
+    if action_type not in {"place", "swap"}:
+        raise ValueError("EvoX action type must be place or swap")
+    if action_type == "swap" and rank_name is None:
+        raise ValueError("EvoX swaps require the active rank ID")
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
     if rule is None or not rule.allows_parallelism(candidate.tp, candidate.pp):
         raise ValueError("EvoX selected a policy-invalid placement")
+    per_replica_gpu_count = candidate.gpu_count
     return {
         "job_id": candidate.job_id,
-        "type": "place",
+        "type": action_type,
         "target_tps": _target_tps(known),
         "target_p99_ttft_ms": _number(known.get("target_p99_ttft_ms")),
         "target_p99_tpot_ms": _number(known.get("target_p99_tpot_ms")),
         "ladder": [
             {
                 "role": known.get("role") or "aggregate",
-                "rank_id": rank_id(known),
+                "rank_id": rank_name if rank_name is not None else rank_id(known),
                 "env": candidate.target.environment_key.split("|"),
                 "config": {
                     **candidate.launch_config,
@@ -630,15 +677,15 @@ def build_evox_plan(
                     "precision": rule.precision,
                     "instance_type": candidate.target.instance_type,
                     "gpu_type": candidate.target.gpu_type,
-                    "gpu_count": candidate.gpu_count,
-                    "count": candidate.gpu_count,
+                    "gpu_count": per_replica_gpu_count,
+                    "count": per_replica_gpu_count,
                     "tp": candidate.tp,
                     "pp": candidate.pp,
                     "dp": candidate.dp,
                     "ep": known.get("ep") or 1,
                     "rank_traffic_share": 1.0,
                 },
-                "n_replicas": 1,
+                "n_replicas": candidate.dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],
@@ -652,13 +699,22 @@ def build_placement_problems(
     benchmark_job_ids: Mapping[str, str],
     config_policy: ConfigPolicy,
     model_catalogs: Mapping[str, Mapping[str, Any]],
+    *,
+    running_jobs: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[PlacementProblem, ...]:
-    """Build feasible EvoX candidates for every waiting Store job."""
+    """Build feasible EvoX candidates for waiting jobs and running swaps."""
     requirements = VRAM_REQUIREMENTS_GIB.get(benchmark_name, {})
     problems = []
-    for waiting in waiting_jobs:
-        store_job = dict(waiting)
-        job_id = _required_text(store_job.get("job_id"), "waiting Store job_id")
+
+    def add_problem(
+        job: Mapping[str, Any],
+        *,
+        action_type: str,
+        rank_name: str | None = None,
+        active_rank: Mapping[str, Any] | None = None,
+    ) -> None:
+        store_job = dict(job)
+        job_id = _required_text(store_job.get("job_id"), "Store job_id")
         known = _known_job_fields(store_job)
         benchmark_job_id = benchmark_job_ids.get(job_id, job_id)
         model_id = _required_text(known.get("model_id"), "model_id")
@@ -681,6 +737,12 @@ def build_placement_problems(
                 config_policy,
                 model_catalog,
             )
+            if active_rank is not None:
+                candidates = tuple(
+                    candidate
+                    for candidate in candidates
+                    if not _matches_active_shape(candidate, active_rank)
+                )
         priority_class, priority = _priority(known)
         problems.append(
             PlacementProblem(
@@ -690,9 +752,90 @@ def build_placement_problems(
                 priority_class=priority_class,
                 store_job=store_job,
                 candidates=candidates,
+                action_type=action_type,
+                rank_id=rank_name,
             )
         )
+
+    for waiting in waiting_jobs:
+        add_problem(waiting, action_type="place")
+    for running in running_jobs:
+        rank_name = active_rank_id(running)
+        if rank_name is None:
+            continue
+        add_problem(
+            running,
+            action_type="swap",
+            rank_name=rank_name,
+            active_rank=_active_rank(running, rank_name),
+        )
     return tuple(problems)
+
+
+def _active_rank(
+    running_job: Mapping[str, Any],
+    rank_name: str,
+) -> Mapping[str, Any] | None:
+    """Return the sole active rank payload selected for a running-job swap."""
+    active_ranks = running_job.get("active_ranks")
+    if not isinstance(active_ranks, list):
+        return None
+    for active_rank in active_ranks:
+        if isinstance(active_rank, Mapping) and active_rank.get("rank_id") == rank_name:
+            return active_rank
+    return None
+
+
+def _matches_active_shape(
+    candidate: PlacementCandidate,
+    active_rank: Mapping[str, Any],
+) -> bool:
+    """Return whether a candidate would leave active physical capacity unchanged."""
+    shape = active_rank.get("shape_json")
+    if not isinstance(shape, Mapping):
+        return False
+    environment = shape.get("env") or shape.get("pool_id")
+    if isinstance(environment, str):
+        environment = environment.split("|")
+    if not isinstance(environment, (list, tuple)):
+        return False
+    return (
+        list(environment) == candidate.target.environment_key.split("|")
+        and shape.get("instance_type") == candidate.target.instance_type
+        and shape.get("count", shape.get("gpu_count")) == candidate.gpu_count
+        and shape.get("tp") == candidate.tp
+        and shape.get("pp") == candidate.pp
+        and active_rank.get("n_replicas") == candidate.dp
+    )
+
+
+def _current_deployment(problem: PlacementProblem) -> dict[str, object] | None:
+    """Expose the active rank's physical shape for a running EvoX problem."""
+    if problem.rank_id is None:
+        return None
+    active_rank = _active_rank(problem.store_job, problem.rank_id)
+    if active_rank is None:
+        return None
+    shape = active_rank.get("shape_json")
+    if not isinstance(shape, Mapping):
+        return None
+    environment = shape.get("env") or shape.get("pool_id")
+    if isinstance(environment, (list, tuple)):
+        environment = "|".join(str(value) for value in environment)
+    if not isinstance(environment, str):
+        return None
+    return {
+        "rank_id": problem.rank_id,
+        "environment": environment,
+        "instance_type": shape.get("instance_type"),
+        "gpu_type": shape.get("gpu_type") or environment.split("|")[-1],
+        "gpu_count": shape.get("gpu_count", shape.get("count")),
+        "count": shape.get("count"),
+        "tp": shape.get("tp"),
+        "pp": shape.get("pp"),
+        "dp": shape.get("dp"),
+        "n_replicas": active_rank.get("n_replicas"),
+    }
 
 
 def enumerate_candidates(
@@ -719,36 +862,42 @@ def enumerate_candidates(
             pp = math.ceil(minimum_gpus / tp)
             if not rule.allows_parallelism(tp, pp):
                 continue
+            per_replica_gpu_count = tp * pp
             dp = 1
-            gpu_count = tp * pp * dp
-            footprint = _target_footprint(target, gpu_count)
-            if footprint is None or footprint > _target_available(target):
-                continue
-            candidate_id = (
-                f"{target.environment_key}::{target.instance_type or 'aggregate'}::"
-                f"tp{tp}-pp{pp}-dp{dp}"
-            )
-            candidates.append(
-                PlacementCandidate(
-                    candidate_id=candidate_id,
-                    job_id=job_id,
-                    target=target,
-                    tp=tp,
-                    pp=pp,
-                    dp=dp,
-                    footprint=footprint,
-                    memory_gib=memory_gib,
-                    required_vram_gib=required_vram_gib,
-                    model_weight_gib=_model_weight_gib(
-                        model_id,
-                        rule.precision,
-                        required_vram_gib,
-                    ),
-                    kv_demand=_kv_demand(model_id, rule.precision, known),
-                    price_per_hour=_placement_price(target, footprint),
-                    launch_config=launch_config,
+            while True:
+                footprint = _target_footprint(
+                    target,
+                    per_replica_gpu_count,
+                    dp,
                 )
-            )
+                if footprint is None or footprint > _target_available(target):
+                    break
+                candidate_id = (
+                    f"{target.environment_key}::{target.instance_type or 'aggregate'}::"
+                    f"tp{tp}-pp{pp}-dp{dp}"
+                )
+                candidates.append(
+                    PlacementCandidate(
+                        candidate_id=candidate_id,
+                        job_id=job_id,
+                        target=target,
+                        tp=tp,
+                        pp=pp,
+                        dp=dp,
+                        footprint=footprint,
+                        memory_gib=memory_gib,
+                        required_vram_gib=required_vram_gib,
+                        model_weight_gib=_model_weight_gib(
+                            model_id,
+                            rule.precision,
+                            required_vram_gib,
+                        ),
+                        kv_demand=_kv_demand(model_id, rule.precision, known),
+                        price_per_hour=_placement_price(target, footprint),
+                        launch_config=launch_config,
+                    )
+                )
+                dp += 1
     return tuple(sorted(candidates, key=lambda candidate: candidate.candidate_id))
 
 
@@ -835,8 +984,11 @@ def verify_place_plan(
     plan: Mapping[str, object],
     candidate: PlacementCandidate,
     config_policy: ConfigPolicy,
+    *,
+    action_type: str | None = None,
+    rank_name: str | None = None,
 ) -> None:
-    """Verify one complete per-job placement plan before it is returned."""
+    """Verify one complete per-job placement or swap plan before returning it."""
     required_plan_keys = {
         "job_id",
         "type",
@@ -847,7 +999,12 @@ def verify_place_plan(
     }
     if set(plan) != required_plan_keys:
         raise ValueError("placement plan has incomplete top-level fields")
-    if plan.get("job_id") != candidate.job_id or plan.get("type") != "place":
+    plan_action_type = plan.get("type")
+    if (
+        plan.get("job_id") != candidate.job_id
+        or plan_action_type not in {"place", "swap"}
+        or (action_type is not None and plan_action_type != action_type)
+    ):
         raise ValueError("placement plan has the wrong job or action type")
     ladder = plan.get("ladder")
     if not isinstance(ladder, list) or len(ladder) != 1:
@@ -867,8 +1024,10 @@ def verify_place_plan(
         raise ValueError("placement ladder rank has incomplete fields")
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
-    if rank.get("n_replicas") != 1:
-        raise ValueError("placement plan must use one replica group")
+    if rank_name is not None and rank.get("rank_id") != rank_name:
+        raise ValueError("swap plan does not retain the active rank ID")
+    if rank.get("n_replicas") != candidate.dp:
+        raise ValueError("placement plan has the wrong replica count")
     config = rank.get("config")
     if not isinstance(config, Mapping):
         raise ValueError("placement ladder config must be an object")
@@ -892,6 +1051,7 @@ def verify_place_plan(
         "gpu_type": candidate.target.gpu_type,
         "instance_type": candidate.target.instance_type,
         "gpu_count": candidate.gpu_count,
+        "count": candidate.gpu_count,
         "tp": candidate.tp,
         "pp": candidate.pp,
         "dp": candidate.dp,
@@ -938,6 +1098,8 @@ def build_evox_payload(
                     "pp": candidate.pp,
                     "dp": candidate.dp,
                     "gpu_count": candidate.gpu_count,
+                    "count": candidate.gpu_count,
+                    "n_replicas": candidate.dp,
                     "footprint": candidate.footprint,
                     "memory_gib": candidate.memory_gib,
                     "required_vram_gib": candidate.required_vram_gib,
@@ -953,13 +1115,16 @@ def build_evox_payload(
             {
                 "job_id": problem.job_id,
                 "model_id": problem.model_id,
+                "lifecycle": problem.lifecycle,
+                "active_rank_id": problem.active_rank_id,
+                "current_deployment": _current_deployment(problem),
                 "priority": problem.priority,
                 "priority_class": problem.priority_class,
                 "candidates": candidates,
             }
         )
     return {
-        "schema_version": "tandemn-evox-placement/v1",
+        "schema_version": "tandemn-evox-placement/v2",
         "capacities": [
             {"capacity_id": key, "available": value}
             for key, value in sorted(capacities.items())

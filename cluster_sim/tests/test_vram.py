@@ -25,9 +25,11 @@ from vram import (
     StoreSnapshot,
     VramPlannerDriver,
     _place_action,
+    _target_footprint,
     calculate_max_vram_gib,
     generate_vram_requirements,
     model_architecture_from_huggingface,
+    reserve_vram_placement,
     select_vram_placement,
 )
 
@@ -349,6 +351,31 @@ class VramPlannerDriverTest(unittest.TestCase):
         )
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 1)
         self.assertEqual(cluster["nodes"][0]["num_instances"], 4)
+
+    def test_instance_pool_reservation_charges_each_data_parallel_replica(self) -> None:
+        """Reserve one complete instance for every independently launched replica."""
+        pool = {
+            "instance_type": "p5.48xlarge",
+            "gpus_per_instance": 8,
+            "total": 24,
+            "free": 24,
+        }
+        environment = {"free": 24, "pools": [pool]}
+        target = ResourceTarget(
+            environment_key="reserved|aws|us-east|use1-az1|H100",
+            environment=environment,
+            pool=pool,
+            gpu_type="H100",
+            instance_type="p5.48xlarge",
+        )
+
+        self.assertEqual(_target_footprint(target, 2, 3), 24)
+        self.assertIsNone(_target_footprint(target, 9, 1))
+
+        reserve_vram_placement(target, 2, 3)
+
+        self.assertEqual(environment["free"], 0)
+        self.assertEqual(pool["free"], 0)
 
     def test_terminal_jobs_produce_no_actions(self) -> None:
         """Keep terminal jobs out of future placement plans."""
