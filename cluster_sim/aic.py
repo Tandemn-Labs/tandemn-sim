@@ -21,9 +21,7 @@ from models import CreatedPlan, PlannerResult, Scenario
 from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
-_AIC_CANDIDATE_LIMIT = 10
-_AIC_FALLBACK_MODES = ("HYBRID", "EMPIRICAL", "SOL")
-_AIC_PROFILE_BACKENDS = (("vllm", "0.22.0"), ("sglang", "0.5.14"))
+_AIC_CANDIDATE_LIMIT = 1000 
 _A10G_PROFILE_FALLBACK_SYSTEMS = ("l40s", "a100_sxm", "h100_sxm", "h200_sxm")
 _AIC_SYSTEM_ALIASES = {
     "h100": "h100_sxm",
@@ -455,19 +453,9 @@ def _evaluate_job(
 
 
 def _aic_requests(request: AicRequest) -> tuple[AicRequest, ...]:
-    """Return the normal AIC request followed by estimate-only fallbacks."""
-    attempts = [request]
-    for database_mode in _AIC_FALLBACK_MODES:
-        for backend, backend_version in _AIC_PROFILE_BACKENDS:
-            attempt = replace(
-                request,
-                database_mode=database_mode,
-                backend=backend,
-                backend_version=backend_version,
-            )
-            if attempt not in attempts:
-                attempts.append(attempt)
-    return tuple(attempts)
+    """Return the normal request followed by one same-backend estimate."""
+    empirical = replace(request, database_mode="EMPIRICAL")
+    return (request,) if empirical == request else (request, empirical)
 
 
 def _build_aic_request(
@@ -577,7 +565,6 @@ def _place_action(
     """Combine deterministic job fields with one AIC placement."""
     known = _known_job_fields(store_job)
     per_replica_gpu_count = placement.tp * placement.pp
-    effective_dp = placement.replicas * placement.dp
     rank_config: dict[str, object] = {
         "model_id": known.get("model_id"),
         "engine_name": known.get("engine_name") or backend,
@@ -587,7 +574,7 @@ def _place_action(
         "count": per_replica_gpu_count,
         "tp": placement.tp,
         "pp": placement.pp,
-        "dp": effective_dp,
+        "dp": placement.dp,
         "ep": known.get("ep") or 1,
         "max_num_seq": placement.max_num_seq,
         "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
@@ -607,7 +594,7 @@ def _place_action(
                 "rank_id": rank_id(known),
                 "env": placement.target.environment_key.split("|"),
                 "config": rank_config,
-                "n_replicas": effective_dp,
+                "n_replicas": placement.replicas * placement.dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],
