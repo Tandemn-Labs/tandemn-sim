@@ -21,7 +21,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import yaml
 from tandemn_system_data.clients import JobStore, PostgresClient
-from tandemn_system_data.models import JobStatus, ReasonCode
+from tandemn_system_data.models import JobStatus
 
 from data_generation.controller import (
     BENCHMARKS_ROOT,
@@ -37,9 +37,10 @@ _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def stable_store_id(benchmark_id: str, job_name: str) -> str:
-    raw = b"\x00" * 6 + uuid5(
-        NAMESPACE_URL, f"tandemn-sim:{benchmark_id}:{job_name}"
-    ).bytes[:10]
+    raw = (
+        b"\x00" * 6
+        + uuid5(NAMESPACE_URL, f"tandemn-sim:{benchmark_id}:{job_name}").bytes[:10]
+    )
     value = int.from_bytes(raw, "big")
     return "".join(
         _CROCKFORD_BASE32[(value >> shift) & 31] for shift in range(125, -1, -5)
@@ -124,8 +125,6 @@ class StoreView(Protocol):
 
     def list_jobs(self, user_ids: Sequence[str]) -> Sequence[StoreJob]: ...
 
-    def finish_job(self, job_id: str, finish_reason: str | None = None) -> bool: ...
-
 
 class PostgresStoreView:
     """Read canonical jobs from tandemn-store."""
@@ -147,17 +146,6 @@ class PostgresStoreView:
                 )
         return tuple(jobs)
 
-    def finish_job(self, job_id: str, finish_reason: str | None = None) -> bool:
-        """Finish a running Store job after its AIPerf workload exits."""
-        return bool(
-            self._jobs.transition(
-                job_id,
-                JobStatus.FINISHED,
-                [JobStatus.RUNNING],
-                finish_reason=finish_reason,
-            )
-        )
-
 
 @dataclass
 class TrackedJob:
@@ -169,6 +157,7 @@ class TrackedJob:
     store_job_id: str | None = None
     process: subprocess.Popen[bytes] | None = None
     log_file: BinaryIO | None = None
+    stop_requested: bool = False
 
 
 def load_manifest(benchmark_id: str) -> Manifest:
@@ -262,8 +251,26 @@ def run_scenario(
             for job in jobs:
                 if job.state in TERMINAL_STATES:
                     continue
+                found = (
+                    by_id.get(job.manifest.job_id)
+                    or by_id.get(
+                        stable_store_id(manifest.benchmark_id, job.manifest.job_id)
+                    )
+                    or by_name.get(job.manifest.job_id)
+                )
                 if job.state == State.LOADING:
-                    _poll_process(job, store, events)
+                    _poll_process(job, events)
+                    if (
+                        job.state == State.LOADING
+                        and found is not None
+                        and found.status == JobStatus.FINISHED
+                        and not job.stop_requested
+                    ):
+                        if job.process is None:
+                            raise RuntimeError("LOADING job has no AIPerf process")
+                        job.process.terminate()
+                        job.stop_requested = True
+                        _event(job, "Store job finished; stopping AIPerf", events)
                     continue
                 if (
                     job.state == State.WAIT_READY
@@ -272,12 +279,6 @@ def run_scenario(
                 ):
                     _transition(job, State.FAILED, "router readiness timed out", events)
                     continue
-
-                found = (
-                    by_id.get(job.manifest.job_id)
-                    or by_id.get(stable_store_id(manifest.benchmark_id, job.manifest.job_id))
-                    or by_name.get(job.manifest.job_id)
-                )
                 if found is None:
                     continue
                 job.store_job_id = found.job_id
@@ -285,7 +286,7 @@ def run_scenario(
                 if found.status == JobStatus.FINISHED:
                     _transition(
                         job,
-                        State.FAILED,
+                        State.SKIPPED,
                         "job finished before router was ready",
                         events,
                     )
@@ -368,7 +369,7 @@ def _launch(
     _transition(job, State.LOADING, f"AIPerf started against {endpoint}", events)
 
 
-def _poll_process(job: TrackedJob, store: StoreView, events: TextIO) -> None:
+def _poll_process(job: TrackedJob, events: TextIO) -> None:
     """Record a completed AIPerf process."""
     if job.process is None:
         raise RuntimeError("LOADING job has no AIPerf process")
@@ -378,11 +379,7 @@ def _poll_process(job: TrackedJob, store: StoreView, events: TextIO) -> None:
     if job.log_file is not None:
         job.log_file.close()
         job.log_file = None
-    if job.store_job_id is None:
-        raise RuntimeError("LOADING job has no Store job ID")
-    finish_reason = None if exit_code == 0 else ReasonCode.PROCESS_CRASH
-    store.finish_job(job.store_job_id, finish_reason)
-    state = State.DONE if exit_code == 0 else State.FAILED
+    state = State.DONE if exit_code == 0 or job.stop_requested else State.FAILED
     _transition(job, state, f"AIPerf exited with code {exit_code}", events, exit_code)
 
 

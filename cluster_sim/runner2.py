@@ -71,6 +71,7 @@ class PlanRunner:
         self.clock = clock
         self.jobs = JobStore(postgres)
         self._submitted_jobs: set[str] = set()
+        self._finished_jobs: set[str] = set()
 
     def run(self, max_ticks: int | None = None) -> tuple[PlannerResult, ...]:
         """Create plans on the benchmark's wall-clock cadence."""
@@ -88,20 +89,17 @@ class PlanRunner:
             self.clock.advance(
                 timedelta(microseconds=self.scenario.tick_duration_ns // 1_000)
             )
-            if self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns or (
-                max_ticks is not None and tick_number >= max_ticks
-            ):
+            if max_ticks is not None and tick_number >= max_ticks:
                 break
 
             next_tick_at += self.scenario.tick_duration_ns / 1_000_000_000
             delay = max(0.0, next_tick_at - monotonic())
             LOGGER.info("next planning tick in %.1f seconds", delay)
             sleep(delay)
+            if self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns:
+                break
 
-        reached_drain = self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns
-        self._finish_submitted_jobs(
-            "SIMULATION_HARD_STOP" if reached_drain else "SIMULATION_TICK_LIMIT"
-        )
+        self._finish_jobs_due(self._offset_ns(self.clock.now()))
         return tuple(results)
 
     def run_tick(self, tick_number: int) -> PlannerResult:
@@ -113,6 +111,7 @@ class PlanRunner:
         start_offset_ns = self._offset_ns(start)
         end_offset_ns = start_offset_ns + self.scenario.tick_duration_ns
         self._submit_jobs_before(start_offset_ns + 1)
+        self._finish_jobs_due(start_offset_ns)
 
         LOGGER.info("tick %d: planning placements", tick_number)
         result = self.planner.create_plans(tick_number, start)
@@ -152,29 +151,29 @@ class PlanRunner:
         """Return elapsed logical nanoseconds from the benchmark epoch."""
         return round((timestamp - self.clock.start).total_seconds() * 1_000_000_000)
 
-    def _finish_submitted_jobs(self, reason: str) -> None:
-        """Mark Store jobs terminal so real Orca tears down their ranks."""
+    def _finish_jobs_due(self, offset_ns: int) -> None:
+        """Finish submitted jobs whose benchmark lifetime has ended."""
         from tandemn_system_data.models.enums import JobStatus
 
-        for running in self.jobs.running_jobs(self.user_id):
-            self.jobs.transition(
-                running.job.job_id,
-                JobStatus.FINISHED,
-                [JobStatus.RUNNING],
-                finish_reason=reason,
+        for job in (*self.scenario.online_jobs, *self.scenario.batch_jobs):
+            stop_at_ns = (
+                job.stops_at_ns if isinstance(job, OnlineJob) else job.hard_stop_at_ns
             )
-
-        for getter, status in (
-            (self.jobs.waiting_jobs, JobStatus.WAITING),
-            (self.jobs.paused_jobs, JobStatus.PAUSED),
-        ):
-            for job in getter(self.user_id):
-                self.jobs.transition(
-                    job.job_id,
-                    JobStatus.FINISHED,
-                    [status],
-                    finish_reason=reason,
-                )
+            if (
+                stop_at_ns > offset_ns
+                or job.name not in self._submitted_jobs
+                or job.name in self._finished_jobs
+            ):
+                continue
+            self.jobs.transition(
+                job.store_job_id,
+                JobStatus.FINISHED,
+                [JobStatus.RUNNING, JobStatus.WAITING, JobStatus.PAUSED],
+                finish_reason=(
+                    None if isinstance(job, OnlineJob) else "SIMULATION_HARD_STOP"
+                ),
+            )
+            self._finished_jobs.add(job.name)
 
 
 def _verify_store_user(user_id: str, postgres: object) -> None:
