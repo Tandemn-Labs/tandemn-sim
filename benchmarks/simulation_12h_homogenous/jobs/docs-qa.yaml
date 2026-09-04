@@ -11,7 +11,7 @@ schedule:
 spec:
   user_id: tenant_docs_qa
   optimization_goal: latency
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 7000
     isl_token_min: 1750

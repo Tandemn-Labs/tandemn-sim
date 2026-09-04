@@ -210,7 +210,7 @@ class GptPlannerDriverTest(unittest.TestCase):
             "meta-llama/Llama-3.2-1B-Instruct",
         )
         self.assertEqual(placed["ladder"][0]["config"]["tp"], 1)
-        self.assertEqual(placed["ladder"][0]["config"]["precision"], "bf16")
+        self.assertEqual(placed["ladder"][0]["config"]["precision"], "fp16")
         self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
         self.assertEqual(placed["ladder"][0]["config"]["engine_version"], "0.16.0")
         self.assertEqual(placed["ladder"][0]["config"]["max_num_seq"], 256)
@@ -276,7 +276,7 @@ class GptPlannerDriverTest(unittest.TestCase):
                     "allowed_tp": [1, 2, 4, 8],
                     "gpu_type": "H100",
                     "model_id": "meta-llama/Llama-3.2-1B-Instruct",
-                    "precision": "bf16",
+                    "precision": "fp16",
                 }
             ],
         )

@@ -132,7 +132,7 @@ class AgenticPlannerTest(unittest.TestCase):
                 ("paused", "defer"),
             ],
         )
-        self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "bf16")
+        self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "fp16")
         self.assertEqual(actions[1]["ladder"][0]["config"]["engine_version"], "0.16.0")
         self.assertEqual(actions[1]["ladder"][0]["config"]["max_num_seq"], 256)
 

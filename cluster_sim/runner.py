@@ -1170,27 +1170,14 @@ class ClusterSimulator:
         catalog,
     ) -> tuple[tuple[RankRun, ...], tuple[_RankFailure, ...]]:
         """Prepare one job's rank simulations for the tick-wide worker pool."""
-        from tandemn_system_data.clients import ModelCatalogStore
         from tandemn_system_data.models.enums import ReasonCode
 
         deployments = build_rank_deployments(running.job, running.ranks)
-        model_catalog = ModelCatalogStore(self.postgres).get(
-            running.job.spec_json["model_id"]
-        )
-        if model_catalog is None:
-            raise ValueError(
-                f"model catalog missing {running.job.spec_json['model_id']!r}"
-            )
         benchmark_job = (
             self._online_jobs.get(running.job.job_id)
             or self._batch_jobs[running.job.job_id]
         )
         for deployment in deployments:
-            deployment.shape.setdefault("weight_dtype", model_catalog.weight_dtype)
-            deployment.shape.setdefault(
-                "weight_quantization_method",
-                model_catalog.weight_quantization_method,
-            )
             deployment.shape["task"] = benchmark_job.workload.get("task", "generate")
         failures = []
         supported = []

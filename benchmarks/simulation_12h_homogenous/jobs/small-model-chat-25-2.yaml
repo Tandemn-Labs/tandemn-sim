@@ -11,7 +11,7 @@ schedule:
 spec:
   user_id: tenant_small_model
   optimization_goal: latency
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 256
     isl_token_min: 64

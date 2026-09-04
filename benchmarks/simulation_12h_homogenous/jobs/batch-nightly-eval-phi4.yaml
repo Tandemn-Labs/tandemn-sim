@@ -12,7 +12,7 @@ schedule:
 spec:
   user_id: tenant_eval_platform
   optimization_goal: throughput
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 1200
     isl_token_min: 300

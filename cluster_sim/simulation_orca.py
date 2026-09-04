@@ -7,6 +7,7 @@ import math
 import re
 from typing import Any
 
+from policy import load_config_policy, simulation_quantization
 from tandemn_system_data.clients import JobStore, PlanStore
 from tandemn_system_data.models.enums import (
     ActionType,
@@ -196,6 +197,13 @@ def ladder_to_ranks(
         shape.setdefault("engine_name", "vllm")
         if not all(shape.get(key) for key in ("instance_type", "gpu_type", "model_id")):
             continue
+        rule = load_config_policy().rule_for(
+            str(shape["gpu_type"]),
+            str(shape["model_id"]),
+        )
+        if rule is None:
+            continue
+        shape.update(simulation_quantization(rule.precision))
         ranks.append(
             Rank(
                 rank_id=rank_id,

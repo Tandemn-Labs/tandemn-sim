@@ -49,6 +49,7 @@ class LLMServingSimSmokeTest(unittest.TestCase):
                 "tp": 1,
                 "pp": 1,
                 "ep": 1,
+                "precision": "bf16",
                 "instance_type": "sim.rtxpro6000.1gpu",
                 "max_num_seq": 8,
                 "max_num_batched_tokens": 256,

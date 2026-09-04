@@ -21,11 +21,14 @@ from aic import (
     AicRequest,
     AicResult,
     AicSettings,
+    HardwareCandidate,
     NvidiaAicClient,
+    ResourceTarget,
     StoreSnapshot,
     _aic_system,
     _evaluate_aic_request,
     _evaluate_job,
+    _policy_hardware_candidates,
 )
 from models import OnlineJob, Scenario
 from serving import build_rank_cluster
@@ -187,7 +190,10 @@ class AicPlannerDriverTest(unittest.TestCase):
             [request.available_devices for request in client.requests],
             [2, 1],
         )
-        self.assertEqual(client.requests[0].model, "store-model-job_1")
+        self.assertEqual(
+            client.requests[0].model,
+            "meta-llama/Llama-3.2-1B-Instruct",
+        )
         self.assertEqual(client.requests[0].target_request_rate, 2.5)
         self.assertEqual(actions[0]["ladder"][0]["config"]["tp"], 1)
 
@@ -320,6 +326,7 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertTrue(is_valid_id(placed["ladder"][0]["rank_id"], "rank"))
         self.assertEqual(placed["ladder"][0]["config"]["count"], 1)
         self.assertEqual(placed["ladder"][0]["config"]["ep"], 1)
+        self.assertEqual(placed["ladder"][0]["config"]["precision"], "fp16")
         Plan(user_id="tenant", actions=[placed])
 
     def test_azure_a100_80gb_is_an_aic_candidate(self) -> None:
@@ -359,6 +366,22 @@ class AicPlannerDriverTest(unittest.TestCase):
         for hardware, expected in expected_systems.items():
             with self.subTest(hardware=hardware):
                 self.assertEqual(_aic_system({}, None, hardware, {}), expected)
+
+    def test_quantization_policy_filters_unsupported_gpu_without_checking_tp(self) -> None:
+        """Keep AIC on profiled GPUs while leaving parallelism to AIC."""
+        h100 = ResourceTarget("h100", "H100", None, {"free": 8}, None)
+        l40s = ResourceTarget("l40s", "L40S", None, {"free": 8}, None)
+        candidates = (
+            HardwareCandidate("h100_sxm", (h100,), 8),
+            HardwareCandidate("l40s", (l40s,), 8),
+        )
+
+        filtered = _policy_hardware_candidates(
+            candidates,
+            "moonshotai/Kimi-K2-Instruct",
+        )
+
+        self.assertEqual(filtered, (candidates[0],))
 
     def test_data_parallelism_creates_per_replica_rank_shapes(self) -> None:
         """Keep DP in replica count rather than one ServingSim rank shape."""
@@ -596,7 +619,11 @@ class SuccessContext:
 
 def _job(job_id: str) -> OnlineJob:
     """Build one scheduler-visible online job."""
-    model = "unsupported-model" if job_id == "unsupported" else "supported-model"
+    model = (
+        "unsupported-model"
+        if job_id == "unsupported"
+        else "meta-llama/Llama-3.2-1B-Instruct"
+    )
     return OnlineJob(
         name=job_id,
         store_job_id=job_id,
@@ -662,7 +689,9 @@ def _store_job(job: dict[str, object]) -> dict[str, object]:
     job_id = str(payload["job_id"])
     kind = str(payload.setdefault("kind", "online"))
     model_id = (
-        "unsupported-model" if job_id == "unsupported" else f"store-model-{job_id}"
+        "unsupported-model"
+        if job_id == "unsupported"
+        else "meta-llama/Llama-3.2-1B-Instruct"
     )
     payload["spec_json"] = {
         "model_id": model_id,
