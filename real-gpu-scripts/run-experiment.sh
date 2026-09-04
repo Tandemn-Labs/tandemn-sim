@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${LOG_DIR:?LOG_DIR is required}"
 mkdir -p -- "$LOG_DIR"
 pids=()
@@ -58,6 +59,9 @@ export TANDEMN_USER_ID="$(
 export TANDEMN_POSTGRES_URL="postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_${BENCHMARK}_${BASELINE}"
 export POSTGRES_URL="$TANDEMN_POSTGRES_URL"
 
+### Run GPU metrics collectors
+start gpu_metrics bash "$SCRIPT_DIR/collect-gpu-metrics.sh"
+
 
 ### Run orca
 start orca \
@@ -93,5 +97,5 @@ start real_scenario \
   --ready-timeout 1200
 
 
-# Stop the remaining workload when either Orca or runner2 exits.
+# Stop the remaining workloads when any managed process exits.
 wait -n "${pids[@]}"
