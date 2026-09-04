@@ -5,7 +5,7 @@
 ### Ubuntu repos
 sudo apt update
 sudo apt upgrade
-sudo apt install neovim tree git login cmake postgresql unzip file
+sudo apt install neovim tree git login cmake postgresql unzip file man-db
 
 alias psql="PGPASSWORD=tandemn psql -h localhost -p 55432 -U tandemn"
 

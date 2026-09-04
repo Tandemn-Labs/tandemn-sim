@@ -5,29 +5,64 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p -- "$LOG_DIR"
 pids=()
 
+declare -A pid_to_name=()
+
+kill_descendants() {
+    local ppid=$1
+    local signal=$2
+    local pids_file
+    for pids_file in /proc/[0-9]*/status; do
+        local cpid="${pids_file%/status}"
+        cpid="${cpid#/proc/}"
+        if [[ -r "$pids_file" ]] && grep -qFx "PPid:${ppid}" "$pids_file" 2>/dev/null; then
+            kill_descendants "$cpid" "$signal"
+        fi
+    done
+    kill "-$signal" "$ppid" 2>/dev/null || true
+}
+
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
 
     for pid in "${pids[@]:-}"; do
-        kill -TERM -- "-$pid" 2>/dev/null || true
+        kill_descendants "$pid" TERM
     done
 
     sleep 10
 
     for pid in "${pids[@]:-}"; do
-        kill -KILL -- "-$pid" 2>/dev/null || true
+        kill_descendants "$pid" KILL
     done
 
-    wait "${pids[@]}" 2>/dev/null || true
+    local failed=false
+    for pid in "${pids[@]:-}"; do
+        local ec=0
+        wait "$pid" 2>/dev/null || ec=$?
+        if [[ "$ec" != 0 && "$ec" != 143 && "$ec" != 137 && "$ec" != 127 ]]; then
+            local name=${pid_to_name[$pid]:-unknown}
+            printf '\n=== Process "%s" (PID %s) exited with code %s ===\n' "$name" "$pid" "$ec" >&2
+            if [[ -f "$LOG_DIR/$name.log" ]]; then
+                printf 'Last log lines from %s/%s.log:\n' "$LOG_DIR" "$name" >&2
+                tail -n 50 "$LOG_DIR/$name.log" >&2
+            fi
+            failed=true
+        fi
+    done
+
+    if $failed; then
+        printf '\ntandemn-sim FAILED\n' >&2
+    fi
+
     exit "$status"
 }
 
 start() {
     local name=$1
     shift
-    setsid "$@" >"$LOG_DIR/$name.log" 2>&1 &
+    setsid "$@" >"$LOG_DIR/$name.log" 2> >(tee -a "$LOG_DIR/$name.log" >&2) &
     pids+=("$!")
+    pid_to_name[$!]=$name
 }
 
 trap 'exit 130' INT
@@ -39,7 +74,7 @@ trap cleanup EXIT
 /home/user/chunk-manager/reset-chunk-manager-db.sh
 /home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
     --target "$CHUNK_MANAGER_TARGET" \
-    01ARZ3NDEKTSV4RRFFQ69G5FAV:4 \
+    0000000000ZQQJMH7ZKN9JB75S:4 \
     00000000000000000000000001:50
 
 

@@ -40,19 +40,33 @@ mkdir -p -- "$LOG_DIR"
 pids=()
 last_pid=
 
+kill_descendants() {
+    local ppid=$1
+    local signal=$2
+    local pids_file
+    for pids_file in /proc/[0-9]*/status; do
+        local cpid="${pids_file%/status}"
+        cpid="${cpid#/proc/}"
+        if [[ -r "$pids_file" ]] && grep -qFx "PPid:${ppid}" "$pids_file" 2>/dev/null; then
+            kill_descendants "$cpid" "$signal"
+        fi
+    done
+    kill "-$signal" "$ppid" 2>/dev/null || true
+}
+
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
 
     if ((${#pids[@]})); then
         for pid in "${pids[@]}"; do
-            kill -TERM -- "-$pid" 2>/dev/null || true
+            kill_descendants "$pid" TERM
         done
 
         sleep 10
 
         for pid in "${pids[@]}"; do
-            kill -KILL -- "-$pid" 2>/dev/null || true
+            kill_descendants "$pid" KILL
         done
 
         wait "${pids[@]}" 2>/dev/null || true
