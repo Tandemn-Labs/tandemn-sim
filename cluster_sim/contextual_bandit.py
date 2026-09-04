@@ -328,7 +328,6 @@ class ContextualBanditPlannerDriver:
         resource_map = self.resource_map_store.get()
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
-        paused = tuple(self.job_store.paused_jobs(self.user_id))
         running_jobs = tuple(_running_job_payload(job) for job in running)
         waiting_jobs = tuple(_model_payload(job) for job in waiting)
         model_ids = {
@@ -345,7 +344,7 @@ class ContextualBanditPlannerDriver:
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=running_jobs,
             waiting_jobs=waiting_jobs,
-            paused_jobs=tuple(_model_payload(job) for job in paused),
+            paused_jobs=(),
             finished_jobs=(),
             model_catalogs=model_catalogs,
         )
@@ -401,8 +400,6 @@ class ContextualBanditPlannerDriver:
             problem = problems_by_id[job_id]
             plan = selected_plan(problem)
             actions.append(plan or {"job_id": job_id, "type": "defer"})
-        for paused in snapshot.paused_jobs:
-            actions.append({"job_id": paused["job_id"], "type": "defer"})
         _validate_complete_job_actions(snapshot, actions)
         return actions
 
