@@ -153,16 +153,10 @@ class PlanRunner:
         return round((timestamp - self.clock.start).total_seconds() * 1_000_000_000)
 
     def _finish_submitted_jobs(self, reason: str) -> None:
-        """Leave Store jobs and ranks in terminal states when the run ends."""
-        from tandemn_system_data.models.enums import JobStatus, RankStatus
+        """Mark Store jobs terminal so real Orca tears down their ranks."""
+        from tandemn_system_data.models.enums import JobStatus
 
         for running in self.jobs.running_jobs(self.user_id):
-            for rank in running.ranks:
-                self.jobs.set_rank_status(
-                    rank.rank_id,
-                    RankStatus.STOPPED,
-                    [RankStatus.LAUNCHING, RankStatus.RUNNING],
-                )
             self.jobs.transition(
                 running.job.job_id,
                 JobStatus.FINISHED,
