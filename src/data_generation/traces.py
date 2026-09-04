@@ -14,11 +14,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import yaml
 from tandemn_system_data.clients import (
     CausalGraphStore,
     EvidenceStore,
     GpuMetricStore,
     JobStore,
+    PlanStore,
     ResourceMapStore,
 )
 from tandemn_system_data.clients.event_log import PostgresEventLog
@@ -26,7 +28,12 @@ from tandemn_system_data.models.event import Event
 from tandemn_system_data.models.gpu_metric import GpuMetric, gpu_metric_to_metrics
 from tandemn_system_data.models.rank import Rank
 
-from data_generation.trace_telemetry import rank_trajectories
+from data_generation.trace_telemetry import (
+    BATCH_COUNTER_METRICS,
+    BatchChainSamples,
+    batch_chain_samples,
+    rank_trajectories,
+)
 
 DEFAULT_COLLECTION_INTERVAL_SECONDS = 60
 DEFAULT_TICK_HOLDBACK_SECONDS = 60
@@ -266,6 +273,20 @@ class RealTraceCollector:
         self._aiperf_request_ids: dict[str, set[str]] = {}
         self._aiperf_records_by_window: dict[tuple[int, str], list[AIPerfRequest]] = {}
         self._gpu_metric_ids: set[str] = set()
+        self._batch_definitions: dict[str, tuple[int, int, int]] = {}
+        self._batch_raw_counters: dict[tuple[str, str, int, str], float] = {}
+        self._batch_totals: dict[tuple[str, str, int, str], float] = {}
+        self._admitted_job_ids: set[str] = set()
+        self._online_totals = {
+            "completed": 0,
+            "ttft_pass": 0,
+            "tpot_pass": 0,
+            "slo_pass": 0,
+            "qualified_tokens": 0,
+        }
+        self._batch_windows: dict[str, dict[str, object]] = {}
+        self._cost_numerator = 0.0
+        self._cost_denominator = 0.0
 
     def start_run(self, started_at: datetime) -> None:
         """Create the trace file and record immutable run collection settings."""
@@ -318,6 +339,10 @@ class RealTraceCollector:
         """Return the binding needed by later Store and artifact readers."""
         return self._bindings[authored_job_id]
 
+    def job_bindings(self) -> tuple[JobBinding, ...]:
+        """Return all run jobs in deterministic authored-ID order."""
+        return tuple(self._bindings[key] for key in sorted(self._bindings))
+
     def collect(self, observed_at: datetime) -> bool:
         """Return whether a minute-level collection pass is due at this time.
 
@@ -333,7 +358,11 @@ class RealTraceCollector:
         return True
 
     def collect_store_events(
-        self, event_log: PostgresEventLog, *, limit: int = 100
+        self,
+        event_log: PostgresEventLog,
+        *,
+        plans: PlanStore | None = None,
+        limit: int = 100,
     ) -> int:
         """Project one durable EventLog batch and acknowledge each consumed event.
 
@@ -347,6 +376,10 @@ class RealTraceCollector:
         for event in events:
             trace_event = self._trace_event(event)
             if trace_event is not None:
+                if event.type == "plan.created" and plans is not None:
+                    plan = plans.get(str(event.payload_json["plan_id"]))
+                    if plan is not None:
+                        trace_event["plan"] = plan.model_dump(mode="json")
                 self._append(trace_event)
             event_log.ack(consumer_name, event.event_id)
         return len(events)
@@ -489,6 +522,11 @@ class RealTraceCollector:
                 **asdict(summary),
             }
         )
+        self._online_totals["completed"] += summary.completed_request_count
+        self._online_totals["ttft_pass"] += summary.ttft_pass_count
+        self._online_totals["tpot_pass"] += summary.tpot_pass_count
+        self._online_totals["slo_pass"] += summary.slo_pass_count
+        self._online_totals["qualified_tokens"] += summary.qualified_output_tokens
         return summary
 
     def emit_gpu_samples(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
@@ -546,8 +584,105 @@ class RealTraceCollector:
                     "telemetry_scope": "real_observed_window",
                 }
             )
+            self._record_rank_cost(trajectory)
             emitted += 1
         return emitted
+
+    def emit_batch_job_window(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
+        """Write batch progress from benchmark YAML and four driver metrics only."""
+        if tick.ended_at is None:
+            raise ValueError("batch windows require a closed tick")
+        emitted = 0
+        for binding in self._bindings.values():
+            if binding.job_kind != "batch":
+                continue
+            definition = self._batch_definition(binding)
+            rows = metrics.rows_for_job_window(
+                self.user_id,
+                binding.store_job_id,
+                tick.started_at,
+                tick.ended_at,
+            )
+            chains = batch_chain_samples(
+                [
+                    row
+                    for row in rows
+                    if row.job_id == binding.store_job_id and tick.contains(row.ts)
+                ]
+            )
+            window = self._batch_window(binding.store_job_id, chains, definition)
+            self._batch_windows[binding.store_job_id] = window
+            self._append(
+                {
+                    "kind": "batch_job_window",
+                    "tick": tick.tick,
+                    "job_id": binding.store_job_id,
+                    "authored_job_id": binding.authored_job_id,
+                    "window_start": tick.started_at.isoformat(),
+                    "window_end": tick.ended_at.isoformat(),
+                    **window,
+                }
+            )
+            emitted += 1
+        return emitted
+
+    def emit_run_summary(self, *, duration_seconds: float) -> None:
+        """Write baseline-comparison metrics accumulated during this trace run."""
+        if duration_seconds <= 0:
+            raise ValueError("summary duration must be positive")
+        online_jobs = [
+            job for job in self._bindings.values() if job.job_kind == "online"
+        ]
+        batch_jobs = [
+            job for job in self._bindings.values() if job.job_kind == "batch"
+        ]
+        batch_records = 0.0
+        batch_processed = 0.0
+        for window in self._batch_windows.values():
+            batch_records += _window_float(window, "record_count")
+            batch_processed += _window_float(window, "requests_processed_total")
+        completed = self._online_totals["completed"]
+        cost_per_token = (
+            self._cost_numerator / self._cost_denominator
+            if self._cost_denominator
+            else None
+        )
+        self._append(
+            {
+                "kind": "run_summary",
+                "online_admission_percent": _percent(
+                    self._admitted_job_ids, online_jobs
+                ),
+                "batch_admission_percent": _percent(
+                    self._admitted_job_ids, batch_jobs
+                ),
+                "batch_progress_percent": (
+                    100.0 * batch_processed / batch_records if batch_records else None
+                ),
+                "cost_per_token": cost_per_token,
+                "cost_per_token_x1e4": (
+                    cost_per_token * 10_000 if cost_per_token is not None else None
+                ),
+                "ttft_slo_met_percent": _ratio_percent(
+                    self._online_totals["ttft_pass"], completed
+                ),
+                "tpot_slo_met_percent": _ratio_percent(
+                    self._online_totals["tpot_pass"], completed
+                ),
+                "joint_slo_met_percent": _ratio_percent(
+                    self._online_totals["slo_pass"], completed
+                ),
+                "online_qualified_output_tokens": self._online_totals[
+                    "qualified_tokens"
+                ],
+                "online_goodput_token_per_sec": self._online_totals[
+                    "qualified_tokens"
+                ]
+                / duration_seconds,
+                "batch_goodput_token_per_sec": None,
+                "batch_goodput_status": "requires_output_token_counter",
+            }
+        )
 
     def close_run(self, finished_at: datetime, *, status: str) -> None:
         """Write the terminal run record after scenario-owned shutdown completes."""
@@ -576,6 +711,8 @@ class RealTraceCollector:
             or not self._is_bound_job(event.job_id)
         ):
             return None
+        if event.type == "rank.running" and event.job_id is not None:
+            self._admitted_job_ids.add(event.job_id)
         return {
             "kind": event.type,
             "tick": self._tick_number(),
@@ -655,6 +792,116 @@ class RealTraceCollector:
             "model_name": metric.model_name,
             "metrics": values,
         }
+
+    def _batch_definition(self, binding: JobBinding) -> tuple[int, int, int]:
+        cached = self._batch_definitions.get(binding.authored_job_id)
+        if cached is not None:
+            return cached
+        document = yaml.safe_load(
+            binding.benchmark_job_path.read_text(encoding="utf-8")
+        )
+        try:
+            dataset = document["workload"]["dataset"]
+            partitioning = dataset["partitioning"]
+            definition = (
+                _positive_int(dataset["record_count"]),
+                _positive_int(partitioning["shard_count"]),
+                _positive_int(partitioning["requests_per_shard"]),
+            )
+        except (KeyError, TypeError) as error:
+            raise ValueError(
+                f"invalid batch benchmark definition: {binding.benchmark_job_path}"
+            ) from error
+        if definition[0] != definition[1] * definition[2]:
+            raise ValueError(
+                "batch record_count must equal shard_count * requests_per_shard"
+            )
+        self._batch_definitions[binding.authored_job_id] = definition
+        return definition
+
+    def _batch_window(
+        self,
+        job_id: str,
+        chains: BatchChainSamples,
+        definition: tuple[int, int, int],
+    ) -> dict[str, object]:
+        record_count, shard_count, requests_per_shard = definition
+        rank_inflight: dict[str, float] = {}
+        job_deltas = {metric: 0.0 for metric in BATCH_COUNTER_METRICS}
+        for (_, rank_id, chain_index), samples in chains.items():
+            rank_inflight[rank_id] = rank_inflight.get(rank_id, 0.0) + next(
+                (
+                    values["batched_reqs_inflight"]
+                    for _, values in reversed(samples)
+                    if "batched_reqs_inflight" in values
+                ),
+                0.0,
+            )
+            for metric in BATCH_COUNTER_METRICS:
+                key = (job_id, rank_id, chain_index, metric)
+                previous = self._batch_raw_counters.get(key)
+                increase = 0.0
+                for _, values in samples:
+                    current = values.get(metric)
+                    if current is None:
+                        continue
+                    increase += (
+                        current
+                        if previous is None or current < previous
+                        else current - previous
+                    )
+                    previous = current
+                if previous is None:
+                    continue
+                self._batch_raw_counters[key] = previous
+                self._batch_totals[key] = self._batch_totals.get(key, 0.0) + increase
+                job_deltas[metric] += increase
+        rank_metrics = {
+            rank_id: {"requests_inflight": inflight}
+            for rank_id, inflight in rank_inflight.items()
+        }
+        totals = {metric: 0.0 for metric in BATCH_COUNTER_METRICS}
+        for (stored_job_id, rank_id, _, metric), total in self._batch_totals.items():
+            if stored_job_id != job_id:
+                continue
+            totals[metric] += total
+            rank = rank_metrics.setdefault(rank_id, {})
+            name = _batch_name(metric)
+            rank[name] = rank.get(name, 0.0) + total
+        inflight = sum(rank_inflight.values())
+        processed = totals["batched_reqs_processed_total"]
+        pulled = totals["batched_chunks_input_pulled_total"]
+        written = totals["batched_chunks_output_written_total"]
+        return {
+            "record_count": record_count,
+            "shard_count": shard_count,
+            "requests_per_shard": requests_per_shard,
+            "requests_inflight": inflight,
+            "requests_processed_total": processed,
+            "requests_processed_in_tick": job_deltas["batched_reqs_processed_total"],
+            "request_completion_percent": min(100.0, 100.0 * processed / record_count),
+            "pending_requests": max(0.0, record_count - processed - inflight),
+            "chunks_input_pulled_total": pulled,
+            "chunks_input_pulled_in_tick": job_deltas[
+                "batched_chunks_input_pulled_total"
+            ],
+            "chunks_output_written_total": written,
+            "chunks_output_written_in_tick": job_deltas[
+                "batched_chunks_output_written_total"
+            ],
+            "chunk_completion_percent": min(100.0, 100.0 * written / shard_count),
+            "rank_metrics": rank_metrics,
+        }
+
+    def _record_rank_cost(self, trajectory: dict[str, object]) -> None:
+        metrics = cast(dict[str, list[float | None]], trajectory["metrics"])
+        costs = metrics.get("cost_per_token", [])
+        throughput = metrics.get("throughput_token_per_sec", [])
+        for cost, tokens_per_second in zip(costs, throughput, strict=True):
+            if cost is None or tokens_per_second is None:
+                continue
+            self._cost_numerator += cost * tokens_per_second
+            self._cost_denominator += tokens_per_second
 
     def _snapshot_jobs(self, jobs: JobStore, observed_at: datetime) -> None:
         for job in jobs.list_jobs(self.user_id):
@@ -817,3 +1064,31 @@ def _whole_number(metrics: dict[str, object], name: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return int(value)
+
+
+def _positive_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("batch benchmark values must be positive integers")
+    return value
+
+
+def _batch_name(metric: str) -> str:
+    return {
+        "batched_reqs_processed_total": "requests_processed_total",
+        "batched_chunks_input_pulled_total": "chunks_input_pulled_total",
+        "batched_chunks_output_written_total": "chunks_output_written_total",
+    }[metric]
+
+
+def _percent(admitted: set[str], bindings: list[JobBinding]) -> float:
+    if not bindings:
+        return 100.0
+    return 100.0 * sum(job.store_job_id in admitted for job in bindings) / len(bindings)
+
+
+def _ratio_percent(numerator: int, denominator: int) -> float | None:
+    return 100.0 * numerator / denominator if denominator else None
+
+
+def _window_float(window: dict[str, object], name: str) -> float:
+    return float(cast(float, window[name]))
