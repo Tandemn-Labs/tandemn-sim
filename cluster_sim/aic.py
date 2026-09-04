@@ -666,7 +666,9 @@ def _normalize_result(
         raise AicEvaluationError("AIC TTFT exceeds the job target")
     if result.tpot_ms > request.target_tpot_ms:
         raise AicEvaluationError("AIC TPOT exceeds the job target")
-    target = _select_target(hardware.targets, replicas, tp * pp * dp)
+    # Canonical Store/ServingSim contract: AIC replicas and DP workers are
+    # independent runtime replicas. Do not fold DP into the per-replica width.
+    target = _select_target(hardware.targets, replicas * dp, tp * pp)
     if target is None:
         raise AicEvaluationError("AIC configuration is unavailable in Store")
     return AicPlacement(
@@ -714,6 +716,8 @@ def _place_action(
     """Combine deterministic job fields with one AIC placement."""
     known = _known_job_fields(store_job)
     per_replica_gpu_count = placement.tp * placement.pp
+    # Keep Store's DP metadata equal to its independently launched replicas.
+    effective_dp = placement.replicas * placement.dp
     rank_config: dict[str, object] = {
         "model_id": known.get("model_id"),
         "engine_name": known.get("engine_name") or backend,
@@ -723,7 +727,7 @@ def _place_action(
         "count": per_replica_gpu_count,
         "tp": placement.tp,
         "pp": placement.pp,
-        "dp": placement.dp,
+        "dp": effective_dp,
         "ep": known.get("ep") or 1,
         "max_num_seq": placement.max_num_seq,
         "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
@@ -743,7 +747,7 @@ def _place_action(
                 "rank_id": rank_id(known),
                 "env": placement.target.environment_key.split("|"),
                 "config": rank_config,
-                "n_replicas": placement.replicas * placement.dp,
+                "n_replicas": effective_dp,
                 "mechanism_id": known.get("mechanism_id"),
             }
         ],
@@ -838,12 +842,12 @@ def _aic_systems(
 def _select_target(
     targets: Sequence[ResourceTarget],
     replicas: int,
-    gpu_count: int,
+    per_replica_gpu_count: int,
 ) -> ResourceTarget | None:
     """Choose the tightest concrete target that fits an AIC configuration."""
     feasible = []
     for target in targets:
-        footprint = _target_footprint(target, replicas, gpu_count)
+        footprint = _target_footprint(target, replicas, per_replica_gpu_count)
         if footprint is None or footprint > _target_available(target):
             continue
         feasible.append(
@@ -859,11 +863,12 @@ def _select_target(
 
 def _reserve(placement: AicPlacement) -> None:
     """Reserve one concrete target after it wins cross-hardware comparison."""
-    gpu_count = placement.tp * placement.pp * placement.dp
+    per_replica_gpu_count = placement.tp * placement.pp
+    effective_replicas = placement.replicas * placement.dp
     footprint = _target_footprint(
         placement.target,
-        placement.replicas,
-        gpu_count,
+        effective_replicas,
+        per_replica_gpu_count,
     )
     if footprint is None or footprint > _target_available(placement.target):
         raise RuntimeError("selected AIC placement no longer fits")
@@ -885,23 +890,23 @@ def _target_available(target: ResourceTarget) -> int:
 def _target_footprint(
     target: ResourceTarget,
     replicas: int,
-    gpu_count: int,
+    per_replica_gpu_count: int,
 ) -> int | None:
     """Translate an AIC GPU layout into the Store target's allocation unit."""
     if target.pool is None:
-        return replicas * gpu_count
+        return replicas * per_replica_gpu_count
     allocation_kind = str(
         target.pool.get("allocation_kind")
         or target.pool.get("allocation_unit")
         or "instance"
     ).lower()
     if allocation_kind == "gpu":
-        return replicas * gpu_count
+        return replicas * per_replica_gpu_count
     gpus_per_instance = _positive_int(
         target.pool.get("gpus_per_instance"),
         "gpus_per_instance",
     )
-    if gpu_count > gpus_per_instance:
+    if per_replica_gpu_count > gpus_per_instance:
         return None
     return replicas * gpus_per_instance
 

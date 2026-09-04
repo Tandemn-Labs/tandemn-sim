@@ -385,6 +385,37 @@ class AicPlannerDriverTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["instances"][0]["num_npus"], 2)
         self.assertEqual(cluster["nodes"][0]["num_instances"], 3)
 
+    def test_instance_pool_reserves_every_aic_replica(self) -> None:
+        """Require one complete instance for each flattened AIC replica."""
+        client = FakeAicClient(tp=2, dp=2, replicas=2)
+        driver = _driver((_job("job_1"),), client)
+
+        insufficient = driver._build_actions(
+            _snapshot(
+                waiting=({"job_id": "job_1"},),
+                h100_free=16,
+                h100_instance_pool=True,
+            )
+        )
+        self.assertEqual(insufficient, [{"job_id": "job_1", "type": "defer"}])
+
+        actions = _driver(
+            (_job("job_1"), _job("job_2")),
+            FakeAicClient(tp=2, dp=2, replicas=2),
+        )._build_actions(
+            _snapshot(
+                waiting=({"job_id": "job_1"}, {"job_id": "job_2"}),
+                h100_free=32,
+                h100_instance_pool=True,
+            )
+        )
+        self.assertEqual([action["type"] for action in actions], ["place", "defer"])
+        rank = actions[0]["ladder"][0]
+        self.assertEqual(rank["config"]["count"], 2)
+        self.assertEqual(rank["config"]["gpu_count"], 2)
+        self.assertEqual(rank["config"]["dp"], 4)
+        self.assertEqual(rank["n_replicas"], 4)
+
 
 class FakeAicClient:
     """Return deterministic per-system AIC predictions."""
@@ -591,6 +622,7 @@ def _snapshot(
     paused: tuple[dict[str, object], ...] = (),
     finished: tuple[dict[str, object], ...] = (),
     h100_free: int = 0,
+    h100_instance_pool: bool = False,
     a100_free: int = 0,
 ) -> StoreSnapshot:
     """Build one normalized Store snapshot."""
@@ -600,7 +632,18 @@ def _snapshot(
             "gpu_type": "H100",
             "total": h100_free,
             "free": h100_free,
-            "pools": [],
+            "pools": (
+                [
+                    {
+                        "instance_type": "p5.48xlarge",
+                        "gpus_per_instance": 8,
+                        "total": h100_free,
+                        "free": h100_free,
+                    }
+                ]
+                if h100_instance_pool
+                else []
+            ),
         }
     if a100_free:
         resources["reserved|aws|us-east-1|az1|A100"] = {
