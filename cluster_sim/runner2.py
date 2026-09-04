@@ -99,7 +99,8 @@ class PlanRunner:
             if self._offset_ns(self.clock.now()) >= self.scenario.drain_end_ns:
                 break
 
-        self._finish_jobs_due(self._offset_ns(self.clock.now()))
+        offset_ns = self._offset_ns(self.clock.now())
+        self._finish_jobs_due(offset_ns, force=offset_ns >= self.scenario.drain_end_ns)
         return tuple(results)
 
     def run_tick(self, tick_number: int) -> PlannerResult:
@@ -151,8 +152,8 @@ class PlanRunner:
         """Return elapsed logical nanoseconds from the benchmark epoch."""
         return round((timestamp - self.clock.start).total_seconds() * 1_000_000_000)
 
-    def _finish_jobs_due(self, offset_ns: int) -> None:
-        """Finish submitted jobs whose benchmark lifetime has ended."""
+    def _finish_jobs_due(self, offset_ns: int, *, force: bool = False) -> None:
+        """Finish due jobs, or all submitted jobs at the benchmark hard stop."""
         from tandemn_system_data.models.enums import JobStatus
 
         for job in (*self.scenario.online_jobs, *self.scenario.batch_jobs):
@@ -160,7 +161,7 @@ class PlanRunner:
                 job.stops_at_ns if isinstance(job, OnlineJob) else job.hard_stop_at_ns
             )
             if (
-                stop_at_ns > offset_ns
+                (not force and stop_at_ns > offset_ns)
                 or job.name not in self._submitted_jobs
                 or job.name in self._finished_jobs
             ):
@@ -170,7 +171,9 @@ class PlanRunner:
                 JobStatus.FINISHED,
                 [JobStatus.RUNNING, JobStatus.WAITING, JobStatus.PAUSED],
                 finish_reason=(
-                    None if isinstance(job, OnlineJob) else "SIMULATION_HARD_STOP"
+                    None
+                    if isinstance(job, OnlineJob) and not force
+                    else "SIMULATION_HARD_STOP"
                 ),
             )
             self._finished_jobs.add(job.name)

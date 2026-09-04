@@ -54,6 +54,20 @@ class PlanRunnerTest(unittest.TestCase):
 
         self.assertEqual(runner.jobs.transitions, [])
 
+    def test_hard_stop_finishes_jobs_with_later_scheduled_stops(self) -> None:
+        online = OnlineJob("online", "online-id", "model", 0, 20, {})
+        runner = PlanRunner.__new__(PlanRunner)
+        runner.scenario = Scenario("test", 5, 10, (online,), ())
+        runner.jobs = _Jobs()
+        runner._submitted_jobs = {"online"}
+        runner._finished_jobs = set()
+
+        runner._finish_jobs_due(10, force=True)
+
+        args, kwargs = runner.jobs.transitions[0]
+        self.assertEqual(args[0], "online-id")
+        self.assertEqual(kwargs["finish_reason"], "SIMULATION_HARD_STOP")
+
     @mock.patch("runner2.sleep")
     @mock.patch("runner2.monotonic", side_effect=[0.0, 0.0, 1.0])
     def test_waits_until_the_wall_clock_stop(self, _clock, sleep) -> None:
