@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from simulation_orca import apply_pending_plans, normalize_job_spec
+from simulation_orca import apply_pending_plans, ladder_to_ranks, normalize_job_spec
 from tandemn_system_data.models.enums import (
     ActionType,
     JobKind,
@@ -50,7 +50,7 @@ class _JobStore:
         return SimpleNamespace(
             status=status,
             kind=JobKind.ONLINE,
-            spec_json={"model_id": "model-a"},
+            spec_json={"model_id": "Qwen/Qwen2.5-Coder-32B-Instruct"},
         )
 
     def transition(self, job_id, to, expected):
@@ -135,7 +135,15 @@ class SimulationOrcaTest(unittest.TestCase):
         rank = jobs.ranks[OLD_RANK_ID]
         self.assertEqual(jobs.statuses["job-a"], JobStatus.RUNNING)
         self.assertEqual(rank.status, RankStatus.LAUNCHING)
-        self.assertEqual(rank.shape_json["model_id"], "model-a")
+        self.assertEqual(
+            rank.shape_json["model_id"],
+            "Qwen/Qwen2.5-Coder-32B-Instruct",
+        )
+        self.assertEqual(rank.shape_json["precision"], "fp16")
+        self.assertEqual(rank.shape_json["weight_dtype"], "float16")
+        self.assertEqual(rank.shape_json["weight_quantization_method"], "none")
+        self.assertEqual(rank.shape_json["weight_quantization_bits"], 16)
+        self.assertEqual(rank.shape_json["tp"], 1)
         self.assertEqual(plans.applied, [plan.plan_id])
 
     def test_place_hands_running_store_job_to_real_scenario(self) -> None:
@@ -206,6 +214,37 @@ class SimulationOrcaTest(unittest.TestCase):
 
         self.assertEqual(launch.call_args.args[0].store_job_id, "job-a")
 
+    def test_quantization_override_does_not_validate_parallelism(self) -> None:
+        """Canonicalize quantization without taking TP decisions from planners."""
+        ladder = _ladder(OLD_RANK_ID)
+        ladder["config"].update({"gpu_count": 3, "tp": 3})
+
+        ranks = ladder_to_ranks(
+            [ladder],
+            job_id="job-a",
+            plan_id="plan-a",
+            job_spec={"model_id": "Qwen/Qwen2.5-Coder-32B-Instruct"},
+        )
+
+        self.assertEqual(len(ranks), 1)
+        self.assertEqual(ranks[0].shape_json["tp"], 3)
+        self.assertEqual(ranks[0].shape_json["precision"], "fp16")
+
+    def test_h100_mixtral_overrides_store_fp16_with_profile_bf16(self) -> None:
+        """Use the H100 profile even when a planner carries Store FP16 fields."""
+        ranks = ladder_to_ranks(
+            [_ladder(OLD_RANK_ID)],
+            job_id="job-a",
+            plan_id="plan-a",
+            job_spec={"model_id": "mistralai/Mixtral-8x7B-Instruct-v0.1"},
+        )
+
+        shape = ranks[0].shape_json
+        self.assertEqual(shape["precision"], "bf16")
+        self.assertEqual(shape["weight_dtype"], "bfloat16")
+        self.assertEqual(shape["weight_quantization_method"], "none")
+        self.assertEqual(shape["weight_quantization_bits"], 16)
+
     def test_swap_then_preempt_replaces_and_stops_ranks(self) -> None:
         old_rank = Rank(
             rank_id=OLD_RANK_ID,
@@ -246,7 +285,15 @@ def _ladder(rank_id: str) -> dict:
         "role": "aggregate",
         "rank_id": rank_id,
         "env": ["reserved", "sim", "region-1", "zone-1", "H100"],
-        "config": {"instance_type": "sim.h100.8gpu", "gpu_count": 1},
+        "config": {
+            "instance_type": "sim.h100.8gpu",
+            "gpu_count": 1,
+            "tp": 1,
+            "precision": "bf16",
+            "weight_dtype": "bfloat16",
+            "weight_quantization_method": "fp8",
+            "weight_quantization_bits": 8,
+        },
         "n_replicas": 1,
     }
 

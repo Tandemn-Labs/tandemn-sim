@@ -539,6 +539,7 @@ class ServingInputTest(unittest.TestCase):
             "tp": 2,
             "pp": 1,
             "ep": 1,
+            "precision": "bf16",
             "instance_type": "sim.h100.8gpu",
             "target_p99_ttft_ms": 600,
             "max_num_seq": 64,
@@ -567,10 +568,10 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(cluster["nodes"][0]["instances"][0]["tp_size"], 2)
         self.assertEqual(cluster["nodes"][0]["instances"][0]["fp"], "bf16")
 
-    def test_rank_cluster_uses_store_fp16_name(self) -> None:
-        """Use LLMServingSim's FP16 profile convention for Store float16 models."""
+    def test_rank_cluster_uses_explicit_fp16_name(self) -> None:
+        """Use LLMServingSim's FP16 profile convention for explicit precision."""
         deployment = build_rank_deployments(self.job, self.ranks)[0]
-        deployment.shape["weight_dtype"] = "float16"
+        deployment.shape["precision"] = "fp16"
 
         cluster = build_rank_cluster(deployment, self.hardware)
 
@@ -588,6 +589,14 @@ class ServingInputTest(unittest.TestCase):
         self.assertEqual(instance["fp"], "bf16")
         self.assertEqual(instance["dtype"], "bfloat16")
 
+    def test_rank_cluster_requires_explicit_precision(self) -> None:
+        """Reject simulation ranks that bypass policy quantization."""
+        deployment = build_rank_deployments(self.job, self.ranks)[0]
+        deployment.shape.pop("precision")
+
+        with self.assertRaisesRegex(ValueError, "unsupported simulation precision"):
+            build_rank_cluster(deployment, self.hardware)
+
     def test_rank_deployment_uses_canonical_per_replica_gpu_count(self) -> None:
         """Use Koi/Orca's stored count for every simulated replica."""
         shape = {**self.ranks[0].shape_json, "count": 2, "tp": 2, "pp": 1, "dp": 4}
@@ -601,7 +610,7 @@ class ServingInputTest(unittest.TestCase):
 
     def test_profile_coverage_requires_requested_tp(self) -> None:
         deployment = build_rank_deployments(self.job, self.ranks)[0]
-        deployment.shape["weight_dtype"] = "float16"
+        deployment.shape["precision"] = "fp16"
         with tempfile.TemporaryDirectory() as directory:
             profile = (
                 Path(directory)

@@ -2186,16 +2186,6 @@ class RunnerDataPlaneTest(unittest.TestCase):
             def rows_for_job_window(self, user_id, job_id, start, end):
                 return [metric for metric in staged if metric.job_id == job_id]
 
-        class ModelCatalogStore:
-            def __init__(self, postgres) -> None:
-                pass
-
-            def get(self, model_id):
-                return SimpleNamespace(
-                    weight_dtype="bfloat16",
-                    weight_quantization_method="none",
-                )
-
         def prepare(*args):
             deployment = args[0]
             return SimpleNamespace(deployment=deployment, request_count=1)
@@ -2236,7 +2226,6 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 patch("tandemn_system_data.clients.HardwareCatalogStore", HardwareCatalogStore),
                 patch("tandemn_system_data.clients.ResourceMapStore", ResourceMapStore),
                 patch("tandemn_system_data.clients.GpuMetricStore", GpuMetricStore),
-                patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
                 patch("runner.profile_coverage_error", return_value=None),
                 patch("runner.prepare_rank_run", prepare),
                 patch("runner.run_ranks", run),
@@ -2283,8 +2272,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
         )
         self.assertEqual(second_pool["reported_gpu_count"], 0)
 
-    def test_runner_preserves_planner_dtype_with_catalog_fallback(self) -> None:
-        """Keep a resolved planner dtype and fill missing launch fields from Store."""
+    def test_runner_does_not_stamp_store_quantization(self) -> None:
+        """Keep simulation quantization independent from the Store model catalog."""
         source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
         job = replace(source.online_jobs[0], store_job_id="job_1")
         simulator = object.__new__(ClusterSimulator)
@@ -2305,16 +2294,6 @@ class RunnerDataPlaneTest(unittest.TestCase):
             "instance_type": "sim.h100.8gpu",
         }
         captured_shapes = []
-
-        class ModelCatalogStore:
-            def __init__(self, postgres) -> None:
-                pass
-
-            def get(self, model_id):
-                return SimpleNamespace(
-                    weight_dtype="float16",
-                    weight_quantization_method="fp8",
-                )
 
         def prepare(deployment, *args):
             captured_shapes.append(dict(deployment.shape))
@@ -2345,7 +2324,6 @@ class RunnerDataPlaneTest(unittest.TestCase):
             )
 
         with (
-            patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
             patch("runner.profile_coverage_error", return_value=None),
             patch("runner.resolve_rank_hardware", return_value={}),
             patch("runner.prepare_rank_run", side_effect=prepare),
@@ -2361,8 +2339,8 @@ class RunnerDataPlaneTest(unittest.TestCase):
 
         self.assertEqual(captured_shapes[0]["weight_dtype"], "bfloat16")
         self.assertEqual(captured_shapes[0]["weight_quantization_method"], "none")
-        self.assertEqual(captured_shapes[1]["weight_dtype"], "float16")
-        self.assertEqual(captured_shapes[1]["weight_quantization_method"], "fp8")
+        self.assertNotIn("weight_dtype", captured_shapes[1])
+        self.assertNotIn("weight_quantization_method", captured_shapes[1])
 
     def test_batch_probe_advances_full_backlog_by_observed_rate(self) -> None:
         """Scale a two-second, twenty-request probe across one five-minute tick."""

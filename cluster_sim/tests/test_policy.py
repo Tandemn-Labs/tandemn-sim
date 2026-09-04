@@ -82,6 +82,46 @@ class ConfigPolicyTest(unittest.TestCase):
         self.assertEqual(qwen.allowed_tp, (4, 8))
         self.assertEqual(glm.allowed_tp, (4, 8))
 
+    def test_h100_precision_matches_servingsim_profiles(self) -> None:
+        """Keep H100 policy variants aligned with the profiled model bundles."""
+        config_policy = policy.load_config_policy()
+
+        expected = {
+            "meta-llama/Llama-3.2-1B-Instruct": "fp16",
+            "microsoft/phi-4": "fp16",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1": "bf16",
+            "Qwen/Qwen2.5-Coder-32B-Instruct": "fp16",
+        }
+        for model_id, precision in expected.items():
+            with self.subTest(model_id=model_id):
+                rule = config_policy.rule_for("H100", model_id)
+                self.assertIsNotNone(rule)
+                assert rule is not None
+                self.assertEqual(rule.precision, precision)
+
+    def test_l40s_excludes_unprofiled_fp8_models(self) -> None:
+        """Keep Kimi and DeepSeek off L40S without performance profiles."""
+        config_policy = policy.load_config_policy()
+
+        self.assertIsNone(
+            config_policy.rule_for("L40S", "moonshotai/Kimi-K2-Instruct")
+        )
+        self.assertIsNone(
+            config_policy.rule_for("L40S", "deepseek-ai/DeepSeek-V3")
+        )
+
+    def test_simulation_quantization_fields_are_canonical(self) -> None:
+        """Translate each supported profile variant into one rank tuple."""
+        self.assertEqual(
+            policy.simulation_quantization("bf16-fp8"),
+            {
+                "precision": "bf16-fp8",
+                "weight_dtype": "bfloat16",
+                "weight_quantization_method": "fp8",
+                "weight_quantization_bits": 8,
+            },
+        )
+
     def test_accepts_one_and_supported_even_tp_degrees(self) -> None:
         """Allow no sharding or an explicitly supported even degree."""
         policy_text = """\

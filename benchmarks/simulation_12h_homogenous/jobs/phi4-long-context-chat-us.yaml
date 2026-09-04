@@ -11,7 +11,7 @@ schedule:
 spec:
   user_id: tenant_phi4_long_context_chat
   optimization_goal: latency
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 9000
     isl_token_min: 2250

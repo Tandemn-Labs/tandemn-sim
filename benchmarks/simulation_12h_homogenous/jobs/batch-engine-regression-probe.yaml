@@ -12,7 +12,7 @@ schedule:
 spec:
   user_id: tenant_engine_canary
   optimization_goal: throughput
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 4000
     isl_token_min: 1000

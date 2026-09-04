@@ -240,7 +240,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         self.assertEqual(placed["target_p99_ttft_ms"], 700.0)
         self.assertTrue(is_valid_id(placed["ladder"][0]["rank_id"], "rank"))
         rank_config = placed["ladder"][0]["config"]
-        self.assertEqual(rank_config["precision"], "bf16")
+        self.assertEqual(rank_config["precision"], "fp16")
         self.assertEqual(rank_config["tp"], 1)
         for field, value in _launch_config().items():
             self.assertEqual(rank_config[field], value)

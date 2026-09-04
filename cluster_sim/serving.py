@@ -197,30 +197,21 @@ def build_rank_cluster(
 
 
 def _serving_precision(shape: Mapping[str, object]) -> str:
-    """Translate Store model precision into LLMServingSim's profile directory name."""
+    """Return the explicit LLMServingSim profile variant on a simulation rank."""
     precision = str(shape.get("precision") or "").lower()
     if precision in {"fp16", "bf16", "bf16-fp8"}:
         return precision
-    dtype = str(shape.get("weight_dtype") or "bfloat16").lower()
-    if shape.get("weight_quantization_method") == "fp8" and dtype in {
-        "bf16",
-        "bfloat16",
-    }:
-        return "bf16-fp8"
-    if dtype in {"fp16", "float16"}:
-        return "fp16"
-    return "bf16"
+    raise ValueError(f"unsupported simulation precision {precision!r}")
 
 
 def _serving_dtype(shape: Mapping[str, object]) -> str:
-    """Translate Store weight dtype to the LLMServingSim runtime dtype option."""
+    """Translate explicit simulation precision to LLMServingSim runtime dtype."""
     precision = str(shape.get("precision") or "").lower()
     if precision in {"bf16", "bf16-fp8"}:
         return "bfloat16"
     if precision == "fp16":
         return "float16"
-    dtype = str(shape.get("weight_dtype") or "bfloat16").lower()
-    return "float16" if dtype in {"fp16", "float16"} else "bfloat16"
+    raise ValueError(f"unsupported simulation precision {precision!r}")
 
 
 def profile_coverage_error(

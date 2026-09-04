@@ -21,7 +21,7 @@ from time import monotonic
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
-from policy import VALID_PP_DEGREES
+from policy import VALID_PP_DEGREES, load_config_policy, simulation_quantization
 from rank_ids import rank_id
 
 LOGGER = logging.getLogger(__name__)
@@ -520,7 +520,11 @@ def _evaluate_job(
         goal = _optimization_goal(known)
     except ValueError:
         return None
-    hardware_candidates = _hardware_candidates(resources, settings.system_mappings)
+    model_id = _text(known.get("model_id"), "model_id")
+    hardware_candidates = _policy_hardware_candidates(
+        _hardware_candidates(resources, settings.system_mappings),
+        model_id,
+    )
     placements = []
     for hardware in hardware_candidates:
         try:
@@ -715,11 +719,18 @@ def _place_action(
 ) -> dict[str, object]:
     """Combine deterministic job fields with one AIC placement."""
     known = _known_job_fields(store_job)
+    model_id = _text(known.get("model_id"), "model_id")
+    rule = load_config_policy().rule_for(placement.target.gpu_type, model_id)
+    if rule is None:
+        raise ValueError(
+            f"{model_id} has no simulation profile on {placement.target.gpu_type}"
+        )
     per_replica_gpu_count = placement.tp * placement.pp
     # Keep Store's DP metadata equal to its independently launched replicas.
     effective_dp = placement.replicas * placement.dp
     rank_config: dict[str, object] = {
-        "model_id": known.get("model_id"),
+        **simulation_quantization(rule.precision),
+        "model_id": model_id,
         "engine_name": known.get("engine_name") or backend,
         "instance_type": placement.target.instance_type,
         "gpu_type": placement.target.gpu_type,
@@ -805,6 +816,31 @@ def _hardware_candidates(
             )
         )
     return tuple(candidates)
+
+
+def _policy_hardware_candidates(
+    candidates: tuple[HardwareCandidate, ...],
+    model_id: str,
+) -> tuple[HardwareCandidate, ...]:
+    """Keep AIC targets with a profiled simulation quantization for the model."""
+    policy = load_config_policy()
+    filtered = []
+    for candidate in candidates:
+        targets = tuple(
+            target
+            for target in candidate.targets
+            if policy.rule_for(target.gpu_type, model_id) is not None
+        )
+        if not targets:
+            continue
+        filtered.append(
+            replace(
+                candidate,
+                targets=targets,
+                available_devices=max(_target_available(target) for target in targets),
+            )
+        )
+    return tuple(filtered)
 
 
 def _aic_system(

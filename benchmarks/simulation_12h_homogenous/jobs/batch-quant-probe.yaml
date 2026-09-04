@@ -12,7 +12,7 @@ schedule:
 spec:
   user_id: tenant_koi_profiling
   optimization_goal: throughput
-  precision: bf16
+  precision: fp16
   features:
     isl_token_avg: 1000
     isl_token_min: 250
