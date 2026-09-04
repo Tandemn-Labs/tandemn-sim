@@ -8,6 +8,7 @@ All scheduler-visible job fields come from Store; unavailable fields are null.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import re
 from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
@@ -15,6 +16,8 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import StringIO
+from queue import Empty
+from time import monotonic
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
@@ -22,8 +25,9 @@ from policy import VALID_PP_DEGREES
 from rank_ids import rank_id
 
 LOGGER = logging.getLogger(__name__)
-_AIC_CANDIDATE_LIMIT = 1000
-_A10G_PROFILE_FALLBACK_SYSTEMS = ("l40s", "a100_sxm", "h100_sxm", "h200_sxm")
+_AIC_CANDIDATE_LIMIT = 10
+_AIC_CALL_TIMEOUT_SECONDS = 20.0
+_AIC_TICK_TIMEOUT_SECONDS = 280.0
 _AIC_SYSTEM_ALIASES = {
     "h100": "h100_sxm",
     "h100-sxm": "h100_sxm",
@@ -35,6 +39,8 @@ _AIC_SYSTEM_ALIASES = {
     "a100-sxm": "a100_sxm",
     "a100-sxm-80gb": "a100_sxm",
     "a100_sxm": "a100_sxm",
+    "a10g": "l4",
+    "a10g-24gb": "l4",
     "l40s": "l40s",
     "l40s-48gb": "l40s",
 }
@@ -44,7 +50,7 @@ class AicEvaluationError(RuntimeError):
     """Report an AIC evaluation failure for one hardware candidate."""
 
 
-class AicUnavailableError(RuntimeError):
+class AicUnavailableError(AicEvaluationError):
     """Report that the NVIDIA AIC package is unavailable."""
 
 
@@ -58,6 +64,8 @@ class AicSettings:
     database_mode: str
     serving_mode: str
     system_mappings: Mapping[str, str]
+    call_timeout_seconds: float
+    tick_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,9 @@ class AicPlacement:
 class AicClient(Protocol):
     """Evaluate one job against one homogeneous AIC hardware system."""
 
-    def evaluate(self, request: AicRequest) -> AicResult:
+    def evaluate(
+        self, request: AicRequest, timeout_seconds: float | None = None
+    ) -> AicResult:
         """Return AIC's best aggregate-serving configuration."""
 
 
@@ -181,111 +191,154 @@ class PlanStoreClient(Protocol):
 class NvidiaAicClient:
     """Call NVIDIA AIC's public recommendation API."""
 
-    def evaluate(self, request: AicRequest) -> AicResult:
-        """Run load matching and normalize AIC's selected result row."""
-        if request.serving_mode != "agg":
-            raise AicEvaluationError("AIC requires aggregate serving")
+    def evaluate(
+        self, request: AicRequest, timeout_seconds: float | None = None
+    ) -> AicResult:
+        """Run one AIC recommendation in a process with a hard deadline."""
+        timeout = (
+            _AIC_CALL_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        )
+        if timeout <= 0:
+            raise AicEvaluationError("AIC tick deadline expired")
+        context = multiprocessing.get_context("spawn")
+        results = context.Queue(maxsize=1)
+        process = context.Process(target=_run_aic_request, args=(request, results))
+        process.start()
+        process.join(timeout)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            raise AicEvaluationError(f"AIC timed out after {timeout:.1f}s")
         try:
-            from aiconfigurator.cli.api import cli_recommend
-            from aiconfigurator.sdk.picking import pick_optimization_type
-        except ImportError as error:
-            raise AicUnavailableError(
-                "AIC is not installed; run `uv sync --group dynamo`"
-            ) from error
-
-        previous_logging_threshold = logging.root.manager.disable
-        try:
-            logging.disable(logging.CRITICAL)
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                recommendation = cli_recommend(
-                    model_path=request.model,
-                    system=request.system,
-                    target_request_rate=request.target_request_rate,
-                    target_concurrency=request.target_concurrency,
-                    backend=request.backend,
-                    backend_version=request.backend_version,
-                    database_mode=request.database_mode,
-                    isl=request.input_tokens,
-                    osl=request.output_tokens,
-                    ttft=request.target_ttft_ms,
-                    tpot=request.target_tpot_ms,
-                    strict_sla=True,
-                    top_n=_AIC_CANDIDATE_LIMIT,
-                )
-        except SystemExit as error:
-            raise AicEvaluationError(str(error)) from error
-        except Exception as error:
-            raise AicEvaluationError(str(error)) from error
+            status, value = results.get(timeout=1)
+        except Empty as error:
+            raise AicEvaluationError("AIC exited without a result") from error
         finally:
-            logging.disable(previous_logging_threshold)
+            results.close()
+        if status == "ok":
+            return value
+        if status == "unavailable":
+            raise AicUnavailableError(value)
+        raise AicEvaluationError(value)
 
-        frame = recommendation.best_configs.get("agg")
-        if frame is None or frame.empty:
-            raise AicEvaluationError("AIC returned no aggregate configuration")
-        try:
-            frame = frame[frame["total_gpus_needed"] <= request.available_devices]
-            frame = frame[
-                frame.apply(
-                    lambda row: _parallelism(row.to_dict())[1] in VALID_PP_DEGREES,
-                    axis=1,
-                )
-            ]
-            if frame.empty:
-                raise AicEvaluationError(
-                    "AIC returned no configuration within capacity and PP limits"
-                )
-            if request.optimization_goal == "latency":
-                selected = frame.sort_values(
-                    by=["ttft", "tpot", "total_gpus_needed"],
-                    ascending=[True, True, True],
-                ).head(1)
-            else:
-                picked = pick_optimization_type(
-                    pareto_df=frame,
-                    optimization_type="throughput",
-                    total_gpus=request.available_devices,
-                    serving_mode=request.serving_mode,
-                    top_n=1,
-                )
-                selected = picked["best_config_df"]
-        except AicEvaluationError:
-            raise
-        except Exception as error:
-            raise AicEvaluationError(str(error)) from error
-        if selected is None or selected.empty:
-            raise AicEvaluationError("AIC returned no selected configuration")
 
-        row = selected.iloc[0]
-        configuration = _json_value(row.to_dict())
-        if not isinstance(configuration, Mapping):
-            raise AicEvaluationError("AIC returned an invalid configuration")
-        replicas = _aic_positive_int(row.get("replicas_needed", 1), "replicas")
-        devices = _aic_positive_int(
-            row.get("total_gpus_needed", row.get("num_total_gpus")),
-            "total_gpus_needed",
-        )
-        per_replica_throughput = _aic_positive_float(
-            row.get("tokens/s"),
-            "tokens/s",
-        )
-        ttft_ms = _aic_positive_float(row.get("ttft"), "ttft")
-        tpot_ms = _aic_positive_float(row.get("tpot"), "tpot")
-        request_latency_ms = _aic_positive_float(
-            row.get(
-                "request_latency",
-                ttft_ms + tpot_ms * max(request.output_tokens - 1, 0),
-            ),
+def _run_aic_request(request: AicRequest, results: Any) -> None:
+    """Evaluate one AIC request in a killable child process."""
+    try:
+        results.put(("ok", _evaluate_aic_request(request)))
+    except AicUnavailableError as error:
+        results.put(("unavailable", str(error)))
+    except AicEvaluationError as error:
+        results.put(("error", str(error)))
+    except Exception as error:
+        results.put(("error", str(error)))
+
+
+def _evaluate_aic_request(request: AicRequest) -> AicResult:
+    """Run load matching and normalize AIC's selected result row."""
+    if request.serving_mode != "agg":
+        raise AicEvaluationError("AIC requires aggregate serving")
+    try:
+        from aiconfigurator.cli.api import cli_recommend
+        from aiconfigurator.sdk.picking import pick_optimization_type
+    except ImportError as error:
+        raise AicUnavailableError(
+            "AIC is not installed; run `uv sync --group dynamo`"
+        ) from error
+
+    previous_logging_threshold = logging.root.manager.disable
+    try:
+        logging.disable(logging.CRITICAL)
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            recommendation = cli_recommend(
+                model_path=request.model,
+                system=request.system,
+                target_request_rate=request.target_request_rate,
+                target_concurrency=request.target_concurrency,
+                backend=request.backend,
+                backend_version=request.backend_version,
+                database_mode=request.database_mode,
+                isl=request.input_tokens,
+                osl=request.output_tokens,
+                ttft=request.target_ttft_ms,
+                tpot=request.target_tpot_ms,
+                strict_sla=True,
+                top_n=_AIC_CANDIDATE_LIMIT,
+            )
+    except SystemExit as error:
+        raise AicEvaluationError(str(error)) from error
+    except Exception as error:
+        raise AicEvaluationError(str(error)) from error
+    finally:
+        logging.disable(previous_logging_threshold)
+
+    frame = recommendation.best_configs.get("agg")
+    if frame is None or frame.empty:
+        raise AicEvaluationError("AIC returned no aggregate configuration")
+    try:
+        capacity_frame = frame[frame["total_gpus_needed"] <= request.available_devices]
+        frame = capacity_frame[
+            capacity_frame.apply(
+                lambda row: _parallelism(row.to_dict())[1] in VALID_PP_DEGREES,
+                axis=1,
+            )
+        ]
+        if frame.empty:
+            raise AicEvaluationError(
+                "AIC returned no configuration within capacity and PP limits"
+            )
+        if request.optimization_goal == "latency":
+            selected = frame.sort_values(
+                by=["ttft", "tpot", "total_gpus_needed"],
+                ascending=[True, True, True],
+            ).head(1)
+        else:
+            picked = pick_optimization_type(
+                pareto_df=frame,
+                optimization_type="throughput",
+                total_gpus=request.available_devices,
+                serving_mode=request.serving_mode,
+                top_n=1,
+            )
+            selected = picked["best_config_df"]
+    except AicEvaluationError:
+        raise
+    except Exception as error:
+        raise AicEvaluationError(str(error)) from error
+    if selected is None or selected.empty:
+        raise AicEvaluationError("AIC returned no selected configuration")
+
+    row = selected.iloc[0]
+    configuration = _json_value(row.to_dict())
+    if not isinstance(configuration, Mapping):
+        raise AicEvaluationError("AIC returned an invalid configuration")
+    replicas = _aic_positive_int(row.get("replicas_needed", 1), "replicas")
+    devices = _aic_positive_int(
+        row.get("total_gpus_needed", row.get("num_total_gpus")),
+        "total_gpus_needed",
+    )
+    per_replica_throughput = _aic_positive_float(
+        row.get("tokens/s"),
+        "tokens/s",
+    )
+    ttft_ms = _aic_positive_float(row.get("ttft"), "ttft")
+    tpot_ms = _aic_positive_float(row.get("tpot"), "tpot")
+    request_latency_ms = _aic_positive_float(
+        row.get(
             "request_latency",
-        )
-        return AicResult(
-            devices=devices,
-            replicas=replicas,
-            ttft_ms=ttft_ms,
-            tpot_ms=tpot_ms,
-            request_latency_ms=request_latency_ms,
-            throughput_tokens_per_second=per_replica_throughput * replicas,
-            configuration={str(key): value for key, value in configuration.items()},
-        )
+            ttft_ms + tpot_ms * max(request.output_tokens - 1, 0),
+        ),
+        "request_latency",
+    )
+    return AicResult(
+        devices=devices,
+        replicas=replicas,
+        ttft_ms=ttft_ms,
+        tpot_ms=tpot_ms,
+        request_latency_ms=request_latency_ms,
+        throughput_tokens_per_second=per_replica_throughput * replicas,
+        configuration={str(key): value for key, value in configuration.items()},
+    )
 
 
 class AicPlannerDriver:
@@ -351,7 +404,10 @@ class AicPlannerDriver:
                 len(snapshot.waiting_jobs),
                 len(snapshot.paused_jobs),
             )
-            actions = self._build_actions(snapshot)
+            actions = self._build_actions(
+                snapshot,
+                monotonic() + self.settings.tick_timeout_seconds,
+            )
             if not actions:
                 LOGGER.info("AIC tick %d: no actions", tick_number)
                 return PlannerResult(tick_number=tick_number, plans=())
@@ -398,8 +454,13 @@ class AicPlannerDriver:
             finished_jobs=(),
         )
 
-    def _build_actions(self, snapshot: StoreSnapshot) -> list[dict[str, object]]:
+    def _build_actions(
+        self,
+        snapshot: StoreSnapshot,
+        deadline: float | None = None,
+    ) -> list[dict[str, object]]:
         """Evaluate waiting jobs greedily and build every lifecycle action."""
+        deadline = deadline or monotonic() + self.settings.tick_timeout_seconds
         resources = deepcopy(snapshot.resources)
         actions: list[dict[str, object]] = []
         for running in snapshot.running_jobs:
@@ -414,6 +475,7 @@ class AicPlannerDriver:
                 resources,
                 self.settings,
                 self.client,
+                deadline,
             )
             if placement is None:
                 actions.append({"job_id": job_id, "type": "defer"})
@@ -450,41 +512,99 @@ def _evaluate_job(
     resources: dict[str, dict[str, Any]],
     settings: AicSettings,
     client: AicClient,
+    deadline: float,
 ) -> AicPlacement | None:
-    """Evaluate every available hardware system and return the best result."""
+    """Evaluate exact systems, then one bounded SOL/EMPIRICAL fallback."""
     known = _known_job_fields(store_job)
     try:
         goal = _optimization_goal(known)
     except ValueError:
         return None
+    hardware_candidates = _hardware_candidates(resources, settings.system_mappings)
     placements = []
-    for hardware in _hardware_candidates(resources, settings.system_mappings):
+    for hardware in hardware_candidates:
         try:
             request = _build_aic_request(known, hardware, settings, goal)
         except ValueError:
             return None
-        for attempt in _aic_requests(request):
-            try:
-                result = client.evaluate(attempt)
-            except AicUnavailableError:
-                raise
-            except (AicEvaluationError, ValueError):
-                continue
-            try:
-                placement = _normalize_result(result, attempt, hardware)
-            except (AicEvaluationError, ValueError):
-                break
+        placement = _evaluate_request(client, request, hardware, settings, deadline)
+        if placement is not None:
             placements.append(placement)
-            break
-    if not placements:
+    if placements:
+        return min(placements, key=lambda value: _placement_score(value, goal))
+
+    fallback = _fallback_hardware(hardware_candidates)
+    if fallback is None:
         return None
-    return min(placements, key=lambda value: _placement_score(value, goal))
+    request = _build_aic_request(known, fallback, settings, goal)
+    for database_mode in ("SOL", "EMPIRICAL"):
+        placement = _evaluate_request(
+            client,
+            replace(request, database_mode=database_mode),
+            fallback,
+            settings,
+            deadline,
+        )
+        if placement is not None:
+            return placement
+    return None
 
 
-def _aic_requests(request: AicRequest) -> tuple[AicRequest, ...]:
-    """Return the normal request followed by one same-backend estimate."""
-    empirical = replace(request, database_mode="EMPIRICAL")
-    return (request,) if empirical == request else (request, empirical)
+def _evaluate_request(
+    client: AicClient,
+    request: AicRequest,
+    hardware: HardwareCandidate,
+    settings: AicSettings,
+    deadline: float,
+) -> AicPlacement | None:
+    """Run one bounded AIC request and validate its concrete placement."""
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return None
+    try:
+        LOGGER.info(
+            "AIC request system=%s mode=%s timeout=%.1fs",
+            request.system,
+            request.database_mode,
+            min(settings.call_timeout_seconds, remaining),
+        )
+        result = client.evaluate(
+            request,
+            timeout_seconds=min(settings.call_timeout_seconds, remaining),
+        )
+        return _normalize_result(result, request, hardware)
+    except AicUnavailableError:
+        raise
+    except (AicEvaluationError, ValueError) as error:
+        LOGGER.info(
+            "AIC request failed system=%s mode=%s: %s",
+            request.system,
+            request.database_mode,
+            error,
+        )
+        return None
+
+
+def _fallback_hardware(
+    candidates: Sequence[HardwareCandidate],
+) -> HardwareCandidate | None:
+    """Choose one low-cost exact system for the only fallback round."""
+    if not candidates:
+        return None
+
+    def key(candidate: HardwareCandidate) -> tuple[float, int, str]:
+        prices = [
+            _number(target.pool.get("price_per_instance_hour"))
+            for target in candidate.targets
+            if target.pool is not None
+        ]
+        price = min(
+            (value for value in prices if value is not None),
+            default=float("inf"),
+        )
+        return price, -candidate.available_devices, candidate.system
+
+    return min(candidates, key=key)
 
 
 def _build_aic_request(
@@ -712,11 +832,7 @@ def _aic_systems(
 ) -> tuple[str, ...]:
     """Return AIC systems that can estimate one Store GPU target."""
     system = _aic_system(environment, pool, gpu_type, system_mappings)
-    if system is not None:
-        return (system,)
-    if _hardware_key(gpu_type) == "a10g":
-        return _A10G_PROFILE_FALLBACK_SYSTEMS
-    return ()
+    return () if system is None else (system,)
 
 
 def _select_target(
@@ -1060,6 +1176,14 @@ def _load_settings(values: Mapping[str, object]) -> AicSettings:
             )
             for key, value in mappings.items()
         },
+        call_timeout_seconds=_positive_number(
+            values.get("call_timeout_seconds", _AIC_CALL_TIMEOUT_SECONDS),
+            "call_timeout_seconds",
+        ),
+        tick_timeout_seconds=_positive_number(
+            values.get("tick_timeout_seconds", _AIC_TICK_TIMEOUT_SECONDS),
+            "tick_timeout_seconds",
+        ),
     )
 
 

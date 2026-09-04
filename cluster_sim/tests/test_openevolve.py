@@ -10,12 +10,13 @@ import sys
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
-from models import OnlineJob, Scenario
+from models import BatchJob, OnlineJob, Scenario
 from openevolve import (
     OPENEOLVE_INITIAL_PROGRAM,
     OPENEOLVE_SYSTEM_PROMPT,
@@ -26,6 +27,7 @@ from openevolve import (
     _build_user_prompt,
     _evaluator_source,
     _job_required_vram_gib,
+    _outcome_feedback_payload,
     _place_action,
     _resource_prompt_payload,
     _resources_with_free_capacity,
@@ -697,6 +699,213 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             {"valid": True, "gpu_footprint": 16},
         )
 
+    def test_prompt_includes_canonical_outcome_feedback_evidence(self) -> None:
+        """Expose only matching JSON-native placement outcomes to the policy."""
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        evidence = {
+            "job_id": "waiting",
+            "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+            "environment": "env|H100",
+            "instance_type": None,
+            "gpu_type": "H100",
+            "tp": 1,
+            "pp": 1,
+            "dp": 1,
+            "reward": 0.75,
+        }
+        feedback = SimpleNamespace(
+            outcomes_for_job_ids=lambda job_ids: (
+                (evidence,) if tuple(job_ids) == ("waiting",) else ()
+            )
+        )
+
+        feedback_payload = _outcome_feedback_payload(
+            feedback,
+            snapshot,
+            (driver.jobs["waiting"],),
+            load_config_policy(),
+        )
+        prompt = json.loads(
+            _build_user_prompt(
+                1,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                (driver.jobs["waiting"],),
+                load_config_policy(),
+                feedback_payload,
+            )
+        )
+
+        self.assertEqual(prompt["jobs_for_tick"][0]["job_id"], "waiting")
+        self.assertEqual(
+            prompt["jobs_for_tick"][0]["model_id"],
+            "meta-llama/Llama-3.2-1B-Instruct",
+        )
+        self.assertEqual(prompt["outcome_feedback"], [evidence])
+
+    def test_evaluator_uses_matching_outcomes_as_secondary_score(self) -> None:
+        """Prefer measured reward only after preserving waiting-job admission."""
+        response = _placement_response(tp=1)
+        source = "def compute_placement(payload):\n    return " + repr(response) + "\n"
+        rewarded_payload = _payload()
+        rewarded_payload["jobs_for_tick"][0].update(
+            {"job_id": "waiting", "model_id": "model"}
+        )
+        rewarded_payload["outcome_feedback"] = [
+            {
+                "job_id": "waiting",
+                "model_id": "model",
+                "environment": "env|H100",
+                "instance_type": None,
+                "gpu_type": "H100",
+                "tp": 1,
+                "pp": 1,
+                "dp": 1,
+                "reward": 0.8,
+            }
+        ]
+        neutral_payload = _payload()
+        neutral_payload["jobs_for_tick"][0].update(
+            {"job_id": "waiting", "model_id": "model"}
+        )
+        namespace: dict[str, object] = {}
+        rewarded_namespace: dict[str, object] = {}
+        exec(_evaluator_source(neutral_payload), namespace)
+        exec(_evaluator_source(rewarded_payload), rewarded_namespace)
+        with TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "candidate.py"
+            policy_path.write_text(source, encoding="utf-8")
+            neutral_score = namespace["evaluate"](policy_path)
+            rewarded_score = rewarded_namespace["evaluate"](policy_path)
+
+        self.assertEqual(neutral_score["observed_reward"], 0.0)
+        self.assertEqual(rewarded_score["observed_reward"], 0.8)
+        self.assertGreater(
+            rewarded_score["combined_score"],
+            neutral_score["combined_score"],
+        )
+        self.assertEqual(
+            rewarded_score["admitted_jobs"],
+            neutral_score["admitted_jobs"],
+        )
+
+    def test_pending_running_batch_is_kept_while_waiting_batch_can_place(self) -> None:
+        """Do not offer a swap until a batch placement has a terminal outcome."""
+        driver = _driver()
+        driver.jobs["running"] = _batch_job("running")
+        driver.jobs["waiting"] = _batch_job("waiting")
+        driver.feedback = SimpleNamespace(
+            has_pending_batch=lambda job_id: job_id == "running"
+        )
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100": {
+                    "gpu_type": "H100",
+                    "total": 2,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(
+                _running_store_job("running", _ACTIVE_RANK_ID, "env|H100"),
+            ),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        place_waiting = OpenEvolvePlacement(
+            lifecycle="waiting",
+            decision="place",
+            environment="env|H100",
+            instance_type=None,
+            configuration={"tp": 1, "pp": 1, "dp": 1},
+        )
+
+        self.assertEqual(
+            driver._actionable_job_ids(snapshot),
+            (("waiting", "waiting"),),
+        )
+        self.assertEqual(
+            [
+                action["type"]
+                for action in driver._build_actions(snapshot, (place_waiting,))
+            ],
+            ["keep", "place"],
+        )
+
+    def test_create_plans_records_canonical_feedback_with_telemetry_targets(
+        self,
+    ) -> None:
+        """Track exactly the canonical ladder after its plan persists."""
+        driver = _driver()
+        recorded = []
+        observed = []
+        driver.feedback = SimpleNamespace(
+            observe=lambda logical_time: observed.append(logical_time),
+            has_pending_batch=lambda _job_id: False,
+            outcomes_for_job_ids=lambda _job_ids: (),
+            record=lambda **kwargs: recorded.append(kwargs),
+        )
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        placement = OpenEvolvePlacement(
+            lifecycle="waiting",
+            decision="place",
+            environment="env|H100",
+            instance_type=None,
+            configuration={"tp": 1, "pp": 1, "dp": 1},
+        )
+        logical_time = datetime(2026, 1, 1, tzinfo=UTC)
+        created = []
+        driver._read_store_snapshot = lambda: snapshot
+        driver.client = SimpleNamespace(place=lambda *_args: ((placement,), ()))
+        driver.plan_store = SimpleNamespace(create=lambda plan: created.append(plan))
+
+        result = driver.create_plans(1, logical_time)
+
+        self.assertEqual(observed, [logical_time])
+        self.assertEqual(len(created), 1)
+        self.assertFalse(result.degraded)
+        self.assertEqual(len(recorded), 1)
+        record = recorded[0]
+        self.assertEqual(record["fingerprint"].job_id, "waiting")
+        self.assertEqual(record["fingerprint"].environment, "env|H100")
+        self.assertTrue(record["rank_id"].startswith("rank_"))
+        self.assertEqual(record["window_start"], logical_time)
+        self.assertFalse(record["is_batch"])
+        self.assertEqual(record["required_tps"], 20.0)
+        self.assertEqual(record["ttft_target_ms"], 700.0)
+        self.assertEqual(record["tpot_target_ms"], 55.0)
+
 
 def _payload() -> dict[str, object]:
     """Create one minimal public-facts placement problem."""
@@ -772,6 +981,19 @@ def _online_job(job_id: str) -> OnlineJob:
             },
             "phases": [{"rate": 1.0}],
         },
+    )
+
+
+def _batch_job(job_id: str) -> BatchJob:
+    """Create one batch job with an explicit memory requirement."""
+    return BatchJob(
+        name=job_id,
+        store_job_id=job_id,
+        model_name="meta-llama/Llama-3.2-1B-Instruct",
+        releases_at_ns=0,
+        deadline_at_ns=1_000_000_000,
+        hard_stop_at_ns=2_000_000_000,
+        workload={"features": {"required_vram_gib": 7.966}},
     )
 
 

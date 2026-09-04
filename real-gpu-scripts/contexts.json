@@ -1,0 +1,4 @@
+{
+    "gcp|us-central1": "gke_tandemn_us-central1_tandemn-us-central1",
+    "gcp|europe-west2": "gke_tandemn_europe-west2_tandemn-europe-west2"
+  }

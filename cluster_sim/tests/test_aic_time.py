@@ -256,7 +256,9 @@ class PolicyAicClient:
         self.delegate = delegate
         self.policy = policy
 
-    def evaluate(self, request: AicRequest) -> AicResult:
+    def evaluate(
+        self, request: AicRequest, timeout_seconds: float | None = None
+    ) -> AicResult:
         """Reject unsupported model/hardware pairs and disallowed TP sizes."""
         try:
             hardware = AIC_SYSTEM_POLICY_HARDWARE[request.system]
@@ -270,7 +272,7 @@ class PolicyAicClient:
                 f"{request.model} is unsupported on {hardware} by config policy"
             )
 
-        result = self.delegate.evaluate(request)
+        result = self.delegate.evaluate(request, timeout_seconds=timeout_seconds)
         tp, _, _ = _parallelism(result.configuration)
         if tp not in rule.allowed_tp:
             raise AicEvaluationError(
