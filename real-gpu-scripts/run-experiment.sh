@@ -4,6 +4,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${LOG_DIR:?LOG_DIR is required}"
 mkdir -p -- "$LOG_DIR"
 pids=()
+started_pid=
 
 declare -A pid_to_name=()
 
@@ -61,8 +62,9 @@ start() {
     local name=$1
     shift
     setsid "$@" >"$LOG_DIR/$name.log" 2> >(tee -a "$LOG_DIR/$name.log" >&2) &
-    pids+=("$!")
-    pid_to_name[$!]=$name
+    started_pid=$!
+    pids+=("$started_pid")
+    pid_to_name[$started_pid]=$name
 }
 
 trap 'exit 130' INT
@@ -118,6 +120,7 @@ start runner2 \
   --user-id "$TANDEMN_USER_ID" \
   --planner bestfit \
   --logical-epoch 2026-01-01T00:00:00+00:00
+runner_pid=$started_pid
 
 
 ### Run real_scenario.py
@@ -130,7 +133,12 @@ start real_scenario \
   --source-region us-central1 \
   --source-zone us-central1-a \
   --ready-timeout 1200
+real_scenario_pid=$started_pid
 
 
-# Stop the remaining workloads when any managed process exits.
-wait -n "${pids[@]}"
+# runner2 owns the benchmark lifetime; real_scenario follows Store state.
+wait "$runner_pid" || exit 1
+wait "$real_scenario_pid" || exit 1
+
+# Leave Orca two reconciliation intervals to remove finished workloads.
+sleep 20

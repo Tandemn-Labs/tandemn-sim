@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import yaml
-from tandemn_system_data.models import JobStatus, ReasonCode
+from tandemn_system_data.models import JobStatus
 
 from data_generation.controller import ROOT
 from data_generation.real_scenario import (
@@ -32,17 +32,12 @@ class FakeStore:
     def __init__(self, snapshots: Sequence[Sequence[StoreJob]]) -> None:
         self.snapshots = list(snapshots)
         self.calls: list[tuple[str, ...]] = []
-        self.finished: list[tuple[str, str | None]] = []
 
     def list_jobs(self, user_ids: Sequence[str]) -> Sequence[StoreJob]:
         self.calls.append(tuple(user_ids))
         if len(self.snapshots) > 1:
             return self.snapshots.pop(0)
         return self.snapshots[0]
-
-    def finish_job(self, job_id: str, finish_reason: str | None = None) -> bool:
-        self.finished.append((job_id, finish_reason))
-        return True
 
 
 def process(*poll_results: int | None) -> mock.Mock:
@@ -126,7 +121,6 @@ class RealScenarioTests(unittest.TestCase):
             config["benchmark"]["endpoint"]["sessionHeader"],
             "X-Tandemn-Session-ID",
         )
-        self.assertEqual(store.finished, [("store-ulid", None)])
 
     @mock.patch("data_generation.real_scenario.subprocess.Popen")
     @mock.patch("data_generation.real_scenario.check_ready", return_value=True)
@@ -134,13 +128,13 @@ class RealScenarioTests(unittest.TestCase):
         "data_generation.real_scenario.resolve_endpoint",
         return_value="http://127.0.0.1:28001",
     )
-    def test_running_process_ignores_later_store_status(
+    def test_finished_store_job_stops_running_aiperf(
         self,
         _resolve: mock.Mock,
         _ready: mock.Mock,
         popen: mock.Mock,
     ) -> None:
-        popen.return_value = process(None, 0)
+        popen.return_value = process(None, -15)
         store = FakeStore(
             [
                 (StoreJob("authored-job", JobStatus.RUNNING, None),),
@@ -152,8 +146,8 @@ class RealScenarioTests(unittest.TestCase):
         self.assertEqual(self.run_daemon(store), 0)
         events = self.read_events()
         self.assertEqual(events[-1]["state"], State.DONE)
-        self.assertEqual(events[-1]["exit_code"], 0)
-        self.assertEqual(store.finished, [("authored-job", None)])
+        self.assertEqual(events[-1]["exit_code"], -15)
+        popen.return_value.terminate.assert_called_once_with()
 
     @mock.patch("data_generation.real_scenario.subprocess.Popen")
     @mock.patch("data_generation.real_scenario.check_ready", return_value=True)
@@ -172,7 +166,6 @@ class RealScenarioTests(unittest.TestCase):
         store = FakeStore([(StoreJob(store_id, JobStatus.RUNNING, None),)])
 
         self.assertEqual(self.run_daemon(store), 0)
-        self.assertEqual(store.finished, [(store_id, None)])
 
     @mock.patch("data_generation.real_scenario.check_ready", return_value=False)
     @mock.patch(
@@ -237,10 +230,6 @@ class RealScenarioTests(unittest.TestCase):
         self.assertEqual(self.run_daemon(store), 1)
         self.assertEqual(self.read_events()[-1]["state"], State.FAILED)
         self.assertEqual(self.read_events()[-1]["exit_code"], 17)
-        self.assertEqual(
-            store.finished,
-            [("authored-job", ReasonCode.PROCESS_CRASH)],
-        )
 
     def test_skips_disabled_and_non_aiperf_jobs(self) -> None:
         benchmark_root = self.output_dir / "benchmarks" / "sample"
