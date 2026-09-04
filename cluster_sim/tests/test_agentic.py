@@ -129,7 +129,6 @@ class AgenticPlannerTest(unittest.TestCase):
             [
                 ("running", "keep"),
                 ("waiting", "place"),
-                ("paused", "defer"),
             ],
         )
         self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "fp16")

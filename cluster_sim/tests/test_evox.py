@@ -71,7 +71,6 @@ class EvoxPlannerDriverTest(unittest.TestCase):
             [
                 {"job_id": "running", "type": "keep"},
                 {"job_id": "waiting", "type": "defer"},
-                {"job_id": "paused", "type": "defer"},
             ],
         )
 

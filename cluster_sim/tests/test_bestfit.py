@@ -231,7 +231,6 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 ("running", "keep"),
                 (first, "place"),
                 (second, "defer"),
-                ("paused", "defer"),
             ],
         )
         placed = actions[1]

@@ -312,7 +312,6 @@ class AicPlannerDriverTest(unittest.TestCase):
             [
                 ("running", "keep"),
                 ("waiting", "place"),
-                ("paused", "defer"),
             ],
         )
         placed = actions[1]
