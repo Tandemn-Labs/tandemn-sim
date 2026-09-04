@@ -7,6 +7,11 @@ from datetime import UTC, datetime
 
 from tandemn_system_data.models.gpu_metric import GpuMetric
 
+BatchChainSamples = dict[
+    tuple[str, str, int],
+    list[tuple[datetime, dict[str, float]]],
+]
+
 SUM_METRICS = frozenset(
     {
         "throughput_token_per_sec",
@@ -43,6 +48,14 @@ MEAN_METRICS = frozenset(
 )
 RANK_METRICS = SUM_METRICS | MAX_METRICS | MIN_METRICS | WEIGHTED_METRICS | MEAN_METRICS
 SAMPLE_BUCKET_SECONDS = 10
+BATCH_COUNTER_METRICS = frozenset(
+    {
+        "batched_reqs_processed_total",
+        "batched_chunks_input_pulled_total",
+        "batched_chunks_output_written_total",
+    }
+)
+BATCH_METRICS = BATCH_COUNTER_METRICS | frozenset({"batched_reqs_inflight"})
 
 
 def rank_trajectories(
@@ -66,6 +79,38 @@ def rank_trajectories(
         rank: _rank_trajectory(bucket_chains)
         for rank, bucket_chains in grouped.items()
     }
+
+
+def batch_chain_samples(
+    rows: list[GpuMetric],
+) -> BatchChainSamples:
+    """Return ordered batch-driver samples once per job/rank/chain.
+
+    Batch-driver values repeat on every physical GPU in a chain. Consecutive
+    identical values are collapsed, which removes those GPU copies without
+    discarding counter changes or resets observed later in the tick.
+    """
+    grouped: dict[tuple[str, str, int], list[GpuMetric]] = {}
+    for row in rows:
+        if row.job_id is None or row.rank_id is None or row.chain_index is None:
+            continue
+        key = (row.job_id, row.rank_id, row.chain_index)
+        grouped.setdefault(key, []).append(row)
+
+    samples: BatchChainSamples = {}
+    for key, chain_rows in grouped.items():
+        previous: dict[str, float] | None = None
+        for row in sorted(chain_rows, key=lambda item: item.ts):
+            values = {
+                name: value
+                for name in BATCH_METRICS
+                if (value := _metric_value(row, name)) is not None
+            }
+            if not values or values == previous:
+                continue
+            samples.setdefault(key, []).append((row.ts, values))
+            previous = values
+    return samples
 
 
 def _rank_trajectory(

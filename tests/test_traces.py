@@ -14,6 +14,7 @@ from tandemn_system_data.models.event import Event
 from tandemn_system_data.models.evidence import EvidenceRow
 from tandemn_system_data.models.gpu_metric import GpuMetric
 from tandemn_system_data.models.job import Job
+from tandemn_system_data.models.plan import Plan, PlanAction
 from tandemn_system_data.models.rank import Rank
 from tandemn_system_data.models.resource_map import ResourceMap
 
@@ -111,6 +112,16 @@ class FakeGpuMetricStore:
     ) -> list[GpuMetric]:
         self.calls.append((user_id, job_id, start, end))
         return self.rows
+
+
+class FakePlanStore:
+    """Return canonical Plan rows by ID without a database."""
+
+    def __init__(self, plans: list[Plan]) -> None:
+        self.plans = {plan.plan_id: plan for plan in plans}
+
+    def get(self, plan_id: str) -> Plan | None:
+        return self.plans.get(plan_id)
 
 
 def store_event(
@@ -370,6 +381,16 @@ class RealTraceCollectorTests(unittest.TestCase):
 
     def test_plan_ticks_follow_event_order(self) -> None:
         self.collector.start_run(self.started_at)
+        plans = FakePlanStore(
+            [
+                Plan(
+                    plan_id="plan_1",
+                    user_id="tenant",
+                    actions=[PlanAction(job_id="job_01J", type="keep")],
+                ),
+                Plan(plan_id="plan_2", user_id="tenant"),
+            ]
+        )
         log = FakeEventLog(
             [
                 store_event(
@@ -393,12 +414,13 @@ class RealTraceCollectorTests(unittest.TestCase):
             ]
         )
 
-        self.collector.collect_store_events(log)
+        self.collector.collect_store_events(log, plans=plans)
 
         plan_events = [
             event for event in self.read_events() if event["kind"] == "plan_created"
         ]
         self.assertEqual([event["tick"] for event in plan_events], [0, 1])
+        self.assertEqual(plan_events[0]["plan"]["actions"][0]["job_id"], "job_01J")
 
     def test_closed_ticks_use_a_fixed_holdback_and_do_not_reopen(self) -> None:
         self.collector.start_run(self.started_at)
@@ -866,6 +888,249 @@ class RealTraceCollectorTests(unittest.TestCase):
         self.assertEqual(window["metrics"]["p99_ttft_ms"], [200.0])
         self.assertEqual(window["metrics"]["sm_utilization"], [65.0])
         self.assertAlmostEqual(window["metrics"]["cost_per_token"][0], 1 / 6)
+
+    def test_batch_window_uses_only_batch_driver_metrics(self) -> None:
+        self.collector.start_run(self.started_at)
+        batch_path = self.run_dir / "batch.yaml"
+        batch_path.write_text(
+            """workload:
+  dataset:
+    record_count: 1000
+    partitioning:
+      shard_count: 10
+      requests_per_shard: 100
+""",
+            encoding="utf-8",
+        )
+        self.collector.bind_job(
+            authored_job_id="batch-job",
+            store_job_id="job_batch",
+            job_kind="batch",
+            benchmark_job_path=batch_path,
+        )
+        self.collector.collect_store_events(
+            FakeEventLog(
+                [
+                    store_event(
+                        "evt-1",
+                        "tenant",
+                        None,
+                        None,
+                        "plan.created",
+                        {"plan_id": "plan_1"},
+                        self.started_at,
+                    ),
+                    store_event(
+                        "evt-2",
+                        "tenant",
+                        None,
+                        None,
+                        "plan.created",
+                        {"plan_id": "plan_2"},
+                        self.started_at + timedelta(minutes=1),
+                    ),
+                ]
+            )
+        )
+        metrics = FakeGpuMetricStore(
+            [
+                GpuMetric(
+                    metric_id="gpu_chain_0_a",
+                    ts=self.started_at + timedelta(seconds=2),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-0a",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    batched_reqs_inflight=3,
+                    batched_reqs_processed_total=100,
+                    batched_chunks_input_pulled_total=4,
+                    batched_chunks_output_written_total=3,
+                ),
+                GpuMetric(
+                    metric_id="gpu_chain_0_b",
+                    ts=self.started_at + timedelta(seconds=4),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-0b",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    batched_reqs_inflight=3,
+                    batched_reqs_processed_total=100,
+                    batched_chunks_input_pulled_total=4,
+                    batched_chunks_output_written_total=3,
+                ),
+                GpuMetric(
+                    metric_id="gpu_chain_1",
+                    ts=self.started_at + timedelta(seconds=5),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-1",
+                    rank_id="rank_01J",
+                    chain_index=1,
+                    batched_reqs_inflight=2,
+                    batched_reqs_processed_total=50,
+                    batched_chunks_input_pulled_total=2,
+                    batched_chunks_output_written_total=1,
+                ),
+                GpuMetric(
+                    metric_id="gpu_chain_0_later",
+                    ts=self.started_at + timedelta(seconds=15),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-0a",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    batched_reqs_inflight=4,
+                    batched_reqs_processed_total=140,
+                    batched_chunks_input_pulled_total=5,
+                    batched_chunks_output_written_total=4,
+                ),
+                GpuMetric(
+                    metric_id="gpu_chain_0_reset",
+                    ts=self.started_at + timedelta(seconds=25),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-0a",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    batched_reqs_inflight=2,
+                    batched_reqs_processed_total=10,
+                    batched_chunks_input_pulled_total=1,
+                    batched_chunks_output_written_total=0,
+                ),
+                GpuMetric(
+                    metric_id="gpu_chain_0_final",
+                    ts=self.started_at + timedelta(seconds=35),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-0a",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    batched_reqs_inflight=1,
+                    batched_reqs_processed_total=40,
+                    batched_chunks_input_pulled_total=2,
+                    batched_chunks_output_written_total=1,
+                ),
+            ]
+        )
+        tick = self.collector.finalize_closed_ticks(
+            self.started_at + timedelta(minutes=2)
+        )[0]
+
+        self.assertEqual(self.collector.emit_batch_job_window(tick, metrics), 1)
+
+        window = next(
+            event for event in self.read_events() if event["kind"] == "batch_job_window"
+        )
+        self.assertEqual(window["requests_inflight"], 3.0)
+        self.assertEqual(window["requests_processed_total"], 230.0)
+        self.assertEqual(window["requests_processed_in_tick"], 230.0)
+        self.assertEqual(window["request_completion_percent"], 23.0)
+        self.assertEqual(window["pending_requests"], 767.0)
+        self.assertEqual(window["chunks_input_pulled_total"], 9.0)
+        self.assertEqual(window["chunks_output_written_total"], 6.0)
+        self.assertEqual(window["chunk_completion_percent"], 60.0)
+        self.assertEqual(
+            window["rank_metrics"]["rank_01J"]["requests_processed_total"],
+            230.0,
+        )
+
+    def test_batch_rank_totals_survive_a_tick_without_fresh_samples(self) -> None:
+        definition = (1000, 10, 100)
+        first = self.collector._batch_window(
+            "job_batch",
+            {
+                ("job_batch", "rank_a", 0): [
+                    (
+                        self.started_at,
+                        {
+                            "batched_reqs_inflight": 2.0,
+                            "batched_reqs_processed_total": 100.0,
+                        },
+                    )
+                ],
+                ("job_batch", "rank_b", 0): [
+                    (
+                        self.started_at,
+                        {
+                            "batched_reqs_inflight": 1.0,
+                            "batched_reqs_processed_total": 50.0,
+                        },
+                    )
+                ],
+            },
+            definition,
+        )
+        second = self.collector._batch_window(
+            "job_batch",
+            {
+                ("job_batch", "rank_a", 0): [
+                    (
+                        self.started_at + timedelta(minutes=1),
+                        {
+                            "batched_reqs_inflight": 1.0,
+                            "batched_reqs_processed_total": 120.0,
+                        },
+                    )
+                ]
+            },
+            definition,
+        )
+
+        self.assertEqual(first["requests_processed_total"], 150.0)
+        self.assertEqual(second["requests_processed_total"], 170.0)
+        self.assertEqual(
+            second["rank_metrics"]["rank_b"]["requests_processed_total"],
+            50.0,
+        )
+        self.assertNotIn("requests_inflight", second["rank_metrics"]["rank_b"])
+
+    def test_run_summary_uses_rank_running_for_admission(self) -> None:
+        self.collector.start_run(self.started_at)
+        self.collector.bind_job(
+            authored_job_id="online-job",
+            store_job_id="job_online",
+            job_kind="online",
+            benchmark_job_path=Path("online.yaml"),
+        )
+        self.collector.bind_job(
+            authored_job_id="batch-job",
+            store_job_id="job_batch",
+            job_kind="batch",
+            benchmark_job_path=Path("batch.yaml"),
+        )
+        self.collector.collect_store_events(
+            FakeEventLog(
+                [
+                    store_event(
+                        "evt-1",
+                        "tenant",
+                        "job_online",
+                        "rank_online",
+                        "rank.running",
+                        {},
+                        self.started_at,
+                    ),
+                    store_event(
+                        "evt-2",
+                        "tenant",
+                        "job_batch",
+                        "rank_batch",
+                        "rank.running",
+                        {},
+                        self.started_at,
+                    ),
+                ]
+            )
+        )
+
+        self.collector.emit_run_summary(duration_seconds=12_600)
+
+        summary = next(
+            event for event in self.read_events() if event["kind"] == "run_summary"
+        )
+        self.assertEqual(summary["online_admission_percent"], 100.0)
+        self.assertEqual(summary["batch_admission_percent"], 100.0)
+        self.assertIsNone(summary["batch_goodput_token_per_sec"])
+        self.assertEqual(
+            summary["batch_goodput_status"],
+            "requires_output_token_counter",
+        )
 
     def test_store_snapshots_include_only_bound_jobs_and_changed_resources(
         self,

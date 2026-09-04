@@ -231,6 +231,60 @@ class RealScenarioTests(unittest.TestCase):
         self.assertEqual(self.read_events()[-1]["state"], State.FAILED)
         self.assertEqual(self.read_events()[-1]["exit_code"], 17)
 
+    @mock.patch("data_generation.real_scenario._create_trace_runtime")
+    @mock.patch("data_generation.real_scenario.subprocess.Popen")
+    @mock.patch("data_generation.real_scenario.check_ready", return_value=True)
+    @mock.patch(
+        "data_generation.real_scenario.resolve_endpoint",
+        return_value="http://127.0.0.1:28001",
+    )
+    def test_integrates_trace_runtime_without_passing_aiperf_process(
+        self,
+        _resolve: mock.Mock,
+        _ready: mock.Mock,
+        popen: mock.Mock,
+        create_trace: mock.Mock,
+    ) -> None:
+        popen.return_value = process(0)
+        trace = create_trace.return_value
+        store = FakeStore(
+            [(StoreJob("store-ulid", JobStatus.RUNNING, "authored-job"),)]
+        )
+
+        self.assertEqual(self.run_daemon(store, trace_client=object()), 0)
+
+        trace.start.assert_called_once()
+        trace.bind_job.assert_called_once_with(self.job, "store-ulid")
+        trace.collect.assert_called()
+        trace.collect_final_aiperf_metrics.assert_called_once_with("authored-job")
+        trace.finish.assert_called_once()
+        for call in trace.mock_calls:
+            self.assertNotIn(popen.return_value, call.args)
+
+    def test_observes_batch_job_without_launching_aiperf(self) -> None:
+        batch = ManifestJob(
+            "batch-job",
+            "tenant",
+            JOB_PATH,
+            kind="batch",
+            driver="external_mock_data",
+        )
+        self.manifest = Manifest("test", 0.01, (batch,))
+        store = FakeStore(
+            [
+                (StoreJob("batch-store", JobStatus.RUNNING, "batch-job"),),
+                (StoreJob("batch-store", JobStatus.FINISHED, "batch-job"),),
+            ]
+        )
+
+        self.assertEqual(self.run_daemon(store), 0)
+
+        self.assertEqual(
+            [event["state"] for event in self.read_events()],
+            [State.PENDING, State.OBSERVING, State.DONE],
+        )
+        self.assertEqual(store.finished, [])
+
     def test_skips_disabled_and_non_aiperf_jobs(self) -> None:
         benchmark_root = self.output_dir / "benchmarks" / "sample"
         jobs_dir = benchmark_root / "jobs"
@@ -255,7 +309,11 @@ class RealScenarioTests(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "job_id": name,
-                        "schedule": {"enabled": enabled, "driver": driver},
+                        "schedule": {
+                            "enabled": enabled,
+                            "kind": "online",
+                            "driver": driver,
+                        },
                         "spec": {"user_id": "tenant"},
                     }
                 ),
