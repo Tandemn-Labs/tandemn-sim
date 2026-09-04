@@ -1186,9 +1186,10 @@ class ClusterSimulator:
             or self._batch_jobs[running.job.job_id]
         )
         for deployment in deployments:
-            deployment.shape["weight_dtype"] = model_catalog.weight_dtype
-            deployment.shape["weight_quantization_method"] = (
-                model_catalog.weight_quantization_method
+            deployment.shape.setdefault("weight_dtype", model_catalog.weight_dtype)
+            deployment.shape.setdefault(
+                "weight_quantization_method",
+                model_catalog.weight_quantization_method,
             )
             deployment.shape["task"] = benchmark_job.workload.get("task", "generate")
         failures = []

@@ -2283,6 +2283,87 @@ class RunnerDataPlaneTest(unittest.TestCase):
         )
         self.assertEqual(second_pool["reported_gpu_count"], 0)
 
+    def test_runner_preserves_planner_dtype_with_catalog_fallback(self) -> None:
+        """Keep a resolved planner dtype and fill missing launch fields from Store."""
+        source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
+        job = replace(source.online_jobs[0], store_job_id="job_1")
+        simulator = object.__new__(ClusterSimulator)
+        simulator.postgres = object()
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.container = "servingsim_docker"
+        simulator.run_name = "runner-dtype"
+        simulator.rank_timeout_seconds = 30
+        simulator._online_jobs = {job.store_job_id: job}
+        simulator._batch_jobs = {}
+        request = Request("request-0", "session", 0, 0, 100, 10, None)
+        shape = {
+            "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
+            "count": 2,
+            "tp": 2,
+            "pp": 1,
+            "gpu_count": 2,
+            "instance_type": "sim.h100.8gpu",
+        }
+        captured_shapes = []
+
+        class ModelCatalogStore:
+            def __init__(self, postgres) -> None:
+                pass
+
+            def get(self, model_id):
+                return SimpleNamespace(
+                    weight_dtype="float16",
+                    weight_quantization_method="fp8",
+                )
+
+        def prepare(deployment, *args):
+            captured_shapes.append(dict(deployment.shape))
+            return SimpleNamespace()
+
+        def run_with_shape(rank_shape):
+            simulator._router = StickyRoundRobinRouter()
+            running = SimpleNamespace(
+                job=SimpleNamespace(
+                    job_id=job.store_job_id,
+                    spec_json={"model_id": job.model_name},
+                ),
+                ranks=(
+                    SimpleNamespace(
+                        rank_id="rank_1",
+                        n_replicas=1,
+                        shape_json=rank_shape,
+                    ),
+                ),
+            )
+            simulator._prepare_job_runs(
+                running,
+                job.name,
+                (request,),
+                0,
+                0,
+                {},
+            )
+
+        with (
+            patch("tandemn_system_data.clients.ModelCatalogStore", ModelCatalogStore),
+            patch("runner.profile_coverage_error", return_value=None),
+            patch("runner.resolve_rank_hardware", return_value={}),
+            patch("runner.prepare_rank_run", side_effect=prepare),
+        ):
+            run_with_shape(
+                {
+                    **shape,
+                    "weight_dtype": "bfloat16",
+                    "weight_quantization_method": "none",
+                }
+            )
+            run_with_shape(shape)
+
+        self.assertEqual(captured_shapes[0]["weight_dtype"], "bfloat16")
+        self.assertEqual(captured_shapes[0]["weight_quantization_method"], "none")
+        self.assertEqual(captured_shapes[1]["weight_dtype"], "float16")
+        self.assertEqual(captured_shapes[1]["weight_quantization_method"], "fp8")
+
     def test_batch_probe_advances_full_backlog_by_observed_rate(self) -> None:
         """Scale a two-second, twenty-request probe across one five-minute tick."""
         measurement = BatchProbeMeasurement(
