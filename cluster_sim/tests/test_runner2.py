@@ -22,6 +22,21 @@ class _Jobs:
 
 
 class PlanRunnerTest(unittest.TestCase):
+    def test_koi_mode_skips_planner_poll(self) -> None:
+        runner = PlanRunner.__new__(PlanRunner)
+        runner.scenario = Scenario("test", 5, 10, (), ())
+        runner.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        runner._submit_jobs_before = mock.Mock()
+        runner._finish_jobs_due = mock.Mock()
+        runner.planner = mock.Mock()
+
+        runner.planner = None
+        result = runner.run_tick(0)
+
+        runner._submit_jobs_before.assert_any_call(1)
+        runner._finish_jobs_due.assert_called_once_with(0)
+        self.assertEqual(result.plans, ())
+
     def test_finishes_each_job_only_at_its_scheduled_stop(self) -> None:
         online = OnlineJob("online", "online-id", "model", 0, 5, {})
         batch = BatchJob("batch", "batch-id", "model", 0, 4, 10, {})

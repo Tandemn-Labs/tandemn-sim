@@ -14,6 +14,7 @@ from scenario import generate_job_ulid, load_scenario
 
 ROOT = Path(__file__).resolve().parents[1]
 PLANNERS = (
+    "koi",
     "dynamo_aic",
     "bestfit",
     "vram",
@@ -57,7 +58,7 @@ class PlanRunner:
         scenario: Scenario,
         user_id: str,
         postgres: object,
-        planner: PlannerDriver,
+        planner: PlannerDriver | None,
         clock: LogicalClock,
     ) -> None:
         """Create a runner for an existing, seeded Store user."""
@@ -115,7 +116,11 @@ class PlanRunner:
         self._finish_jobs_due(start_offset_ns)
 
         LOGGER.info("tick %d: planning placements", tick_number)
-        result = self.planner.create_plans(tick_number, start)
+        result = (
+            PlannerResult(tick_number=tick_number, plans=())
+            if self.planner is None
+            else self.planner.create_plans(tick_number, start)
+        )
         LOGGER.info("tick %d: created %d plan(s)", tick_number, len(result.plans))
         if result.error is not None:
             LOGGER.warning("tick %d planner error: %s", tick_number, result.error)
@@ -255,14 +260,16 @@ def main(argv: list[str] | None = None) -> None:
     scenario = generate_job_ulid(load_scenario(_benchmark_path(args.benchmark)))
     clock = LogicalClock(epoch.astimezone(UTC))
     postgres = PostgresClient(args.postgres_url)
-    planner = build_planner(
-        args.planner,
-        argparse.Namespace(
-            user_id=args.user_id,
-            postgres=postgres,
-            scenario=scenario,
-        ),
-    )
+    planner = None
+    if args.planner != "koi":
+        planner = build_planner(
+            args.planner,
+            argparse.Namespace(
+                user_id=args.user_id,
+                postgres=postgres,
+                scenario=scenario,
+            ),
+        )
     PlanRunner(scenario, args.user_id, postgres, planner, clock).run(args.ticks)
 
 
