@@ -124,24 +124,21 @@ class KoiPlannerDriver:
     def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
         """Run one Koi tick and return the Store plans it created."""
         usage: list[LlmUsage] = []
-        sdk_client = getattr(self.llm, "_client", None)
-        model = getattr(self.llm, "model", None)
+        sdk_llm = getattr(self.llm, "inner", self.llm)
+        sdk_client = getattr(sdk_llm, "_client", None)
+        model = getattr(sdk_llm, "model", None)
         if sdk_client is not None and isinstance(model, str) and model:
-            setattr(
-                self.llm,
-                "_client",
-                OpenAIUsageClient(
-                    sdk_client,
-                    tick_number,
-                    model,
-                    usage,
-                ),
+            sdk_llm._client = OpenAIUsageClient(
+                sdk_client,
+                tick_number,
+                model,
+                usage,
             )
         try:
             context = self.runner.run_tick(tick_number)
         finally:
             if sdk_client is not None and isinstance(model, str) and model:
-                setattr(self.llm, "_client", sdk_client)
+                sdk_llm._client = sdk_client
         if self.debug_logger is not None:
             self.debug_logger.persist_runner_tick(context, self.agent, self.llm)
         events = getattr(getattr(self.agent, "trace", None), "events", None)

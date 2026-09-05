@@ -300,6 +300,30 @@ from an invalid or interrupted run.
 LLMServingSim uses local precomputed profiles for these benchmarks. A Hugging
 Face token is not required for ordinary simulation runs.
 
+### Koi With Azure Foundry
+
+Set the matching Koi Foundry endpoint and key in the parent process, then pass
+only the deployed model name through the existing Koi argument bridge:
+
+```bash
+export KOI_FOUNDRY_DEEPSEEK_BASE_URL='https://deepseek-models.openai.azure.com/openai/v1'
+export KOI_FOUNDRY_DEEPSEEK_API_KEY='...'
+export TANDEMN_POSTGRES_URL='postgresql+psycopg://tandemn:tandemn@localhost:55432/<BASELINE_DATABASE>'
+
+uv run python cluster_sim/cli.py \
+  --benchmark simulation_3h \
+  --postgres-url "$TANDEMN_POSTGRES_URL" \
+  --user-id <USER_ID> \
+  --planner koi \
+  --koi-root ../koi \
+  --koi-arg=--model=DeepSeek-V4-Pro \
+  --koi-arg=--trace=all
+```
+
+Koi is imported into the simulator process, so it receives those environment
+variables directly. `TANDEMN_POSTGRES_URL` must match `--postgres-url` because
+Koi creates its own Store client.
+
 ## Optional Two-Tick Preflight
 
 Before a long run, use a separate prepared baseline user and add this argument
