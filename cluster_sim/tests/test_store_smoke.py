@@ -7,7 +7,9 @@ import sys
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
+import json
 from pathlib import Path
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -172,6 +174,92 @@ class StoreSmokeTest(unittest.TestCase):
             )
             self.assertEqual(jobs.get(second.store_job_id).status, JobStatus.WAITING)
             self.assertEqual(simulator.clock.now(), datetime(2026, 1, 1, 0, 10, tzinfo=UTC))
+        finally:
+            with postgres.begin() as session:
+                user = session.get(UserRow, user_id)
+                if user is not None:
+                    session.delete(user)
+
+    def test_coordinator_finishes_a_job_at_its_deadline(self) -> None:
+        """Stop the Store rank and record the logical lifetime end on tick two."""
+        from tandemn_system_data.clients import JobStore, PlanStore, PostgresClient
+        from tandemn_system_data.db.orm import UserRow
+        from tandemn_system_data.ids import new_job_id, new_user_id
+        from tandemn_system_data.models import ActionType, PlanAction
+        from tandemn_system_data.models._base import utc_now
+        from tandemn_system_data.models.enums import JobStatus
+
+        postgres = PostgresClient()
+        user_id = new_user_id()
+        with postgres.begin() as session:
+            session.add(UserRow(user_id=user_id, name="deadline-smoke", created_at=utc_now()))
+
+        try:
+            source = load_scenario(ROOT / "benchmarks/simulation_3h/benchmark.yaml")
+            job = replace(
+                source.online_jobs[0],
+                store_job_id=new_job_id(),
+                starts_at_ns=0,
+                stops_at_ns=600_000_000_000,
+            )
+            scenario = Scenario(
+                "deadline-smoke",
+                300_000_000_000,
+                600_000_000_000,
+                (job,),
+                (),
+                workload_end_ns=600_000_000_000,
+            )
+            action = PlanAction(
+                job_id=job.store_job_id,
+                type=ActionType.PLACE,
+                target_p99_ttft_ms=600,
+                target_p99_tpot_ms=60,
+                ladder=[
+                    {
+                        "role": "aggregate",
+                        "rank_id": "rank_01JBM2YQYZ1KQ9C8GZP1XB6V5T",
+                        "env": ["reserved", "sim", "region-1", "zone-1", "H100-SXM-80GB"],
+                        "config": {
+                            "instance_type": "sim.h100.8gpu",
+                            "gpu_type": "H100-SXM-80GB",
+                            "gpu_count": 1,
+                            "tp": 1,
+                            "pp": 1,
+                        },
+                        "n_replicas": 1,
+                    }
+                ],
+            )
+            epoch = datetime(2026, 1, 1, tzinfo=UTC)
+            jobs = JobStore(postgres)
+            with tempfile.TemporaryDirectory() as directory:
+                simulator = ClusterSimulator(
+                    scenario,
+                    user_id,
+                    postgres,
+                    ScriptedPlannerDriver(user_id, PlanStore(postgres), {0: (action,)}),
+                    LogicalClock(epoch),
+                    trace_root=Path(directory),
+                    trace_run_id="deadline-smoke",
+                )
+
+                simulator.run_tick(0)
+                self.assertEqual(jobs.get(job.store_job_id).status, JobStatus.RUNNING)
+
+                simulator.run_tick(1)
+                self.assertEqual(jobs.get(job.store_job_id).status, JobStatus.FINISHED)
+                self.assertEqual(active_ranks(job.store_job_id, jobs), [])
+
+                events = [
+                    json.loads(line)
+                    for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+                    if json.loads(line)["kind"] == "job_finished"
+                ]
+
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["finished_at"], "2026-01-01T00:10:00+00:00")
+            self.assertEqual(events[0]["finish_reason"], "SIMULATION_DEADLINE")
         finally:
             with postgres.begin() as session:
                 user = session.get(UserRow, user_id)

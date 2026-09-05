@@ -168,6 +168,7 @@ def load_scenario(overview_path: Path) -> Scenario:
         online_jobs=tuple(online_jobs),
         batch_jobs=tuple(batch_jobs),
         environment=settings["environment"],
+        workload_end_ns=_ns(settings["duration_minutes"]),
     )
 
 

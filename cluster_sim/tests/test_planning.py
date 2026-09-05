@@ -30,10 +30,11 @@ class KoiPlannerDriverTest(unittest.TestCase):
         )
         resource = SimpleNamespace(create=lambda **_kwargs: response)
         sdk_client = SimpleNamespace(chat=SimpleNamespace(completions=resource))
-        llm = SimpleNamespace(_client=sdk_client, model="koi-model", calls=[])
+        client = SimpleNamespace(_client=sdk_client, model="koi-model")
+        llm = SimpleNamespace(inner=client, calls=[])
 
         def run_tick(tick: int) -> SimpleNamespace:
-            llm._client.chat.completions.create(model=llm.model)
+            client._client.chat.completions.create(model=client.model)
             return SimpleNamespace(deploy_acks=[], error=None)
 
         result = KoiPlannerDriver(
@@ -43,7 +44,7 @@ class KoiPlannerDriverTest(unittest.TestCase):
             llm,
         ).create_plans(6, None)
 
-        self.assertIs(llm._client, sdk_client)
+        self.assertIs(client._client, sdk_client)
         self.assertEqual(result.llm_usage[0].tick_number, 6)
         self.assertEqual(result.llm_usage[0].input_tokens, 70)
         self.assertEqual(result.llm_usage[0].output_tokens, 15)
