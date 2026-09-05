@@ -44,6 +44,7 @@ class Scenario:
     online_jobs: tuple[OnlineJob, ...]
     batch_jobs: tuple[BatchJob, ...]
     environment: str = "simulation"
+    workload_end_ns: int | None = None
 
 
 @dataclass(frozen=True)

@@ -801,6 +801,7 @@ def gpu_metrics_from_results(
     *,
     batch_measurements: Mapping[str, BatchProbeMeasurement] | None = None,
     batch_active_ns: int | None = None,
+    online_active_ns: int | None = None,
 ) -> list[object]:
     """Derive per-chain and per-GPU Store telemetry from rank results."""
     from tandemn_system_data.models import GpuMetric
@@ -828,7 +829,12 @@ def gpu_metrics_from_results(
         shape = deployment.shape
         target_ttft = float(shape.get("target_p99_ttft_ms", 0))
         prefix_cache_enabled = bool(shape.get("prefix_cache_enabled", False))
-        samples = _latest_samples_per_bucket(result.metric_samples, tick_duration_ns)
+        active_ns = (
+            tick_duration_ns
+            if online_active_ns is None
+            else min(tick_duration_ns, online_active_ns)
+        )
+        samples = _latest_samples_per_bucket(result.metric_samples, active_ns)
 
         for instance_id, binding in enumerate(deployment.chains):
             rows = [row for row in result.request_rows if int(row["instance id"]) == instance_id]

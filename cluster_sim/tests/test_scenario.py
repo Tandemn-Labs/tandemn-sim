@@ -38,6 +38,7 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual(len(self.scenario.online_jobs), 18)
         self.assertEqual(len(self.scenario.batch_jobs), 7)
         self.assertEqual(self.scenario.tick_duration_ns, 300_000_000_000)
+        self.assertEqual(self.scenario.workload_end_ns, 10_800_000_000_000)
 
     def test_online_trace_is_deterministic_and_tick_partitioned(self) -> None:
         """Generate one continuous trace and recover it exactly from tick slices."""

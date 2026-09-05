@@ -121,6 +121,239 @@ class RunnerDataPlaneTest(unittest.TestCase):
         self.assertEqual([item.tick_number for item in result], [0, 1])
         hard_stop.assert_called_once_with("SIMULATION_TICK_LIMIT")
 
+    def test_run_stops_at_workload_end_before_drain(self) -> None:
+        """Do not simulate the manifest's post-workload drain period."""
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "strict-end",
+            1_000_000_000,
+            3_000_000_000,
+            (),
+            (),
+            workload_end_ns=2_000_000_000,
+        )
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        ticks = []
+
+        def run_tick(tick_number):
+            ticks.append(tick_number)
+            simulator.clock.advance(timedelta(seconds=1))
+            return SimpleNamespace(tick_number=tick_number)
+
+        simulator.run_tick = run_tick
+
+        with patch.object(simulator, "_hard_stop") as hard_stop:
+            simulator.run()
+
+        self.assertEqual(ticks, [0, 1])
+        hard_stop.assert_called_once_with("SIMULATION_HARD_STOP")
+
+    def test_run_tick_finishes_due_jobs_before_planning(self) -> None:
+        """Do not expose jobs at their deadline to the planner snapshot."""
+        from tandemn_system_data.models.enums import JobStatus
+
+        class Jobs:
+            def __init__(self) -> None:
+                self.states = {
+                    "online-id": JobStatus.RUNNING,
+                    "waiting-id": JobStatus.WAITING,
+                    "paused-id": JobStatus.PAUSED,
+                }
+                self.running = SimpleNamespace(
+                    job=SimpleNamespace(job_id="online-id"),
+                    ranks=(SimpleNamespace(rank_id="rank-1"),),
+                )
+                self.stopped_ranks = []
+
+            def running_jobs(self, _user_id):
+                return (
+                    (self.running,)
+                    if self.states["online-id"] is JobStatus.RUNNING
+                    else ()
+                )
+
+            def waiting_jobs(self, _user_id):
+                return tuple(
+                    SimpleNamespace(job_id=job_id)
+                    for job_id, status in self.states.items()
+                    if status is JobStatus.WAITING
+                )
+
+            def paused_jobs(self, _user_id):
+                return tuple(
+                    SimpleNamespace(job_id=job_id)
+                    for job_id, status in self.states.items()
+                    if status is JobStatus.PAUSED
+                )
+
+            def set_rank_status(self, rank_id, status, expected):
+                self.stopped_ranks.append((rank_id, status, expected))
+
+            def transition(self, job_id, to, expected, **_kwargs):
+                if self.states[job_id] not in expected:
+                    return False
+                self.states[job_id] = to
+                return True
+
+        deadline_ns = 5_000_000_000
+        online = OnlineJob("online", "online-id", "model", 0, deadline_ns, {})
+        waiting = BatchJob(
+            "waiting", "waiting-id", "model", 0, deadline_ns, deadline_ns, {}
+        )
+        paused = BatchJob(
+            "paused", "paused-id", "model", 0, deadline_ns, deadline_ns, {}
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "deadline", deadline_ns, deadline_ns * 2, (online,), (waiting, paused)
+        )
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.jobs = Jobs()
+        simulator._submitted_jobs = {"online", "waiting", "paused"}
+        simulator._online_jobs = {"online-id": online}
+        simulator._batch_jobs = {"waiting-id": waiting, "paused-id": paused}
+        simulator._online_backlog = {"online-id": (object(),)}
+        simulator._batch_progress = {
+            "waiting-id": BatchProgress(total_requests=1),
+            "paused-id": BatchProgress(total_requests=1),
+        }
+        simulator._admissions_in_tick = 0
+        simulator.llmservingsim_root = None
+        simulator.trace_file = None
+        seen = []
+
+        def create_plans(_tick, _time):
+            seen.append(
+                {
+                    "running": simulator.jobs.running_jobs(simulator.user_id),
+                    "waiting": simulator.jobs.waiting_jobs(simulator.user_id),
+                    "paused": simulator.jobs.paused_jobs(simulator.user_id),
+                }
+            )
+            return SimpleNamespace(plans=(), llm_usage=(), error=None)
+
+        simulator.planner = SimpleNamespace(create_plans=create_plans)
+        outcomes = []
+
+        with (
+            patch("runner.apply_pending_plans"),
+            patch(
+                "tandemn_system_data.clients.event_log.PostgresEventLog"
+            ) as event_log,
+        ):
+            event_log.return_value.append.side_effect = outcomes.append
+            simulator.run_tick(0)
+
+            self.assertEqual(simulator.jobs.states, {
+                "online-id": JobStatus.FINISHED,
+                "waiting-id": JobStatus.FINISHED,
+                "paused-id": JobStatus.FINISHED,
+            })
+
+            simulator.run_tick(1)
+
+        self.assertEqual(seen[1], {"running": (), "waiting": (), "paused": ()})
+        self.assertEqual(simulator.jobs.stopped_ranks[0][0], "rank-1")
+        self.assertEqual(simulator._online_backlog["online-id"], ())
+        self.assertEqual(
+            [(event.job_id, event.payload_json) for event in outcomes],
+            [
+                ("waiting-id", {"deadline_met": False}),
+                ("paused-id", {"deadline_met": False}),
+            ],
+        )
+
+    def test_due_jobs_write_terminal_trace_events(self) -> None:
+        """Record exact logical deadline outcomes for terminal online and batch jobs."""
+        from tandemn_system_data.models.enums import JobStatus
+
+        class Jobs:
+            def __init__(self) -> None:
+                self.states = {
+                    "online-id": JobStatus.RUNNING,
+                    "batch-id": JobStatus.WAITING,
+                }
+                self.running = SimpleNamespace(
+                    job=SimpleNamespace(job_id="online-id"),
+                    ranks=(SimpleNamespace(rank_id="rank-1"),),
+                )
+
+            def running_jobs(self, _user_id):
+                return (
+                    (self.running,)
+                    if self.states["online-id"] is JobStatus.RUNNING
+                    else ()
+                )
+
+            def waiting_jobs(self, _user_id):
+                return (
+                    (SimpleNamespace(job_id="batch-id"),)
+                    if self.states["batch-id"] is JobStatus.WAITING
+                    else ()
+                )
+
+            def paused_jobs(self, _user_id):
+                return ()
+
+            def set_rank_status(self, *_args):
+                pass
+
+            def transition(self, job_id, to, expected, **_kwargs):
+                if self.states[job_id] not in expected:
+                    return False
+                self.states[job_id] = to
+                return True
+
+        deadline_ns = 5_000_000_000
+        online = OnlineJob("online", "online-id", "model", 0, deadline_ns, {})
+        batch = BatchJob(
+            "batch", "batch-id", "model", 0, deadline_ns, deadline_ns, {}
+        )
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario("deadline", deadline_ns, deadline_ns, (online,), (batch,))
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.user_id = "user-a"
+        simulator.postgres = object()
+        simulator.jobs = Jobs()
+        simulator._submitted_jobs = {"online", "batch"}
+        simulator._online_jobs = {"online-id": online}
+        simulator._batch_jobs = {"batch-id": batch}
+        simulator._online_backlog = {"online-id": ()}
+        simulator._online_admitted_at_ns = {"online-id": 0}
+        simulator._requests = {
+            "online-id": (Request("request", "session", 0, 0, 1, 1, None),)
+        }
+        simulator._batch_progress = {
+            "batch-id": BatchProgress(total_requests=5, completed_requests=2)
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            simulator.trace_file = Path(directory) / "trace.jsonl"
+            with patch("tandemn_system_data.clients.event_log.PostgresEventLog"):
+                simulator._finish_jobs_due(deadline_ns)
+            events = [
+                json.loads(line)
+                for line in simulator.trace_file.read_text(encoding="utf-8").splitlines()
+                if json.loads(line)["kind"] == "job_finished"
+            ]
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(
+            {(event["job_id"], event["finished_at"]) for event in events},
+            {
+                ("online-id", "2026-01-01T00:00:05+00:00"),
+                ("batch-id", "2026-01-01T00:00:05+00:00"),
+            },
+        )
+        online_event = next(event for event in events if event["job_id"] == "online-id")
+        batch_event = next(event for event in events if event["job_id"] == "batch-id")
+        self.assertEqual(online_event["unfinished_request_count"], 1)
+        self.assertFalse(online_event["completed_successfully"])
+        self.assertFalse(batch_event["deadline_slo_met"])
+        self.assertEqual(batch_event["unfinished_request_count"], 3)
+
     def test_prices_keep_region_specific_instance_rates(self) -> None:
         resource_map = SimpleNamespace(
             scheduling_summary=lambda: {
@@ -1084,6 +1317,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 Request("r2", "s2", 0, 600_000_000_000, 1, 1, None),
             )
         }
+        simulator._online_admitted_at_ns = {"job-a": 0}
         simulator._batch_jobs = {}
         simulator._batch_progress = {}
 
@@ -1923,8 +2157,112 @@ class RunnerDataPlaneTest(unittest.TestCase):
         )
         finish.assert_called_once_with(
             running,
-            datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
+            datetime(2026, 1, 1, 0, 10, tzinfo=UTC),
         )
+
+    def test_online_job_uses_its_authored_window_after_late_admission(self) -> None:
+        """Do not replay requests from before a late placement."""
+        job = OnlineJob(
+            "online",
+            "job",
+            "model",
+            0,
+            400_000_000_000,
+            {"features": {"target_p99_ttft_ms": 1, "target_p99_tpot_ms": 1}},
+        )
+        running = SimpleNamespace(
+            job=SimpleNamespace(job_id="job"),
+            ranks=(SimpleNamespace(rank_id="rank-job"),),
+        )
+        before_admission = Request("before", "before", 0, 0, 1, 1, None)
+        during_window = Request("during", "during", 0, 300_000_000_000, 1, 1, None)
+        at_stop = Request("at-stop", "at-stop", 0, 400_000_000_000, 1, 1, None)
+        simulator = object.__new__(ClusterSimulator)
+        simulator.scenario = Scenario(
+            "late-admission", 300_000_000_000, 600_000_000_000, (job,), ()
+        )
+        simulator.user_id = "user_1"
+        simulator.postgres = object()
+        simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        simulator.clock.advance(timedelta(minutes=5))
+        simulator.jobs = SimpleNamespace(running_jobs=lambda _user_id: (running,))
+        simulator.llmservingsim_root = Path(tempfile.gettempdir())
+        simulator.parallel_simulators = 1
+        simulator._traffic_starts = {}
+        simulator._requests = {
+            "job": (before_admission, during_window, at_stop),
+        }
+        simulator._online_jobs = {"job": job}
+        simulator._online_backlog = {"job": ()}
+        simulator._batch_jobs = {}
+        simulator._batch_progress = {}
+        simulator._request_outcomes = {}
+        simulator.trace_file = None
+        prepared = []
+        deployment = SimpleNamespace(rank_name="rank-job")
+
+        def prepare(_running, _job_name, requests, *_args):
+            prepared.extend(requests)
+            return (
+                (
+                    SimpleNamespace(
+                        deployment=deployment,
+                        requests=requests,
+                        request_count=len(requests),
+                    ),
+                ),
+                (),
+            )
+
+        result = SimpleNamespace(
+            deployment=deployment,
+            completed_requests=(during_window,),
+            request_rows=(
+                {"TTFT": 1, "TPOT": 1, "output": 1, "end_time": 200_000_000_000},
+            ),
+        )
+        with (
+            patch(
+                "tandemn_system_data.clients.HardwareCatalogStore",
+                return_value=SimpleNamespace(
+                    get=lambda: SimpleNamespace(
+                        catalog={"regions": [{"cloud": "aws", "region": "test", "instance_types": []}]}
+                    )
+                ),
+            ),
+            patch(
+                "tandemn_system_data.clients.ResourceMapStore",
+                return_value=SimpleNamespace(
+                    get=lambda: SimpleNamespace(scheduling_summary=lambda: {})
+                ),
+            ),
+            patch.object(simulator, "_prepare_job_runs", side_effect=prepare),
+            patch("runner.run_ranks", return_value=(result,)),
+            patch("runner.gpu_metrics_from_results", return_value=[]) as gpu_metrics,
+            patch.object(simulator, "_finish") as finish,
+        ):
+            simulator._simulate_tick(1, 300_000_000_000, 600_000_000_000)
+
+        self.assertEqual(prepared, [during_window])
+        self.assertEqual(gpu_metrics.call_args.kwargs["online_active_ns"], 100_000_000_000)
+        self.assertEqual(simulator._online_backlog["job"], (during_window,))
+        simulator._ensure_online_offers_through(
+            "job", datetime(2026, 1, 1, 0, 10, tzinfo=UTC)
+        )
+        self.assertEqual(
+            simulator._terminal_request_outcome("job"),
+            {
+                "offered_request_count": 1,
+                "completed_request_count": 0,
+                "unfinished_request_count": 1,
+                "ttft_pass_count": 0,
+                "tpot_pass_count": 0,
+                "slo_pass_count": 0,
+                "qualified_output_tokens": 0,
+                "slo_count_scope": "all_offered_requests",
+            },
+        )
+        finish.assert_not_called()
 
     def test_failed_metric_commit_keeps_request_state_unchanged(self) -> None:
         """Do not apply staged online or batch progress after commit failure."""
@@ -1934,9 +2272,9 @@ class RunnerDataPlaneTest(unittest.TestCase):
             "batch-job",
             "model",
             0,
-            300_000_000_000,
+            100_000_000_000,
             600_000_000_000,
-            {"features": {}},
+            {"record_count": 1_000, "features": {}},
         )
         online_request = Request("online-r0", "session", 0, 0, 1, 1, None)
         fresh_request = Request("online-r1", "fresh-session", 0, 1, 1, 1, None)
@@ -1951,7 +2289,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 ranks=(SimpleNamespace(rank_id="rank-batch"),),
             ),
         )
-        original_progress = BatchProgress(total_requests=100)
+        original_progress = BatchProgress(total_requests=1_000)
         simulator = object.__new__(ClusterSimulator)
         simulator.scenario = Scenario(
             "atomic", 300_000_000_000, 600_000_000_000, (online,), (batch,)
