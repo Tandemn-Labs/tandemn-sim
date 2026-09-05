@@ -5,7 +5,9 @@
 ### Ubuntu repos
 sudo apt update
 sudo apt upgrade
-sudo apt install neovim tree git login cmake postgresql unzip file man-db
+sudo apt install neovim tree git login cmake \
+  postgresql unzip file man-db python3.14-venv \
+  nfs-common util-linux-extra
 
 alias psql="PGPASSWORD=tandemn psql -h localhost -p 55432 -U tandemn"
 
@@ -27,6 +29,10 @@ curl -fL -o k9s_linux_amd64.deb \
   https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_linux_amd64.deb
 
 sudo apt install ./k9s_linux_amd64.deb
+
+
+### HuggingFace CLI
+curl -LsSf https://hf.co/cli/install.sh | bash
 
 
 ### AIPerf

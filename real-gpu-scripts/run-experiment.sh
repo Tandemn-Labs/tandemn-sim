@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p -- "$LOG_DIR"
 pids=()
 started_pid=
+orca_pid=
+runner_pid=
+first_exited_pid=
+first_exited_status=
+delay_orca_shutdown=false
+unexpected_exit=false
 
 declare -A pid_to_name=()
 
@@ -15,32 +21,73 @@ kill_descendants() {
     for pids_file in /proc/[0-9]*/status; do
         local cpid="${pids_file%/status}"
         cpid="${cpid#/proc/}"
-        if [[ -r "$pids_file" ]] && grep -qFx "PPid:${ppid}" "$pids_file" 2>/dev/null; then
+        if [[ -r "$pids_file" ]] && grep -qE "^PPid:[[:space:]]*${ppid}$" "$pids_file" 2>/dev/null; then
             kill_descendants "$cpid" "$signal"
         fi
     done
     kill "-$signal" "$ppid" 2>/dev/null || true
 }
 
+kill_managed_process() {
+    local pid=$1
+    local signal=$2
+
+    kill_descendants "$pid" "$signal"
+    # The group signal also reaches children reparented after the root exits.
+    kill "-$signal" -- "-$pid" 2>/dev/null || true
+}
+
 cleanup() {
     local status=$?
+    local pid
     trap - EXIT INT TERM
 
-    for pid in "${pids[@]:-}"; do
-        kill_descendants "$pid" TERM
-    done
+    if [[ "$delay_orca_shutdown" == true ]]; then
+        for pid in "${pids[@]:-}"; do
+            [[ "$pid" == "$orca_pid" ]] && continue
+            kill_managed_process "$pid" TERM
+        done
 
-    sleep 10
+        sleep 10
 
-    for pid in "${pids[@]:-}"; do
-        kill_descendants "$pid" KILL
-    done
+        for pid in "${pids[@]:-}"; do
+            [[ "$pid" == "$orca_pid" ]] && continue
+            kill_managed_process "$pid" KILL
+        done
+
+        sleep 10
+        kill_managed_process "$orca_pid" TERM
+        sleep 10
+        kill_managed_process "$orca_pid" KILL
+    else
+        for pid in "${pids[@]:-}"; do
+            kill_managed_process "$pid" TERM
+        done
+
+        sleep 10
+
+        for pid in "${pids[@]:-}"; do
+            kill_managed_process "$pid" KILL
+        done
+    fi
 
     local failed=false
     for pid in "${pids[@]:-}"; do
         local ec=0
-        wait "$pid" 2>/dev/null || ec=$?
-        if [[ "$ec" != 0 && "$ec" != 143 && "$ec" != 137 && "$ec" != 127 ]]; then
+        if [[ "$pid" == "$first_exited_pid" ]]; then
+            ec=$first_exited_status
+        else
+            wait "$pid" 2>/dev/null || ec=$?
+        fi
+        if [[ "$pid" == "$first_exited_pid" && "$unexpected_exit" == true ]]; then
+            local name=${pid_to_name[$pid]:-unknown}
+            printf '\n=== Process "%s" (PID %s) exited unexpectedly with code 0 ===\n' "$name" "$pid" >&2
+            if [[ -f "$LOG_DIR/$name.log" ]]; then
+                printf 'Last log lines from %s/%s.log:\n' "$LOG_DIR" "$name" >&2
+                tail -n 50 "$LOG_DIR/$name.log" >&2
+            fi
+            failed=true
+        elif [[ "$ec" != 0 && "$ec" != 143 && "$ec" != 137 && "$ec" != 127 ]]; then
             local name=${pid_to_name[$pid]:-unknown}
             printf '\n=== Process "%s" (PID %s) exited with code %s ===\n' "$name" "$pid" "$ec" >&2
             if [[ -f "$LOG_DIR/$name.log" ]]; then
@@ -72,6 +119,8 @@ trap 'exit 143' TERM
 trap cleanup EXIT
 
 
+#################### DO ALL THE CLEANUP ####################
+
 ### Reset chunk-manager database
 /home/user/chunk-manager/reset-chunk-manager-db.sh
 /home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
@@ -96,6 +145,15 @@ export TANDEMN_USER_ID="$(
 export TANDEMN_POSTGRES_URL="postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_${BENCHMARK}_${BASELINE}"
 export POSTGRES_URL="$TANDEMN_POSTGRES_URL"
 
+### Clear Kubernetes contexts
+bash "$SCRIPT_DIR/clear_k8s_contexts.sh"
+
+### Clear logs
+rm -rf -- "$LOG_DIR"/* "$LOG_DIR"/.[!.]* "$LOG_DIR"/..?*
+
+
+#################### START EXPERIMENT ####################
+
 ### Run GPU metrics collectors
 start gpu_metrics bash "$SCRIPT_DIR/collect-gpu-metrics.sh"
 
@@ -111,6 +169,7 @@ uv run --directory "/home/user/tandemn-system" tandemn-orca \
   --router-config-dir "$TANDEMN_ROUTER_CONFIG_DIR" \
   --router-binary "$TANDEMN_ROUTER_BINARY" \
   --interval-seconds 10
+orca_pid=$started_pid
 
 
 ### Run runner2.py
@@ -133,12 +192,18 @@ start real_scenario \
   --source-region us-central1 \
   --source-zone us-central1-a \
   --ready-timeout 1200
-real_scenario_pid=$started_pid
 
 
-# runner2 owns the benchmark lifetime; real_scenario follows Store state.
-wait "$runner_pid" || exit 1
-wait "$real_scenario_pid" || exit 1
+# The first managed process to exit ends the experiment. Only runner2 gives
+# Orca two reconciliation intervals to remove finished workloads.
+wait -n -p first_exited_pid "${pids[@]}"
+first_exited_status=$?
 
-# Leave Orca two reconciliation intervals to remove finished workloads.
-sleep 20
+if [[ "$first_exited_pid" == "$runner_pid" ]]; then
+    delay_orca_shutdown=true
+elif [[ "$first_exited_status" == 0 ]]; then
+    unexpected_exit=true
+    exit 1
+fi
+
+exit "$first_exited_status"
