@@ -22,7 +22,7 @@ from bestfit import (
     _place_action,
 )
 from models import OnlineJob, Scenario
-from policy import VALID_TP_DEGREES, configure_config_policy, load_config_policy
+from policy import VALID_TP_DEGREES, load_config_policy
 from scenario import load_scenario
 from serving import build_rank_cluster
 from tandemn_system_data.models import Plan
@@ -46,7 +46,6 @@ class BestFitPlannerDriverTest(unittest.TestCase):
             {name: len(jobs) for name, jobs in BEST_FIT_CONFIGURATIONS.items()},
             {
                 "real_12h": 16,
-                "real100gpubenchmark": 11,
                 "simulation_12h_homogenous": 37,
                 "15min_real": 2,
                 "simulation_12h": 37,
@@ -125,11 +124,10 @@ class BestFitPlannerDriverTest(unittest.TestCase):
 
     def test_mappings_match_jobs_models_and_resources(self) -> None:
         """Cross-reference executable jobs with both static baselines."""
-        self.addCleanup(configure_config_policy, "simulation")
+        policy = load_config_policy()
         for benchmark in (
             "15min_real",
             "real_12h",
-            "real100gpubenchmark",
             "simulation_3h",
             "simulation_12h",
             "simulation_12h_homogenous",
@@ -142,21 +140,16 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                 )["resources"]
             }
             scenario = load_scenario(root / "benchmark.yaml")
-            configure_config_policy(scenario.environment)
-            policy = load_config_policy()
             jobs = {
                 job.name: job.model_name
                 for job in scenario.online_jobs + scenario.batch_jobs
             }
 
             mappings = BEST_FIT_CONFIGURATIONS[benchmark]
-            if benchmark == "real_12h":
-                self.assertLessEqual(set(mappings), set(jobs))
-            else:
-                self.assertEqual(set(mappings), set(jobs))
+            self.assertEqual(set(mappings), set(jobs))
             self.assertLessEqual(set(jobs), set(VRAM_REQUIREMENTS_GIB[benchmark]))
-            for job_id, mapping in mappings.items():
-                model_id = jobs[job_id]
+            for job_id, model_id in jobs.items():
+                mapping = mappings[job_id]
                 hardware = mapping["hardware"]
                 self.assertIn(hardware, resources)
                 rule = policy.rule_for(hardware, model_id)
@@ -174,7 +167,7 @@ class BestFitPlannerDriverTest(unittest.TestCase):
                     * configuration["dp"]
                 )
                 self.assertLessEqual(gpu_count, resources[hardware]["total_devices"])
-                if benchmark in {"real_12h", "real100gpubenchmark"}:
+                if benchmark == "real_12h":
                     self.assertGreaterEqual(
                         gpu_count * resources[hardware]["memory_gb"],
                         VRAM_REQUIREMENTS_GIB[benchmark][job_id],

@@ -33,52 +33,6 @@ BEST_FIT_CONFIGURATIONS: dict[
             "configuration": {"tp": 1, "pp": 1, "dp": 1},
         },
     },
-    "real100gpubenchmark": {
-        "job-benchmark_timing_3hr-15-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 8, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_3hr-15-3": {
-            "hardware": "A100-80GB",
-            "configuration": {"tp": 2, "pp": 4, "dp": 1},
-        },
-        "job-benchmark_timing_3hr-85-1": {
-            "hardware": "A100-80GB",
-            "configuration": {"tp": 2, "pp": 4, "dp": 1},
-        },
-        "job-benchmark_timing_3hr-125-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-0-1": {
-            "hardware": "L4",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-0-2": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-0-3": {
-            "hardware": "H100",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-7-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-7-3": {
-            "hardware": "L4",
-            "configuration": {"tp": 8, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-67-2": {
-            "hardware": "H100",
-            "configuration": {"tp": 4, "pp": 1, "dp": 1},
-        },
-        "job-benchmark_timing_real100gpu-125-1": {
-            "hardware": "RTXPRO6000",
-            "configuration": {"tp": 2, "pp": 1, "dp": 1},
-        },
-    },
     "simulation_12h_homogenous": {
         "job-benchmark_timing_12hr_homogenous-0-1": {
             "hardware": "H100",

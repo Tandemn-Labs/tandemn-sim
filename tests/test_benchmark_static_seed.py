@@ -263,23 +263,6 @@ class StaticSeedTest(unittest.TestCase):
             400,
         )
 
-    def test_real100gpu_resource_map_has_exact_whole_node_fleet(self) -> None:
-        """Keep the real benchmark at eight pools, twelve nodes, and 96 GPUs."""
-        _, resource_map = load_resource_map(
-            ROOT / "benchmarks/resource_map_benchmarking.jsonl",
-            "real100gpubenchmark",
-        )
-        pools = [
-            pool
-            for *_, pool in resource_map.iter_machine_pools()
-            if pool.total_gpus > 0
-        ]
-
-        self.assertEqual(len(pools), 8)
-        self.assertEqual(sum(pool.total_instances for pool in pools), 12)
-        self.assertEqual(sum(pool.total_gpus for pool in pools), 96)
-        self.assertTrue(all(pool.gpus_per_instance == 8 for pool in pools))
-
     def test_real_a100_40gb_pool_has_40_gib(self) -> None:
         _, resource_map = load_resource_map(
             ROOT / "benchmarks/resource_map_benchmarking.jsonl",
