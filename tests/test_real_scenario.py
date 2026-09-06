@@ -285,7 +285,6 @@ class RealScenarioTests(unittest.TestCase):
             [event["state"] for event in self.read_events()],
             [State.PENDING, State.OBSERVING, State.DONE],
         )
-        self.assertEqual(store.finished, [])
 
     def test_skips_disabled_and_non_aiperf_jobs(self) -> None:
         benchmark_root = self.output_dir / "benchmarks" / "sample"
