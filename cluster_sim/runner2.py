@@ -137,10 +137,10 @@ class PlanRunner:
             )
             if job.name in self._submitted_jobs or release_ns >= offset_ns:
                 continue
-            self._submit(job, release_ns)
+            self._submit(job)
 
-    def _submit(self, job: OnlineJob | BatchJob, release_ns: int) -> None:
-        """Persist one job with its logical benchmark release time."""
+    def _submit(self, job: OnlineJob | BatchJob) -> None:
+        """Persist one released job with its actual Store submission time."""
         from tandemn_system_data.clients import ModelCatalogStore
 
         catalog = ModelCatalogStore(self.postgres).get(job.model_name)
@@ -148,7 +148,7 @@ class PlanRunner:
             job,
             self.user_id,
             self.jobs,
-            self.clock.start + timedelta(microseconds=release_ns // 1_000),
+            datetime.now(UTC),
             prefix_cache_enabled=bool(catalog and catalog.prefix_cache_enabled),
         )
         self._submitted_jobs.add(job.name)
@@ -241,7 +241,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--user-id", required=True)
     parser.add_argument("--postgres-url")
     parser.add_argument("--planner", required=True, choices=PLANNERS)
-    parser.add_argument("--logical-epoch", default="2026-01-01T00:00:00+00:00")
+    parser.add_argument("--logical-epoch")
     parser.add_argument("--ticks", type=int)
     return parser.parse_args(argv)
 
@@ -249,16 +249,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Load one benchmark and generate plans until its drain boundary."""
     args = parse_args(argv)
-    epoch = datetime.fromisoformat(args.logical_epoch)
-    if epoch.tzinfo is None:
-        raise ValueError("--logical-epoch must include a timezone")
     if args.ticks is not None and args.ticks < 1:
         raise ValueError("--ticks must be positive")
 
     from tandemn_system_data.clients import PostgresClient
 
     scenario = generate_job_ulid(load_scenario(_benchmark_path(args.benchmark)))
-    clock = LogicalClock(epoch.astimezone(UTC))
+    clock = LogicalClock(_clock_start(args.logical_epoch))
     postgres = PostgresClient(args.postgres_url)
     planner = None
     if args.planner != "koi":
@@ -271,6 +268,16 @@ def main(argv: list[str] | None = None) -> None:
             ),
         )
     PlanRunner(scenario, args.user_id, postgres, planner, clock).run(args.ticks)
+
+
+def _clock_start(logical_epoch: str | None) -> datetime:
+    """Return real UTC by default, retaining explicit simulation epochs."""
+    if logical_epoch is None:
+        return datetime.now(UTC)
+    epoch = datetime.fromisoformat(logical_epoch)
+    if epoch.tzinfo is None:
+        raise ValueError("--logical-epoch must include a timezone")
+    return epoch.astimezone(UTC)
 
 
 if __name__ == "__main__":

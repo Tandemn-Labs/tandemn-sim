@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,7 @@ from data_generation.real_scenario import (
     ManifestJob,
     State,
     StoreJob,
+    TraceRuntime,
     load_manifest,
     run_scenario,
     stable_store_id,
@@ -341,6 +343,86 @@ class RealScenarioTests(unittest.TestCase):
             json.loads(line)
             for line in events_path.read_text(encoding="utf-8").splitlines()
         ]
+
+
+class TraceRuntimeTests(unittest.TestCase):
+    """Verify the trace runtime avoids pre-run EventLog history."""
+
+    def test_start_initializes_the_event_consumer_at_the_user_tail(self) -> None:
+        collector = mock.Mock()
+        collector.run_id = "run-1"
+        collector.user_id = "tenant"
+        events = mock.Mock()
+        runtime = TraceRuntime(
+            collector=collector,
+            events=events,
+            jobs=mock.Mock(),
+            plans=mock.Mock(),
+            resources=mock.Mock(),
+            metrics=mock.Mock(),
+        )
+
+        runtime.start(mock.sentinel.started_at)
+
+        collector.start_run.assert_called_once_with(mock.sentinel.started_at)
+        events.initialize_consumer_at_user_tail.assert_called_once_with(
+            "real-trace:run-1", "tenant"
+        )
+
+    def test_emit_uses_one_tick_telemetry_call(self) -> None:
+        collector = mock.Mock()
+        collector.job_bindings.return_value = ()
+        metrics = mock.Mock()
+        runtime = TraceRuntime(
+            collector=collector,
+            events=mock.Mock(),
+            jobs=mock.Mock(),
+            plans=mock.Mock(),
+            resources=mock.Mock(),
+            metrics=metrics,
+        )
+
+        runtime._emit((mock.sentinel.tick,))
+
+        collector.emit_tick_telemetry.assert_called_once_with(
+            mock.sentinel.tick, metrics
+        )
+        collector.emit_gpu_samples.assert_not_called()
+        collector.emit_rank_windows.assert_not_called()
+        collector.emit_batch_job_window.assert_not_called()
+
+    @mock.patch("data_generation.real_scenario.time.sleep")
+    @mock.patch("data_generation.real_scenario.datetime")
+    def test_finish_waits_only_for_the_remaining_holdback(
+        self, mocked_datetime: mock.Mock, sleep: mock.Mock
+    ) -> None:
+        collector = mock.Mock()
+        collector.tick_holdback_seconds = 60
+        finalized_ticks = (mock.sentinel.tick,)
+        collector.finalize_closed_ticks.return_value = finalized_ticks
+        runtime = TraceRuntime(
+            collector=collector,
+            events=mock.Mock(),
+            jobs=mock.Mock(),
+            plans=mock.Mock(),
+            resources=mock.Mock(),
+            metrics=mock.Mock(),
+        )
+        runtime._read = mock.Mock()
+        runtime._emit = mock.Mock()
+        finished_at = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
+        after_initial_read = finished_at + timedelta(seconds=15)
+        observed_at = finished_at + timedelta(seconds=60)
+        mocked_datetime.now.side_effect = [after_initial_read, observed_at]
+
+        runtime.finish(finished_at, status="completed")
+
+        sleep.assert_called_once_with(45)
+        runtime._read.assert_has_calls([mock.call(finished_at), mock.call(observed_at)])
+        collector.close_open_tick.assert_called_once_with(finished_at)
+        collector.finalize_closed_ticks.assert_called_once_with(observed_at)
+        runtime._emit.assert_called_once_with(finalized_ticks)
+        collector.close_run.assert_called_once_with(observed_at, status="completed")
 
 
 if __name__ == "__main__":

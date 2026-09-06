@@ -18,7 +18,12 @@ from tandemn_system_data.models.plan import Plan, PlanAction
 from tandemn_system_data.models.rank import Rank
 from tandemn_system_data.models.resource_map import ResourceMap
 
-from data_generation.traces import AIPerfRequest, RealTraceCollector, summarize_aiperf
+from data_generation.traces import (
+    LIFECYCLE_EVENT_TYPES,
+    AIPerfRequest,
+    RealTraceCollector,
+    summarize_aiperf,
+)
 
 
 class FakeEventLog:
@@ -26,11 +31,18 @@ class FakeEventLog:
 
     def __init__(self, events: list[Event]) -> None:
         self.events = events
-        self.reads: list[str] = []
+        self.reads: list[tuple[str, int, set[str] | None, str | None]] = []
         self.acknowledged: list[tuple[str, str]] = []
 
-    def read_for_consumer(self, consumer_name: str, *, limit: int) -> list[Event]:
-        self.reads.append(consumer_name)
+    def read_for_consumer(
+        self,
+        consumer_name: str,
+        *,
+        limit: int,
+        types: set[str] | None = None,
+        user_id: str | None = None,
+    ) -> list[Event]:
+        self.reads.append((consumer_name, limit, types, user_id))
         return self.events[:limit]
 
     def ack(self, consumer_name: str, event_id: str) -> None:
@@ -377,6 +389,17 @@ class RealTraceCollectorTests(unittest.TestCase):
         self.assertEqual(
             log.acknowledged,
             [("real-trace:run-1", f"evt-{index}") for index in range(1, 7)],
+        )
+        self.assertEqual(
+            log.reads,
+            [
+                (
+                    "real-trace:run-1",
+                    100,
+                    set(LIFECYCLE_EVENT_TYPES | {"plan.created"}),
+                    "tenant",
+                )
+            ],
         )
 
     def test_plan_ticks_follow_event_order(self) -> None:
@@ -801,6 +824,102 @@ class RealTraceCollectorTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_tick_telemetry_reuses_one_capped_store_read_per_job(self) -> None:
+        self.collector.start_run(self.started_at)
+        batch_path = self.run_dir / "batch.yaml"
+        batch_path.write_text(
+            """workload:
+  dataset:
+    record_count: 1000
+    partitioning:
+      shard_count: 10
+      requests_per_shard: 100
+""",
+            encoding="utf-8",
+        )
+        self.collector.bind_job(
+            authored_job_id="batch-job",
+            store_job_id="job_batch",
+            job_kind="batch",
+            benchmark_job_path=batch_path,
+        )
+        self.collector.collect_store_events(
+            FakeEventLog(
+                [
+                    store_event(
+                        "evt-1",
+                        "tenant",
+                        None,
+                        None,
+                        "plan.created",
+                        {"plan_id": "plan_1"},
+                        self.started_at,
+                    ),
+                    store_event(
+                        "evt-2",
+                        "tenant",
+                        None,
+                        None,
+                        "plan.created",
+                        {"plan_id": "plan_2"},
+                        self.started_at + timedelta(minutes=6),
+                    ),
+                ]
+            )
+        )
+        metrics = FakeGpuMetricStore(
+            [
+                GpuMetric(
+                    metric_id="before_window",
+                    ts=self.started_at + timedelta(seconds=30),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-before",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                ),
+                GpuMetric(
+                    metric_id="inside_window",
+                    ts=self.started_at + timedelta(minutes=2),
+                    job_id="job_batch",
+                    gpu_uuid="GPU-inside",
+                    rank_id="rank_01J",
+                    chain_index=0,
+                    throughput_token_per_sec=10,
+                    batched_reqs_processed_total=100,
+                ),
+            ]
+        )
+        tick = self.collector.finalize_closed_ticks(
+            self.started_at + timedelta(minutes=7)
+        )[0]
+
+        self.collector.emit_tick_telemetry(tick, metrics)
+
+        window_start = self.started_at + timedelta(minutes=1)
+        self.assertEqual(
+            metrics.calls,
+            [
+                (
+                    "tenant",
+                    "job_batch",
+                    window_start,
+                    self.started_at + timedelta(minutes=6),
+                )
+            ],
+        )
+        samples = [
+            event for event in self.read_events() if event["kind"] == "gpu_sample"
+        ]
+        self.assertEqual([event["metric_id"] for event in samples], ["inside_window"])
+        rank_window = next(
+            event for event in self.read_events() if event["kind"] == "rank_window"
+        )
+        batch_window = next(
+            event for event in self.read_events() if event["kind"] == "batch_job_window"
+        )
+        self.assertEqual(rank_window["window_start"], window_start.isoformat())
+        self.assertEqual(batch_window["window_start"], window_start.isoformat())
 
     def test_rank_windows_collapse_gpu_rows_before_aggregating_chains(self) -> None:
         self.collector.start_run(self.started_at)
