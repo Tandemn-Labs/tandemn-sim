@@ -153,6 +153,9 @@ bash "$SCRIPT_DIR/clear_k8s_contexts.sh"
 ### Clear logs
 rm -rf -- "$LOG_DIR"/* "$LOG_DIR"/.[!.]* "$LOG_DIR"/..?*
 
+### Clear S3 bucket for output
+bash "$SCRIPT_DIR/clear-s3-outputs.sh"
+
 
 #################### START EXPERIMENT ####################
 
