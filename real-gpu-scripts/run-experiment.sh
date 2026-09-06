@@ -7,6 +7,7 @@ pids=()
 started_pid=
 orca_pid=
 runner_pid=
+real_scenario_pid=
 first_exited_pid=
 first_exited_status=
 delay_orca_shutdown=false
@@ -121,13 +122,14 @@ trap cleanup EXIT
 
 #################### DO ALL THE CLEANUP ####################
 
-### Reset chunk-manager database
-/home/user/chunk-manager/reset-chunk-manager-db.sh
-/home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
-    --target "$CHUNK_MANAGER_TARGET" \
-    0000000000ZQQJMH7ZKN9JB75S:4 \
-    00000000000000000000000001:50
-
+if [[ "$BENCHMARK" != "real100gpubenchmark" ]]; then
+    ### Reset chunk-manager database for the legacy smoke workload
+    /home/user/chunk-manager/reset-chunk-manager-db.sh
+    /home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
+        --target "$CHUNK_MANAGER_TARGET" \
+        0000000000ZQQJMH7ZKN9JB75S:4 \
+        00000000000000000000000001:50
+fi
 
 ### Reset tandemn-store and get user id
 TANDEMN_POSTGRES_URL="postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn" 
@@ -192,18 +194,30 @@ start real_scenario \
   --source-region us-central1 \
   --source-zone us-central1-a \
   --ready-timeout 1200
+real_scenario_pid=$started_pid
 
 
-# The first managed process to exit ends the experiment. Only runner2 gives
-# Orca two reconciliation intervals to remove finished workloads.
-wait -n -p first_exited_pid "${pids[@]}"
-first_exited_status=$?
+# AIPerf can finish at the workload boundary while runner2 owns the drain.
+active_pids=("${pids[@]}")
+while ((${#active_pids[@]})); do
+    wait -n -p first_exited_pid "${active_pids[@]}"
+    first_exited_status=$?
 
-if [[ "$first_exited_pid" == "$runner_pid" ]]; then
-    delay_orca_shutdown=true
-elif [[ "$first_exited_status" == 0 ]]; then
-    unexpected_exit=true
-    exit 1
-fi
+    if [[ "$first_exited_pid" == "$real_scenario_pid" && "$first_exited_status" == 0 ]]; then
+        remaining_pids=()
+        for pid in "${active_pids[@]}"; do
+            [[ "$pid" == "$real_scenario_pid" ]] || remaining_pids+=("$pid")
+        done
+        active_pids=("${remaining_pids[@]}")
+        continue
+    fi
 
-exit "$first_exited_status"
+    if [[ "$first_exited_pid" == "$runner_pid" ]]; then
+        delay_orca_shutdown=true
+    elif [[ "$first_exited_status" == 0 ]]; then
+        unexpected_exit=true
+        exit 1
+    fi
+
+    exit "$first_exited_status"
+done

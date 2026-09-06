@@ -36,6 +36,11 @@ benchmarks:
     environment: real_hardware
     duration_hours: 12
     status: executable
+  real100gpubenchmark:
+    manifest: real100gpubenchmark/benchmark.yaml
+    environment: real_hardware
+    duration_hours: 3
+    status: executable
   real_life_24h:
     manifest: real_life_24h/benchmark.yaml
     environment: real_hardware

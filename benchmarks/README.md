@@ -89,6 +89,12 @@ The executable simulation benchmark IDs and their resource-map capacities are:
 | `simulation_12h` | 12 hours | 9 | 400 |
 | `simulation_24h` | 24 hours | 9 | 800 |
 
+The executable real-hardware benchmark added for the 96-GPU fleet is:
+
+| Benchmark | Duration | Pools | GPUs |
+| --- | ---: | ---: | ---: |
+| `real100gpubenchmark` | 3 hours plus 30-minute drain | 8 | 96 |
+
 All baseline users must receive the same resource map as the simulation they
 run. The following values must always match:
 

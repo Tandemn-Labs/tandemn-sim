@@ -29,6 +29,8 @@ The benchmark catalog currently includes:
 - 3-hour, 12-hour, and 24-hour real-hardware workload definitions.
 - `real_12h`, an executable 12-hour real-hardware workload for the 100-GPU
   heterogeneous fleet.
+- `real100gpubenchmark`, an executable 3-hour real-hardware workload with a
+  30-minute drain on a 96-GPU, two-region GCP fleet.
 - `simulation_12h_homogenous`, an executable 12-hour simulation benchmark for a homogeneous, on-demand 400-GPU H100 cluster.
 - `15min_real`, a 15-minute Orca benchmark on 8 RTX PRO 6000 and 8 L4 GPUs.
 

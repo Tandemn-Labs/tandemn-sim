@@ -1,0 +1,40 @@
+schema_version: "resource-map/v1"
+
+resources:
+  - id: rtx-pro-6000-blackwell-96gb
+    accelerator: RTXPRO6000
+    total_devices: 40
+    devices_per_node: 8
+    memory_gb: 96
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
+    markets: {reserved: 40, on_demand: 0}
+    regions: {us-central1: 24, europe-west2: 16}
+
+  - id: h100-sxm-80gb
+    accelerator: H100
+    total_devices: 16
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: h100_sxm
+    markets: {reserved: 16, on_demand: 0}
+    regions: {us-central1: 8, europe-west2: 8}
+
+  - id: a100-sxm-80gb
+    accelerator: A100-80GB
+    total_devices: 16
+    devices_per_node: 8
+    memory_gb: 80
+    aic_system: a100_sxm
+    markets: {reserved: 16, on_demand: 0}
+    regions: {us-central1: 8, europe-west2: 8}
+
+  - id: l4-24gb
+    accelerator: L4
+    total_devices: 24
+    devices_per_node: 8
+    memory_gb: 24
+    aic_system: null
+    unsupported_reason: AIC 0.11 has no L4 system model
+    markets: {reserved: 24, on_demand: 0}
+    regions: {us-central1: 16, europe-west2: 8}

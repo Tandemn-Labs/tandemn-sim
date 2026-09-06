@@ -2,7 +2,7 @@ schema_version: "experiment/v1"
 
 experiment:
   id: main_real_hardware
-  benchmarks: [real_life_3h, real_12h, real_life_24h]
+  benchmarks: [real100gpubenchmark, real_12h, real_life_24h]
   methods:
     - fcfs_first_fit
     - best_fixed
