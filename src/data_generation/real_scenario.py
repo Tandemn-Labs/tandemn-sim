@@ -182,6 +182,9 @@ class TraceRuntime:
     def start(self, started_at: datetime) -> None:
         """Open the run trace before workload observation begins."""
         self.collector.start_run(started_at)
+        self.events.initialize_consumer_at_user_tail(
+            f"real-trace:{self.collector.run_id}", self.collector.user_id
+        )
 
     def bind_job(self, manifest: ManifestJob, store_job_id: str) -> None:
         """Associate one benchmark artifact path with its canonical Store job."""
@@ -207,12 +210,15 @@ class TraceRuntime:
         """Close the final tick, emit summaries, and terminate the trace file."""
         self._read(finished_at)
         self.collector.close_open_tick(finished_at)
-        final_at = finished_at + timedelta(
-            seconds=self.collector.tick_holdback_seconds
-        )
-        self._emit(self.collector.finalize_closed_ticks(final_at))
+        deadline = finished_at + timedelta(seconds=self.collector.tick_holdback_seconds)
+        remaining = (deadline - datetime.now(UTC)).total_seconds()
+        if remaining > 0:
+            time.sleep(remaining)
+        observed_at = datetime.now(UTC)
+        self._read(observed_at)
+        self._emit(self.collector.finalize_closed_ticks(observed_at))
         self.collector.emit_run_summary(duration_seconds=GOODPUT_WINDOW_SECONDS)
-        self.collector.close_run(finished_at, status=status)
+        self.collector.close_run(observed_at, status=status)
 
     def _read(self, observed_at: datetime) -> None:
         self.collector.collect_store_events(self.events, plans=self.plans)
@@ -239,9 +245,7 @@ class TraceRuntime:
                     ttft_target_ms=ttft,
                     tpot_target_ms=tpot,
                 )
-            self.collector.emit_gpu_samples(tick, self.metrics)
-            self.collector.emit_rank_windows(tick, self.metrics)
-            self.collector.emit_batch_job_window(tick, self.metrics)
+            self.collector.emit_tick_telemetry(tick, self.metrics)
 
 
 def _create_trace_runtime(

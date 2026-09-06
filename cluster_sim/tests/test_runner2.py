@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "cluster_sim"))
 
 from models import BatchJob, OnlineJob, Scenario  # noqa: E402
-from runner2 import LogicalClock, PlanRunner  # noqa: E402
+from runner2 import LogicalClock, PlanRunner, _clock_start  # noqa: E402
 
 
 class _Jobs:
@@ -22,6 +22,17 @@ class _Jobs:
 
 
 class PlanRunnerTest(unittest.TestCase):
+    @mock.patch("runner2.datetime")
+    def test_default_clock_start_uses_real_utc(
+        self, mocked_datetime: mock.Mock
+    ) -> None:
+        now = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
+        mocked_datetime.now.return_value = now
+
+        self.assertEqual(_clock_start(None), now)
+
+        mocked_datetime.now.assert_called_once_with(UTC)
+
     def test_koi_mode_skips_planner_poll(self) -> None:
         runner = PlanRunner.__new__(PlanRunner)
         runner.scenario = Scenario("test", 5, 10, (), ())
@@ -82,6 +93,38 @@ class PlanRunnerTest(unittest.TestCase):
         args, kwargs = runner.jobs.transitions[0]
         self.assertEqual(args[0], "online-id")
         self.assertEqual(kwargs["finish_reason"], "SIMULATION_HARD_STOP")
+
+    @mock.patch("runner2._submit_waiting_job")
+    @mock.patch("tandemn_system_data.clients.ModelCatalogStore")
+    @mock.patch("runner2.datetime")
+    def test_submission_uses_real_utc_not_the_logical_clock(
+        self,
+        mocked_datetime: mock.Mock,
+        catalog_store: mock.Mock,
+        submit_waiting_job: mock.Mock,
+    ) -> None:
+        submitted_at = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
+        mocked_datetime.now.return_value = submitted_at
+        catalog_store.return_value.get.return_value = None
+        job = OnlineJob("online", "online-id", "model", 0, 5, {})
+        runner = PlanRunner.__new__(PlanRunner)
+        runner.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
+        runner.postgres = mock.sentinel.postgres
+        runner.user_id = "tenant"
+        runner.jobs = mock.sentinel.jobs
+        runner._submitted_jobs = set()
+
+        runner._submit(job)
+
+        mocked_datetime.now.assert_called_once_with(UTC)
+        submit_waiting_job.assert_called_once_with(
+            job,
+            "tenant",
+            mock.sentinel.jobs,
+            submitted_at,
+            prefix_cache_enabled=False,
+        )
+        self.assertEqual(runner._submitted_jobs, {"online"})
 
     @mock.patch("runner2.sleep")
     @mock.patch("runner2.monotonic", side_effect=[0.0, 0.0, 1.0])

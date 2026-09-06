@@ -37,6 +37,7 @@ from data_generation.trace_telemetry import (
 
 DEFAULT_COLLECTION_INTERVAL_SECONDS = 60
 DEFAULT_TICK_HOLDBACK_SECONDS = 60
+MAX_TELEMETRY_WINDOW = timedelta(minutes=5)
 LIFECYCLE_EVENT_TYPES = frozenset(
     {
         "job.submitted",
@@ -368,11 +369,16 @@ class RealTraceCollector:
 
         The caller controls when this method runs through ``collect``. Events
         retain Store's ``created_at`` timestamp, so minute-level polling delays
-        visibility without changing trace timing. Ignored events are still
-        acknowledged because the Store cursor is shared across all event types.
+        visibility without changing trace timing. Store filters by this run's
+        user and relevant event types before the trace sees each batch.
         """
         consumer_name = f"real-trace:{self.run_id}"
-        events = event_log.read_for_consumer(consumer_name, limit=limit)
+        events = event_log.read_for_consumer(
+            consumer_name,
+            limit=limit,
+            types=set(LIFECYCLE_EVENT_TYPES | {"plan.created"}),
+            user_id=self.user_id,
+        )
         for event in events:
             trace_event = self._trace_event(event)
             if trace_event is not None:
@@ -531,43 +537,68 @@ class RealTraceCollector:
 
     def emit_gpu_samples(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
         """Write raw Store GPU samples that fall inside one finalized tick."""
+        _, rows_by_job = self._metric_rows_for_tick(tick, metrics)
+        return self._emit_gpu_samples(tick, rows_by_job)
+
+    def emit_rank_windows(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
+        """Aggregate finalized Store GPU rows into ten-second rank trajectories."""
+        window_start, rows_by_job = self._metric_rows_for_tick(tick, metrics)
+        return self._emit_rank_windows(tick, window_start, rows_by_job)
+
+    def emit_batch_job_window(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
+        """Write batch progress from benchmark YAML and four driver metrics only."""
+        window_start, rows_by_job = self._metric_rows_for_tick(tick, metrics)
+        return self._emit_batch_job_window(tick, window_start, rows_by_job)
+
+    def emit_tick_telemetry(self, tick: TraceTick, metrics: GpuMetricStore) -> None:
+        """Read each bound job's telemetry once and emit every tick view."""
+        window_start, rows_by_job = self._metric_rows_for_tick(tick, metrics)
+        self._emit_gpu_samples(tick, rows_by_job)
+        self._emit_rank_windows(tick, window_start, rows_by_job)
+        self._emit_batch_job_window(tick, window_start, rows_by_job)
+
+    def _metric_rows_for_tick(
+        self, tick: TraceTick, metrics: GpuMetricStore
+    ) -> tuple[datetime, dict[str, list[GpuMetric]]]:
         if tick.ended_at is None:
-            raise ValueError("GPU samples require a closed tick")
+            raise ValueError("telemetry requires a closed tick")
+        window_start = max(tick.started_at, tick.ended_at - MAX_TELEMETRY_WINDOW)
+        rows_by_job = {}
+        for binding in self._bindings.values():
+            rows_by_job[binding.store_job_id] = [
+                metric
+                for metric in metrics.rows_for_job_window(
+                    self.user_id,
+                    binding.store_job_id,
+                    window_start,
+                    tick.ended_at,
+                )
+                if metric.job_id == binding.store_job_id
+                and window_start <= metric.ts < tick.ended_at
+            ]
+        return window_start, rows_by_job
+
+    def _emit_gpu_samples(
+        self, tick: TraceTick, rows_by_job: dict[str, list[GpuMetric]]
+    ) -> int:
         emitted = 0
         for binding in self._bindings.values():
-            rows = metrics.rows_for_job_window(
-                self.user_id,
-                binding.store_job_id,
-                tick.started_at,
-                tick.ended_at,
-            )
-            for metric in rows:
-                if (
-                    metric.metric_id in self._gpu_metric_ids
-                    or metric.job_id != binding.store_job_id
-                    or not tick.contains(metric.ts)
-                ):
+            for metric in rows_by_job[binding.store_job_id]:
+                if metric.metric_id in self._gpu_metric_ids:
                     continue
                 self._gpu_metric_ids.add(metric.metric_id)
                 self._append(self._gpu_sample(tick, metric))
                 emitted += 1
         return emitted
 
-    def emit_rank_windows(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
-        """Aggregate finalized Store GPU rows into ten-second rank trajectories."""
-        if tick.ended_at is None:
-            raise ValueError("rank windows require a closed tick")
-        rows = [
-            metric
-            for binding in self._bindings.values()
-            for metric in metrics.rows_for_job_window(
-                self.user_id,
-                binding.store_job_id,
-                tick.started_at,
-                tick.ended_at,
-            )
-            if metric.job_id == binding.store_job_id and tick.contains(metric.ts)
-        ]
+    def _emit_rank_windows(
+        self,
+        tick: TraceTick,
+        window_start: datetime,
+        rows_by_job: dict[str, list[GpuMetric]],
+    ) -> int:
+        assert tick.ended_at is not None
+        rows = [metric for job_rows in rows_by_job.values() for metric in job_rows]
         emitted = 0
         for (job_id, rank_id), trajectory in rank_trajectories(rows).items():
             self._append(
@@ -577,7 +608,7 @@ class RealTraceCollector:
                     "job_id": job_id,
                     "rank_id": rank_id,
                     "chain_indices": trajectory["chain_indices"],
-                    "window_start": tick.started_at.isoformat(),
+                    "window_start": window_start.isoformat(),
                     "window_end": tick.ended_at.isoformat(),
                     "sample_bucket_starts": trajectory["sample_bucket_starts"],
                     "metrics": trajectory["metrics"],
@@ -588,28 +619,19 @@ class RealTraceCollector:
             emitted += 1
         return emitted
 
-    def emit_batch_job_window(self, tick: TraceTick, metrics: GpuMetricStore) -> int:
-        """Write batch progress from benchmark YAML and four driver metrics only."""
-        if tick.ended_at is None:
-            raise ValueError("batch windows require a closed tick")
+    def _emit_batch_job_window(
+        self,
+        tick: TraceTick,
+        window_start: datetime,
+        rows_by_job: dict[str, list[GpuMetric]],
+    ) -> int:
+        assert tick.ended_at is not None
         emitted = 0
         for binding in self._bindings.values():
             if binding.job_kind != "batch":
                 continue
             definition = self._batch_definition(binding)
-            rows = metrics.rows_for_job_window(
-                self.user_id,
-                binding.store_job_id,
-                tick.started_at,
-                tick.ended_at,
-            )
-            chains = batch_chain_samples(
-                [
-                    row
-                    for row in rows
-                    if row.job_id == binding.store_job_id and tick.contains(row.ts)
-                ]
-            )
+            chains = batch_chain_samples(rows_by_job[binding.store_job_id])
             window = self._batch_window(binding.store_job_id, chains, definition)
             self._batch_windows[binding.store_job_id] = window
             self._append(
@@ -618,7 +640,7 @@ class RealTraceCollector:
                     "tick": tick.tick,
                     "job_id": binding.store_job_id,
                     "authored_job_id": binding.authored_job_id,
-                    "window_start": tick.started_at.isoformat(),
+                    "window_start": window_start.isoformat(),
                     "window_end": tick.ended_at.isoformat(),
                     **window,
                 }
@@ -897,7 +919,7 @@ class RealTraceCollector:
         metrics = cast(dict[str, list[float | None]], trajectory["metrics"])
         costs = metrics.get("cost_per_token", [])
         throughput = metrics.get("throughput_token_per_sec", [])
-        for cost, tokens_per_second in zip(costs, throughput, strict=True):
+        for cost, tokens_per_second in zip(costs, throughput, strict=False):
             if cost is None or tokens_per_second is None:
                 continue
             self._cost_numerator += cost * tokens_per_second
