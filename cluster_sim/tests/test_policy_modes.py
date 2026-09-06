@@ -31,12 +31,14 @@ class ConfigPolicyModeTest(unittest.TestCase):
         config_policy = policy.load_config_policy()
 
         phi = config_policy.rule_for("RTXPRO6000", "microsoft/phi-4")
+        gcp_rtx = config_policy.rule_for("RTX-PRO-6000-BSE", "microsoft/phi-4")
         llama = config_policy.rule_for(
             "A100_80GB",
             "meta-llama/Llama-3.3-70B-Instruct",
         )
 
         self.assertIsNotNone(phi)
+        self.assertEqual(gcp_rtx, phi)
         self.assertIsNotNone(llama)
         assert phi is not None and llama is not None
         self.assertEqual(phi.allowed_tp, (1, 2))

@@ -55,6 +55,7 @@ STORE_ROOT = WORKSPACE_ROOT / "tandemn-store"
 CANONICAL_USER_ID = "usr_01KZSQ1M34PKS5XC9ZDR6DDSJ5"
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"
 AZURE_CATALOG_KEY = "azure-accelerated-hardware-v1"
+GCP_CATALOG_KEY = "gcp-accelerated-hardware-v1"
 EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_3h": (9, 200),
     "simulation_12h": (9, 400),
@@ -72,7 +73,7 @@ EXPECTED_COUNTS: tuple[tuple[str, type[Any], int], ...] = (
     ("users", UserRow, 1),
     ("model_catalogs", ModelCatalogRow, 16),
     ("resource_maps", ResourceMapRow, 1),
-    ("hardware_catalogs", HardwareCatalogRow, 2),
+    ("hardware_catalogs", HardwareCatalogRow, 3),
     ("jobs", JobRow, 0),
     ("plans", PlanRow, 0),
     ("ranks", RankRow, 0),
@@ -96,6 +97,7 @@ class StaticInputs:
     resource_map: ResourceMap
     aws_catalog: dict[str, Any]
     azure_catalog: dict[str, Any]
+    gcp_catalog: dict[str, Any]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -110,7 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--catalog-dir",
         type=Path,
         default=BENCHMARKS / "catalog-snapshots",
-        help="directory containing aws.json, azure.json, and SHA256SUMS",
+        help="directory containing aws.json, azure.json, gcp.json, and SHA256SUMS",
     )
     parser.add_argument(
         "--model-catalog",
@@ -169,9 +171,9 @@ def _expected_checksums(path: Path) -> dict[str, str]:
             raise ValueError(f"invalid checksum line in {path}")
         filename = Path(parts[1].lstrip("*")).name
         expected[filename] = parts[0].lower()
-    if set(expected) != {"aws.json", "azure.json"}:
+    if set(expected) != {"aws.json", "azure.json", "gcp.json"}:
         raise ValueError(
-            f"{path} must contain checksums for aws.json and azure.json only"
+            f"{path} must contain checksums for aws.json, azure.json, and gcp.json only"
         )
     return expected
 
@@ -191,10 +193,10 @@ def _validate_catalog(catalog: dict[str, Any], *, cloud: str, catalog_key: str) 
         raise ValueError(f"{cloud} catalog_version must be {catalog_key}")
     if catalog.get("cloud") != cloud:
         raise ValueError(f"{cloud} catalog cloud must be {cloud}")
-    if cloud == "aws":
+    if cloud in {"aws", "gcp"}:
         regions = catalog.get("regions")
         if not isinstance(regions, list) or not regions:
-            raise ValueError("AWS catalog must contain non-empty regions")
+            raise ValueError(f"{cloud} catalog must contain non-empty regions")
         instance_lists = [region.get("instance_types") for region in regions]
     else:
         instance_lists = [catalog.get("instance_types")]
@@ -222,7 +224,7 @@ def _catalog_locations(
     catalog: dict[str, Any], cloud: str
 ) -> set[tuple[str, str, str]]:
     locations: set[tuple[str, str, str]] = set()
-    regions = catalog["regions"] if cloud == "aws" else [catalog]
+    regions = catalog["regions"] if cloud in {"aws", "gcp"} else [catalog]
     for region_catalog in regions:
         region = region_catalog.get("region")
         instances = region_catalog.get("instance_types")
@@ -250,11 +252,13 @@ def _validate_resource_map_coverage(
     resource_map: ResourceMap,
     aws_catalog: dict[str, Any],
     azure_catalog: dict[str, Any],
+    gcp_catalog: dict[str, Any],
     benchmark_id: str,
 ) -> None:
     catalogs = {
         "aws": _catalog_locations(aws_catalog, "aws"),
         "azure": _catalog_locations(azure_catalog, "azure"),
+        "gcp": _catalog_locations(gcp_catalog, "gcp"),
     }
     pools = [
         (cloud, region, zone, instance_type, pool)
@@ -274,7 +278,7 @@ def _validate_resource_map_coverage(
             f"{benchmark_id} resource map must contain {expected_gpu_count} GPUs"
         )
     for cloud, region, zone, instance_type, _ in pools:
-        # GCP and RunPod capacity have no matching local catalog snapshot.
+        # Benchmark GCP capacity uses synthetic locations instead of GCP zones.
         if cloud in {"gcp", "runpod"}:
             continue
         if cloud not in catalogs:
@@ -291,6 +295,7 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
     catalog_dir = args.catalog_dir.resolve()
     aws_path = catalog_dir / "aws.json"
     azure_path = catalog_dir / "azure.json"
+    gcp_path = catalog_dir / "gcp.json"
     checksums_path = catalog_dir / "SHA256SUMS"
     paths = (
         args.model_catalog,
@@ -298,6 +303,7 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
         args.resource_map,
         aws_path,
         azure_path,
+        gcp_path,
         checksums_path,
     )
     for path in paths:
@@ -305,7 +311,7 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
             raise FileNotFoundError(path)
 
     checksums = _expected_checksums(checksums_path)
-    for path in (aws_path, azure_path):
+    for path in (aws_path, azure_path, gcp_path):
         if _checksum(path) != checksums[path.name]:
             raise ValueError(f"checksum mismatch for {path}")
 
@@ -317,15 +323,20 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
         raise ValueError("benchmark model catalog must contain 16 models")
     aws_catalog = _read_catalog(aws_path)
     azure_catalog = _read_catalog(azure_path)
+    gcp_catalog = _read_catalog(gcp_path)
     _validate_catalog(aws_catalog, cloud="aws", catalog_key=AWS_CATALOG_KEY)
     _validate_catalog(azure_catalog, cloud="azure", catalog_key=AZURE_CATALOG_KEY)
+    _validate_catalog(gcp_catalog, cloud="gcp", catalog_key=GCP_CATALOG_KEY)
     _validate_resource_map_coverage(
         resource_map,
         aws_catalog,
         azure_catalog,
+        gcp_catalog,
         args.benchmark_id,
     )
-    return StaticInputs(catalogs, user_id, resource_map, aws_catalog, azure_catalog)
+    return StaticInputs(
+        catalogs, user_id, resource_map, aws_catalog, azure_catalog, gcp_catalog
+    )
 
 
 def _validate_local_store() -> None:
@@ -408,6 +419,7 @@ def seed_static(inputs: StaticInputs, client: PostgresClient | None = None) -> N
     hardware_store = HardwareCatalogStore(client)
     hardware_store.replace(inputs.aws_catalog, AWS_CATALOG_KEY)
     hardware_store.replace(inputs.azure_catalog, AZURE_CATALOG_KEY)
+    hardware_store.replace(inputs.gcp_catalog, GCP_CATALOG_KEY)
 
 
 def verify_static_state(client: PostgresClient) -> None:
@@ -426,7 +438,7 @@ def verify_static_state(client: PostgresClient) -> None:
         raise RuntimeError(f"unexpected Store counts: {actual_counts}")
     if canonical_user is None:
         raise RuntimeError(f"missing canonical user {CANONICAL_USER_ID}")
-    if catalog_keys != {AWS_CATALOG_KEY, AZURE_CATALOG_KEY}:
+    if catalog_keys != {AWS_CATALOG_KEY, AZURE_CATALOG_KEY, GCP_CATALOG_KEY}:
         raise RuntimeError(f"unexpected hardware catalog keys: {sorted(catalog_keys)}")
 
 
@@ -504,7 +516,7 @@ def main(argv: list[str] | None = None) -> None:
     seed_static(inputs)
     verify_static_state(PostgresClient())
     LOGGER.info(
-        "seeded 16 models, two hardware catalogs, and the %s resource map",
+        "seeded 16 models, three hardware catalogs, and the %s resource map",
         args.benchmark_id,
     )
 

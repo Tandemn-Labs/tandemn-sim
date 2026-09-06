@@ -49,9 +49,11 @@ BASELINES = (
     "openevolve",
     "contextual_bandit",
     "evox",
+    "agentic",
 )
 AWS_CATALOG_KEY = "aws-accelerated-hardware-v2"
 AZURE_CATALOG_KEY = "azure-accelerated-hardware-v1"
+GCP_CATALOG_KEY = "gcp-accelerated-hardware-v1"
 EXPECTED_KOI_COUNTS = (123, 2222, 89)
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 LOGGER = logging.getLogger(__name__)
@@ -106,7 +108,11 @@ def require_static_seed(client: PostgresClient, canonical_user_id: str) -> None:
         raise RuntimeError(
             "run benchmark_static_seed.py before creating baseline users"
         )
-    if model_count != 16 or catalog_keys != {AWS_CATALOG_KEY, AZURE_CATALOG_KEY}:
+    if model_count != 16 or catalog_keys != {
+        AWS_CATALOG_KEY,
+        AZURE_CATALOG_KEY,
+        GCP_CATALOG_KEY,
+    }:
         raise RuntimeError("static benchmark catalogs are incomplete")
 
 

@@ -360,13 +360,18 @@ class AicPlannerDriverTest(unittest.TestCase):
             "A100-80GB": "a100_sxm",
             "A10G": "l4",
             "L40S": "l40s",
+            "RTXPRO6000": "rtx_pro_6000_server",
+            "RTX-PRO-6000": "rtx_pro_6000_server",
+            "RTX-PRO-6000-BSE": "rtx_pro_6000_server",
         }
 
         for hardware, expected in expected_systems.items():
             with self.subTest(hardware=hardware):
                 self.assertEqual(_aic_system({}, None, hardware, {}), expected)
 
-    def test_quantization_policy_filters_unsupported_gpu_without_checking_tp(self) -> None:
+    def test_quantization_policy_filters_unsupported_gpu_without_checking_tp(
+        self,
+    ) -> None:
         """Keep AIC on profiled GPUs while leaving parallelism to AIC."""
         h100 = ResourceTarget("h100", "H100", None, {"free": 8}, None)
         l40s = ResourceTarget("l40s", "L40S", None, {"free": 8}, None)

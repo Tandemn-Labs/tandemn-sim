@@ -14,6 +14,7 @@ from unittest.mock import patch
 from benchmarks.benchmark_static_seed import (
     AWS_CATALOG_KEY,
     AZURE_CATALOG_KEY,
+    GCP_CATALOG_KEY,
     _validate_catalog,
     _validate_local_store,
     _validate_resource_map_coverage,
@@ -86,6 +87,28 @@ def _azure_catalog() -> dict[str, object]:
     }
 
 
+def _gcp_catalog() -> dict[str, object]:
+    return {
+        "catalog_version": GCP_CATALOG_KEY,
+        "cloud": "gcp",
+        "instance_type_count": 1,
+        "regions": [
+            {
+                "region": "us-central1",
+                "instance_types": [
+                    {
+                        "instance_type": "g2-standard-4",
+                        "accelerators": [],
+                        "offerings": [
+                            {"region": "us-central1", "zone_name": "us-central1-a"}
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
 class StaticSeedTest(unittest.TestCase):
     """Verify static inputs before a destructive Store reset."""
 
@@ -94,8 +117,10 @@ class StaticSeedTest(unittest.TestCase):
             catalog_dir = Path(temporary)
             aws_path = catalog_dir / "aws.json"
             azure_path = catalog_dir / "azure.json"
+            gcp_path = catalog_dir / "gcp.json"
             aws_path.write_text(json.dumps(_aws_catalog()), encoding="utf-8")
             azure_path.write_text(json.dumps(_azure_catalog()), encoding="utf-8")
+            gcp_path.write_text(json.dumps(_gcp_catalog()), encoding="utf-8")
             checksums = "\n".join(
                 " ".join(
                     (
@@ -103,7 +128,7 @@ class StaticSeedTest(unittest.TestCase):
                         f"snapshots/{path.name}",
                     )
                 )
-                for path in (aws_path, azure_path)
+                for path in (aws_path, azure_path, gcp_path)
             )
             (catalog_dir / "SHA256SUMS").write_text(checksums + "\n", encoding="utf-8")
 
@@ -118,6 +143,7 @@ class StaticSeedTest(unittest.TestCase):
             )
 
         self.assertEqual(len(inputs.catalogs), 16)
+        self.assertEqual(inputs.gcp_catalog["catalog_version"], GCP_CATALOG_KEY)
         self.assertEqual(
             sum(
                 pool.total_gpus for *_, pool in inputs.resource_map.iter_machine_pools()
@@ -144,6 +170,33 @@ class StaticSeedTest(unittest.TestCase):
 
         self.assertTrue({"A100-40GB", "A100-80GB"} <= profile_names)
         self.assertFalse({"A100", "A100_40GB", "A100_80GB"} & profile_names)
+
+    def test_catalog_profiles_cover_gcp_gpu_models(self) -> None:
+        catalogs = load_catalogs(
+            ROOT / "benchmarks/model_catalogs.csv",
+            ROOT / "benchmarks/model_catalog_gpu_profiles.csv",
+        )
+        gcp_gpu_types = {
+            "A100-40GB",
+            "A100-80GB",
+            "H100",
+            "H200",
+            "B200",
+            "L4",
+            "RTXPRO6000",
+        }
+        for catalog in catalogs:
+            self.assertIsInstance(catalog.max_model_len, int)
+            for field in (
+                "max_num_seq",
+                "max_num_batched_tokens",
+                "block_size",
+                "kvcache_dtype",
+            ):
+                self.assertTrue(
+                    gcp_gpu_types
+                    <= {profile["gpu_type"] for profile in getattr(catalog, field)}
+                )
 
     def test_uses_the_repository_catalog_snapshot_directory_by_default(self) -> None:
         self.assertEqual(
@@ -248,6 +301,7 @@ class StaticSeedTest(unittest.TestCase):
                 resource_map,
                 aws_catalog,
                 _azure_catalog(),
+                _gcp_catalog(),
                 "simulation_3h",
             )
 
@@ -257,6 +311,9 @@ class StaticSeedTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "catalog_version"):
             _validate_catalog(catalog, cloud="azure", catalog_key=AZURE_CATALOG_KEY)
+
+    def test_validates_gcp_regional_catalog(self) -> None:
+        _validate_catalog(_gcp_catalog(), cloud="gcp", catalog_key=GCP_CATALOG_KEY)
 
     def test_rejects_remote_database_url(self) -> None:
         with patch.dict(
