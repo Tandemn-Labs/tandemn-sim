@@ -309,6 +309,23 @@ def _build_evox(context: PlannerContext) -> PlannerDriver:
     )
 
 
+def _build_agentic(context: PlannerContext) -> PlannerDriver:
+    """Build the Claude Agent SDK placement baseline."""
+    from agentic import AgenticPlannerDriver
+
+    return AgenticPlannerDriver.build(
+        context.user_id,
+        context.scenario,
+        {
+            "model": "haiku",
+            "max_tokens": 12_000,
+            "max_turns": 6,
+            "backend": "vllm",
+        },
+        context.postgres,
+    )
+
+
 PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "koi": _build_koi,
     "dynamo_aic": _build_aic,
@@ -321,6 +338,7 @@ PLANNER_BUILDERS: dict[str, Callable[[PlannerContext], PlannerDriver]] = {
     "openevolve": _build_openevolve,
     "contextual_bandit": _build_contextual_bandit,
     "evox": _build_evox,
+    "agentic": _build_agentic,
 }
 
 
