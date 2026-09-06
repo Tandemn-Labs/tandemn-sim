@@ -177,8 +177,10 @@ _REAL_HARDWARE_ALIASES = {
     "h100-sxm": "h100",
     "h100-sxm-80gb": "h100",
     "l4-24gb": "l4",
+    # ponytail: local GCP catalog alias; centralize GPU identity if aliases expand.
     "rtx-pro-6000": "rtx6000",
     "rtxpro6000": "rtx6000",
+    "rtx-pro-6000-bse": "rtx6000",
 }
 
 
@@ -248,9 +250,7 @@ def load_config_policy() -> ConfigPolicy:
     rules: dict[tuple[str, str], ConfigPolicyRule] = {}
     hardware: str | None = None
     policy_text = (
-        _REAL_POLICY_TEXT
-        if _POLICY_ENVIRONMENT == "real_hardware"
-        else _POLICY_TEXT
+        _REAL_POLICY_TEXT if _POLICY_ENVIRONMENT == "real_hardware" else _POLICY_TEXT
     )
 
     for line_number, raw_line in enumerate(policy_text.splitlines(), start=1):

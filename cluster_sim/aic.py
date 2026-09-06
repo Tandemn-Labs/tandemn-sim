@@ -43,6 +43,10 @@ _AIC_SYSTEM_ALIASES = {
     "a10g-24gb": "l4",
     "l40s": "l40s",
     "l40s-48gb": "l40s",
+    # ponytail: local GCP catalog alias; centralize GPU identity if aliases expand.
+    "rtxpro6000": "rtx_pro_6000_server",
+    "rtx-pro-6000": "rtx_pro_6000_server",
+    "rtx-pro-6000-bse": "rtx_pro_6000_server",
 }
 
 

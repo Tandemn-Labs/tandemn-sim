@@ -521,6 +521,10 @@ _HARDWARE_ALIASES = {
     "l4-24gb": "l4",
     "l40s": "l40s",
     "l40s-48gb": "l40s",
+    # ponytail: local GCP catalog alias; centralize GPU identity if aliases expand.
+    "rtxpro6000": "rtxpro6000",
+    "rtx-pro-6000": "rtxpro6000",
+    "rtx-pro-6000-bse": "rtxpro6000",
     "mi300": "mi300",
     "mi300x": "mi300",
     "mi300x-192gb": "mi300",
