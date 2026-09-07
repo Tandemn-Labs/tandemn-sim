@@ -1,0 +1,60 @@
+schema_version: benchmark-job/v1
+job_id: job-benchmark_timing_real100gpu-67-3
+schedule:
+  enabled: true
+  kind: online
+  driver: aiperf
+  service_id: service-benchmark_timing_real100gpu-67-3
+  operation: base_service
+  start_at_offset_minutes: 67
+  stop_at_offset_minutes: 142
+spec:
+  user_id: tenant_moe_routing
+  optimization_goal: latency
+  precision: bf16
+  features:
+    isl_token_avg: 1200
+    isl_token_min: 300
+    isl_token_max: 4096
+    isl_distribution_type: LogNormal
+    osl_token_avg: 900
+    osl_token_min: 225
+    osl_token_max: 3000
+    osl_distribution_type: LogNormal
+    request_arrival_pattern: Bursty
+    peak_to_mean_ratio: 5
+    workload_prefix_concentration: 0
+    multi_turn_ratio: 0
+    shared_prefix_length_avg: 1
+    is_session_affinity: false
+    priority_class: STANDARD
+    max_concurrent_streaming: 16
+    target_p99_ttft_ms: 1000
+    target_p99_tpot_ms: 45
+workload:
+  schemaVersion: '2.0'
+  randomSeed: 103
+  benchmark:
+    model: Qwen/Qwen3-Next-80B-A3B-Thinking
+    endpoint:
+      path: /v1/chat/completions
+      type: chat
+      streaming: true
+      timeout: 300
+      connectionReuse: pooled
+    tokenizer:
+      name: ${TOKENIZER_NAME:Qwen/Qwen3-Next-80B-A3B-Thinking}
+    dataset:
+      type: synthetic
+      entries: 512
+      sampling: random
+      prompts: null
+      turns: 1
+    phases:
+    - name: profiling
+      type: gamma
+      duration: 4500
+      rate: 0.26
+      smoothness: 0.917
+      concurrency: 16
+      gracePeriod: 300

@@ -2,23 +2,24 @@
 
 Benchmark ID: `real100gpubenchmark`
 
-This executable real-hardware benchmark runs a 180-minute workload followed by a 30-minute drain on an exact 96-GPU, 12-node reserved fleet. No on-demand capacity is available.
+This executable real-hardware benchmark runs a 180-minute workload followed by a 30-minute drain on an exact 120-GPU, 16-node reserved fleet. No on-demand capacity is available.
 
 ## Fleet
 
-| Accelerator | Node shape | Nodes | `us-central1` | `europe-west2` | Total GPUs |
-|---|---:|---:|---:|---:|---:|
-| `RTXPRO6000` | 8 x 96 GB | 5 | 24 | 16 | 40 |
-| `H100` | 8 x 80 GB | 2 | 8 | 8 | 16 |
-| `A100-80GB` | 8 x 80 GB | 2 | 8 | 8 | 16 |
-| `L4` | 8 x 24 GB | 3 | 16 | 8 | 24 |
-| **Total** |  | **12** | **56** | **40** | **96** |
+| Accelerator | Node shape | Nodes | Region | Total GPUs |
+|---|---:|---:|---|---:|
+| `A100-40GB` | 8 x 40 GB | 2 | `us-central1` | 16 |
+| `RTXPRO6000` | 4 x 96 GB | 2 | `us-central1` | 8 |
+| `H100` | 8 x 80 GB | 4 | `europe-west2` | 32 |
+| `A100-80GB` | 8 x 80 GB | 2 | `us-east5` | 16 |
+| `RTXPRO6000` | 8 x 96 GB | 6 | `us-east5` | 48 |
+| **Total** |  | **16** |  | **120** |
 
 ## Workload
 
-The manifest contains 7 online jobs and 4 batch campaigns. The selected batch campaigns are Mini Nightly Eval, Phi-4 Quant Probe, Calibration Probe, and Sales Reports, totaling exactly 26,200 records across 106 shards. Their definitions are unchanged from `simulation_3h`; the external pipeline owns batch dataset staging.
+The manifest contains 13 online jobs and 4 batch campaigns. The selected batch campaigns are Mini Nightly Eval, Phi-4 Quant Probe, Calibration Probe, and Sales Reports, totaling exactly 26,200 records across 106 shards. Their definitions are unchanged from `simulation_3h`; the external pipeline owns batch dataset staging.
 
-The maximum simultaneous online declaration is 60 streams, with roughly 2.4 target requests/s during the main overlap. Every online window lasts at least 45 minutes so deployment cold starts do not consume the whole measurement window. Online traffic stops at minute 180 and in-flight work drains through the hard stop at minute 210.
+All online traffic uses the original `simulation_3h` phase rates and concurrency caps without rate ramps. The maximum simultaneous online declaration is 392 streams at T+100. Product Launch Chat and Product Launch Moderation run through T+109, while Legal/Finance Review runs from T+135 through T+180, so cold starts do not consume their measurement windows. Online traffic stops at minute 180 and in-flight work drains through the hard stop at minute 210.
 
 ## Model Allowlist
 
@@ -35,4 +36,4 @@ The maximum simultaneous online declaration is 60 streams, with roughly 2.4 targ
 
 ## Difficulty Contract
 
-Peak demand is sized for 10 of the 12 whole nodes, retaining two nodes of headroom. Completion of every batch campaign before its deadline is not guaranteed. Sales Reports intentionally creates late deadline pressure. The workload has no deliberate overload floor.
+All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 arrival waves create persistent code, product-launch, high-priority safety, and Qwen3 placement pressure. Completion of every batch campaign before its deadline is not guaranteed. Sales Reports intentionally creates late deadline pressure. A plan-only preflight is required before a live run to confirm admission contention on the exact fleet.
