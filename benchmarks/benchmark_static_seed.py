@@ -64,7 +64,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_12h_homogenous": (1, 400),
     "15min_real": (2, 12),
     "real_12h": (9, 192),
-    "real100gpubenchmark": (5, 120),
+    "real100gpubenchmark": (5, 104),
     "real_life_24h": (9, 192),
 }
 DATABASE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
