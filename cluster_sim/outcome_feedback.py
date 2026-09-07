@@ -45,6 +45,7 @@ class PlacementFingerprint:
     tp: int
     pp: int
     dp: int
+    n_replicas: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         """Return the JSON-native form exposed to evolved policies."""
@@ -60,7 +61,7 @@ class PlacementFingerprint:
             "dp": self.dp,
             "gpu_count": count,
             "count": count,
-            "n_replicas": self.dp,
+            "n_replicas": self.n_replicas if self.n_replicas is not None else self.dp,
         }
 
 
@@ -272,6 +273,7 @@ def fingerprint(
     tp: int,
     pp: int,
     dp: int,
+    n_replicas: int | None = None,
 ) -> PlacementFingerprint:
     """Build one canonical placement identity from scheduler-visible fields."""
     return PlacementFingerprint(
@@ -283,6 +285,7 @@ def fingerprint(
         tp=tp,
         pp=pp,
         dp=dp,
+        n_replicas=n_replicas,
     )
 
 
