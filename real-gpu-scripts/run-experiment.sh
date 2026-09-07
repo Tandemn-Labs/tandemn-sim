@@ -129,6 +129,13 @@ trap 'interrupted=true; exit 143' TERM
 trap cleanup EXIT
 
 
+### Git pull everything
+git -C /home/user/tandemn-sim pull
+git -C /home/user/tandemn-system pull
+git -C /home/user/tandemn-store pull
+git -C /home/user/tandemn-koi pull
+
+
 #################### DO ALL THE CLEANUP ####################
 
 ### Reset chunk-manager database
