@@ -10,7 +10,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -137,6 +137,108 @@ class AgenticPlannerTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(actions[1]["ladder"][0]["config"][field], value)
         Plan(user_id="tenant", actions=[actions[1]])
+
+    def test_prompt_includes_prior_outcome_feedback(self) -> None:
+        snapshot = StoreSnapshot(
+            resources={},
+            running_jobs=(),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs={},
+        )
+
+        prompt = json.loads(
+            _build_user_prompt(
+                1,
+                datetime(2026, 1, 1, tzinfo=UTC),
+                snapshot,
+                (),
+                load_config_policy(),
+                ({"job_id": "waiting", "reward": 0.5},),
+            )
+        )
+
+        self.assertEqual(prompt["outcome_feedback"], [{"job_id": "waiting", "reward": 0.5}])
+
+    def test_driver_records_persisted_place_feedback(self) -> None:
+        driver = _driver()
+        driver.feedback = Mock()
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        action = driver._build_actions(
+            snapshot,
+            (
+                AgenticPlacement(
+                    decision="place",
+                    environment="reserved|aws|us-east|use1-az1|H100",
+                    instance_type=None,
+                    configuration=_configuration(),
+                ),
+            ),
+        )[0]
+
+        driver._record_action_feedback([action], datetime(2026, 1, 1, tzinfo=UTC))
+
+        driver.feedback.record.assert_called_once()
+        self.assertEqual(driver.feedback.record.call_args.kwargs["fingerprint"].n_replicas, 1)
+
+    def test_driver_passes_prior_outcomes_to_agent_prompt(self) -> None:
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        outcome = {
+            "job_id": "waiting",
+            "environment": "reserved|aws|us-east|use1-az1|H100",
+            "tp": 1,
+            "pp": 1,
+            "dp": 1,
+            "n_replicas": 1,
+            "reward": 0.5,
+        }
+        prompts = []
+        driver._read_store_snapshot = lambda: snapshot
+        driver.feedback = Mock()
+        driver.feedback.outcomes_for_job_ids.return_value = (outcome,)
+        driver.client = SimpleNamespace(
+            place=lambda _tick, _model, _tokens, _system, prompt: (
+                prompts.append(prompt)
+                or ((AgenticPlacement("defer", None, None, None),), ())
+            )
+        )
+        driver.plan_store = SimpleNamespace(create=lambda plan: None)
+
+        driver.create_plans(1, datetime(2026, 1, 1, tzinfo=UTC))
+
+        self.assertEqual(driver.feedback.observe.call_args.args, (datetime(2026, 1, 1, tzinfo=UTC),))
+        self.assertEqual(driver.feedback.outcomes_for_job_ids.call_args.args, (("waiting",),))
+        self.assertEqual(json.loads(prompts[0])["outcome_feedback"], [outcome])
 
     def test_client_requires_positive_max_turns(self) -> None:
         """Reject an agent loop with no permitted tool-use turns."""
@@ -346,6 +448,7 @@ def _scheduler_document() -> dict[str, object]:
             }
         ],
         "jobs_for_tick": [job, job],
+        "outcome_feedback": [],
     }
 
 
