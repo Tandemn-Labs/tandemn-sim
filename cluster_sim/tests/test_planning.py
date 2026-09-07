@@ -100,6 +100,7 @@ class KoiPlannerDriverTest(unittest.TestCase):
                 "openevolve",
                 "contextual_bandit",
                 "evox",
+                "agentic",
             },
         )
 

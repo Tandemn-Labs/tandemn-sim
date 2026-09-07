@@ -25,8 +25,10 @@ from agentic import (
     _build_user_prompt,
     _validate_tick_plan,
 )
+from llm_usage import LlmUsage
 from models import OnlineJob, Scenario
 from policy import load_config_policy
+from tandemn_system_data.models import Plan
 
 
 class AgenticPlannerTest(unittest.TestCase):
@@ -132,8 +134,9 @@ class AgenticPlannerTest(unittest.TestCase):
             ],
         )
         self.assertEqual(actions[1]["ladder"][0]["config"]["precision"], "fp16")
-        self.assertEqual(actions[1]["ladder"][0]["config"]["engine_version"], "0.16.0")
-        self.assertEqual(actions[1]["ladder"][0]["config"]["max_num_seq"], 256)
+        for field, value in _launch_config().items():
+            self.assertEqual(actions[1]["ladder"][0]["config"][field], value)
+        Plan(user_id="tenant", actions=[actions[1]])
 
     def test_client_requires_positive_max_turns(self) -> None:
         """Reject an agent loop with no permitted tool-use turns."""
@@ -145,7 +148,21 @@ class AgenticPlannerTest(unittest.TestCase):
         sdk = _FakeAgentSdk()
         client = ClaudeAgentPlacementClient(max_turns=6)
 
-        with patch("agentic._load_agent_sdk", return_value=sdk):
+        with (
+            patch("agentic._load_agent_sdk", return_value=sdk),
+            patch(
+                "agentic._bedrock_environment",
+                return_value={
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "AWS_PROFILE": "default",
+                    "AWS_REGION": "us-east-1",
+                    "AWS_BEARER_TOKEN_BEDROCK": "",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": (
+                        "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+                    ),
+                },
+            ),
+        ):
             placements, usage = client.place(
                 7,
                 model="sonnet",
@@ -172,10 +189,10 @@ class AgenticPlannerTest(unittest.TestCase):
             {
                 "CLAUDE_CODE_USE_BEDROCK": "1",
                 "AWS_PROFILE": "default",
-                "AWS_REGION": "us-east-2",
+                "AWS_REGION": "us-east-1",
                 "AWS_BEARER_TOKEN_BEDROCK": "",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": (
-                    "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+                    "global.anthropic.claude-haiku-4-5-20251001-v1:0"
                 ),
             },
         )
@@ -266,7 +283,35 @@ class AgenticPlannerTest(unittest.TestCase):
         )
 
         self.assertFalse(result["valid"])
-        self.assertIn("do not match Store", result["errors"][0])
+        self.assertIn("must contain only", result["errors"][0])
+
+    def test_driver_preserves_agent_usage_in_planner_result(self) -> None:
+        driver = _driver()
+        snapshot = StoreSnapshot(
+            resources={
+                "reserved|aws|us-east|use1-az1|H100": {
+                    "gpu_type": "H100",
+                    "total": 1,
+                    "free": 1,
+                    "pools": [],
+                }
+            },
+            running_jobs=(),
+            waiting_jobs=(_store_job(),),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        driver._read_store_snapshot = lambda: snapshot
+        usage = LlmUsage(7, 120, 30, "claude-haiku-test")
+        driver.client = SimpleNamespace(
+            place=lambda *args: ((AgenticPlacement("defer", None, None, None),), (usage,))
+        )
+        driver.plan_store = SimpleNamespace(create=lambda plan: None)
+
+        result = driver.create_plans(7, datetime(2026, 1, 1, tzinfo=UTC))
+
+        self.assertEqual(result.llm_usage, (usage,))
 
 
 def _scheduler_document() -> dict[str, object]:
@@ -391,13 +436,12 @@ def _configuration(
     pp: int = 1,
     dp: int = 1,
 ) -> dict[str, object]:
-    """Return Claude output that copies its supplied Store launch profile."""
+    """Return the only placement fields Claude is allowed to choose."""
     return {
         "replicas_needed": replicas_needed,
         "tp": tp,
         "pp": pp,
         "dp": dp,
-        **_launch_config(),
     }
 
 
