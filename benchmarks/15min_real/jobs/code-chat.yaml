@@ -7,7 +7,7 @@ schedule:
   service_id: service-benchmark_timing_15min_real-0-1
   operation: base_service
   start_at_offset_minutes: 0
-  stop_at_offset_minutes: 15
+  stop_at_offset_minutes: 30
 spec:
   user_id: tenant_smoke
   optimization_goal: latency

@@ -108,8 +108,8 @@ contains 256 records, four 64-request shards, and up to eight in-flight requests
       "job_id": "job-benchmark_timing_15min_real-0-1",
       "schedule": {
         "release_at_offset_minutes": 0,
-        "active_end_at_offset_minutes": 15,
-        "duration_minutes": 15,
+        "active_end_at_offset_minutes": 30,
+        "duration_minutes": 30,
         "operation": "base_service",
         "service_id": "service-benchmark_timing_15min_real-0-1"
       }
@@ -118,7 +118,7 @@ contains 256 records, four 64-request shards, and up to eight in-flight requests
       "user_id": "tenant_batch_eval",
       "kind": "batch",
       "spec_json": {
-        "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+        "model_id": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "precision": "bf16",
         "job_features": {
           "isl_token_avg": 256,
@@ -158,8 +158,8 @@ contains 256 records, four 64-request shards, and up to eight in-flight requests
       "job_id": "job-benchmark_timing_15min_real-0-2",
       "schedule": {
         "release_at_offset_minutes": 0,
-        "deadline_at_offset_minutes": 15,
-        "hard_stop_at_offset_minutes": 16,
+        "deadline_at_offset_minutes": 30,
+        "hard_stop_at_offset_minutes": 30,
         "completion_policy": "stop_when_complete",
         "campaign_id": "campaign-benchmark_timing_15min_real-0-2",
         "shard_count": 4,

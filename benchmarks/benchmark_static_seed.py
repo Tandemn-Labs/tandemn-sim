@@ -62,7 +62,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_24h": (9, 800),
     "real_life_3h": (9, 192),
     "simulation_12h_homogenous": (1, 400),
-    "15min_real": (2, 10),
+    "15min_real": (2, 12),
     "real_12h": (9, 192),
     "real100gpubenchmark": (8, 96),
     "real_life_24h": (9, 192),

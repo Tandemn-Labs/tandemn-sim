@@ -15,4 +15,4 @@ benchmark:
   reoptimization_tick_minutes: 1
   dispatch_at_exact_offset: false
   online_stop_action: stop_new_requests_and_drain_in_flight
-  hard_stop_at_offset_minutes: 16
+  hard_stop_at_offset_minutes: 31

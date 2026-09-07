@@ -29,7 +29,7 @@ ROUTER_TOKEN=${ROUTER_TOKEN:-${TANDEMN_ROUTER_TELEMETRY_TOKEN:?ROUTER_TOKEN or T
     exit 1
 }
 
-for required_command in kubectl setsid uv "$PYTHON_BIN"; do
+for required_command in kubectl uv "$PYTHON_BIN"; do
     command -v "$required_command" >/dev/null || {
         printf 'Required command not found: %s\n' "$required_command" >&2
         exit 1
@@ -47,7 +47,7 @@ kill_descendants() {
     for pids_file in /proc/[0-9]*/status; do
         local cpid="${pids_file%/status}"
         cpid="${cpid#/proc/}"
-        if [[ -r "$pids_file" ]] && grep -qFx "PPid:${ppid}" "$pids_file" 2>/dev/null; then
+        if [[ -r "$pids_file" ]] && grep -qE "^PPid:[[:space:]]*${ppid}$" "$pids_file" 2>/dev/null; then
             kill_descendants "$cpid" "$signal"
         fi
     done
@@ -56,7 +56,11 @@ kill_descendants() {
 
 cleanup() {
     local status=$?
-    trap - EXIT INT TERM
+    trap - EXIT
+    # Do not let a second Ctrl-C abort cleanup before the SIGKILL escalation.
+    trap '' INT TERM
+
+    printf 'Stopping GPU metric collectors...\n' >&2
 
     if ((${#pids[@]})); then
         for pid in "${pids[@]}"; do
@@ -77,7 +81,8 @@ cleanup() {
 start() {
     local name=$1
     shift
-    setsid "$@" >"$LOG_DIR/$name.log" 2>&1 &
+    # The parent launcher owns the session; nested sessions can escape cleanup.
+    "$@" >"$LOG_DIR/$name.log" 2>&1 &
     last_pid=$!
     pids+=("$last_pid")
 }

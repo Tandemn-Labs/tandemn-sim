@@ -26,11 +26,11 @@ BEST_FIT_CONFIGURATIONS: dict[
     "15min_real": {
         "job-benchmark_timing_15min_real-0-1": {
             "hardware": "RTXPRO6000",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
+            "configuration": {"tp": 4, "pp": 2, "dp": 1},
         },
         "job-benchmark_timing_15min_real-0-2": {
             "hardware": "L4",
-            "configuration": {"tp": 1, "pp": 1, "dp": 1},
+            "configuration": {"tp": 2, "pp": 2, "dp": 1},
         },
     },
     "simulation_12h_homogenous": {

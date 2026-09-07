@@ -7,10 +7,12 @@ pids=()
 started_pid=
 orca_pid=
 runner_pid=
+real_scenario_pid=
 first_exited_pid=
 first_exited_status=
 delay_orca_shutdown=false
 unexpected_exit=false
+interrupted=false
 
 declare -A pid_to_name=()
 
@@ -40,25 +42,33 @@ kill_managed_process() {
 cleanup() {
     local status=$?
     local pid
-    trap - EXIT INT TERM
+    trap - EXIT
+    # Do not let a second Ctrl-C abort cleanup before the SIGKILL escalation.
+    trap '' INT TERM
 
-    if [[ "$delay_orca_shutdown" == true ]]; then
+    printf 'Stopping managed processes...\n' >&2
+
+    if [[ "$delay_orca_shutdown" == true && "$interrupted" != true ]]; then
         for pid in "${pids[@]:-}"; do
-            [[ "$pid" == "$orca_pid" ]] && continue
+            [[ "$pid" == "$orca_pid" || "$pid" == "$real_scenario_pid" ]] && continue
             kill_managed_process "$pid" TERM
         done
 
         sleep 10
 
         for pid in "${pids[@]:-}"; do
-            [[ "$pid" == "$orca_pid" ]] && continue
+            [[ "$pid" == "$orca_pid" || "$pid" == "$real_scenario_pid" ]] && continue
             kill_managed_process "$pid" KILL
         done
 
         sleep 10
-        kill_managed_process "$orca_pid" TERM
+        for pid in "$orca_pid" "$real_scenario_pid"; do
+            kill_managed_process "$pid" TERM
+        done
         sleep 10
-        kill_managed_process "$orca_pid" KILL
+        for pid in "$orca_pid" "$real_scenario_pid"; do
+            kill_managed_process "$pid" KILL
+        done
     else
         for pid in "${pids[@]:-}"; do
             kill_managed_process "$pid" TERM
@@ -114,8 +124,8 @@ start() {
     pid_to_name[$started_pid]=$name
 }
 
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'interrupted=true; exit 130' INT
+trap 'interrupted=true; exit 143' TERM
 trap cleanup EXIT
 
 
@@ -175,16 +185,6 @@ uv run --directory "/home/user/tandemn-system" tandemn-orca \
 orca_pid=$started_pid
 
 
-### Run runner2.py
-start runner2 \
-  uv run --directory "/home/user/tandemn-sim/" python cluster_sim/runner2.py \
-  --benchmark "$BENCHMARK" \
-  --user-id "$TANDEMN_USER_ID" \
-  --planner bestfit \
-  --logical-epoch 2026-01-01T00:00:00+00:00
-runner_pid=$started_pid
-
-
 ### Run real_scenario.py
 start real_scenario \
 /home/user/tandemn-sim/.venv/bin/python -m data_generation.real_scenario \
@@ -195,10 +195,24 @@ start real_scenario \
   --source-region us-central1 \
   --source-zone us-central1-a \
   --ready-timeout 1200
+real_scenario_pid=$started_pid
+
+
+sleep 10
+
+
+### Run runner2.py
+start runner2 \
+  uv run --directory "/home/user/tandemn-sim/" python cluster_sim/runner2.py \
+  --benchmark "$BENCHMARK" \
+  --user-id "$TANDEMN_USER_ID" \
+  --planner bestfit \
+  --logical-epoch 2026-01-01T00:00:00+00:00
+runner_pid=$started_pid
 
 
 # The first managed process to exit ends the experiment. Only runner2 gives
-# Orca two reconciliation intervals to remove finished workloads.
+# Orca and real_scenario two reconciliation intervals to finish workloads.
 wait -n -p first_exited_pid "${pids[@]}"
 first_exited_status=$?
 

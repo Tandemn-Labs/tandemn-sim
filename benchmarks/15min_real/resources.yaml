@@ -4,19 +4,19 @@ resources:
   - id: rtx-pro-6000-blackwell-96gb
     accelerator: RTXPRO6000
     total_devices: 8
-    devices_per_node: 8
+    devices_per_node: 4
     memory_gb: 96
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
     markets: {on_demand: 8}
-    regions: {central-1: 8}
+    regions: {europe-west2: 8}
 
   - id: l4-24gb
     accelerator: L4
-    total_devices: 8
-    devices_per_node: 8
+    total_devices: 4
+    devices_per_node: 2
     memory_gb: 24
     aic_system: null
     unsupported_reason: AIC 0.11 has no L4 system model
     markets: {on_demand: 8}
-    regions: {central-1: 8}
+    regions: {us-central-1: 8}

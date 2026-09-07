@@ -6,9 +6,9 @@ schedule:
   driver: external_mock_data
   campaign_id: campaign-benchmark_timing_15min_real-0-2
   start_at_offset_minutes: 0
-  deadline_at_offset_minutes: 15
+  deadline_at_offset_minutes: 30
   completion_policy: stop_when_complete
-  hard_stop_at_offset_minutes: 16
+  hard_stop_at_offset_minutes: 30
 spec:
   user_id: tenant_batch_eval
   optimization_goal: throughput
