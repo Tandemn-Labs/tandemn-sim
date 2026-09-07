@@ -1,24 +1,34 @@
 schema_version: "resource-map/v1"
 
 resources:
-  - id: rtx-pro-6000-blackwell-96gb
-    accelerator: RTXPRO6000
-    total_devices: 40
+  - id: a100-pcie-40gb
+    accelerator: A100-40GB
+    total_devices: 16
     devices_per_node: 8
+    memory_gb: 40
+    aic_system: null
+    unsupported_reason: AIC 0.11 only defines the A100-80GB PCIe system
+    markets: {reserved: 16, on_demand: 0}
+    regions: {us-central1: 16}
+
+  - id: rtx-pro-6000-blackwell-96gb-4gpu
+    accelerator: RTXPRO6000
+    total_devices: 8
+    devices_per_node: 4
     memory_gb: 96
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
-    markets: {reserved: 40, on_demand: 0}
-    regions: {us-central1: 24, europe-west2: 16}
+    markets: {reserved: 8, on_demand: 0}
+    regions: {us-central1: 8}
 
   - id: h100-sxm-80gb
     accelerator: H100
-    total_devices: 16
+    total_devices: 32
     devices_per_node: 8
     memory_gb: 80
     aic_system: h100_sxm
-    markets: {reserved: 16, on_demand: 0}
-    regions: {us-central1: 8, europe-west2: 8}
+    markets: {reserved: 32, on_demand: 0}
+    regions: {europe-west2: 32}
 
   - id: a100-sxm-80gb
     accelerator: A100-80GB
@@ -27,14 +37,14 @@ resources:
     memory_gb: 80
     aic_system: a100_sxm
     markets: {reserved: 16, on_demand: 0}
-    regions: {us-central1: 8, europe-west2: 8}
+    regions: {us-east5: 16}
 
-  - id: l4-24gb
-    accelerator: L4
-    total_devices: 24
+  - id: rtx-pro-6000-blackwell-96gb-8gpu
+    accelerator: RTXPRO6000
+    total_devices: 48
     devices_per_node: 8
-    memory_gb: 24
+    memory_gb: 96
     aic_system: null
-    unsupported_reason: AIC 0.11 has no L4 system model
-    markets: {reserved: 24, on_demand: 0}
-    regions: {us-central1: 16, europe-west2: 8}
+    unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
+    markets: {reserved: 48, on_demand: 0}
+    regions: {us-east5: 48}

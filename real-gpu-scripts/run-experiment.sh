@@ -217,8 +217,7 @@ start runner2 \
   uv run --directory "/home/user/tandemn-sim/" python cluster_sim/runner2.py \
   --benchmark "$BENCHMARK" \
   --user-id "$TANDEMN_USER_ID" \
-  --planner bestfit \
-  --logical-epoch 2026-01-01T00:00:00+00:00
+  --planner "$BASELINE"
 runner_pid=$started_pid
 
 

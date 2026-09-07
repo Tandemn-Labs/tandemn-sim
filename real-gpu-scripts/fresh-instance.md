@@ -36,6 +36,9 @@ curl -LsSf https://hf.co/cli/install.sh | bash
 uvx hf auth login
 
 
+### opencode
+curl -fsSL https://opencode.ai/install | bash 
+
 ### AIPerf
 uv tool install aiperf==0.11.0
 
