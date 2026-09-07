@@ -1,4 +1,5 @@
 {
     "gcp|us-central1": "gke_tandemn_us-central1_tandemn-us-central1",
-    "gcp|europe-west2": "gke_tandemn_europe-west2_tandemn-europe-west2"
+    "gcp|europe-west2": "gke_tandemn_europe-west2_tandemn-europe-west2",
+    "gcp|us-east5":  "gke_tandemn_us-east5_tandemn-us-east5"
   }
