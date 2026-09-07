@@ -28,7 +28,7 @@ spec:
     shared_prefix_length_avg: 2250
     is_session_affinity: true
     priority_class: STANDARD
-    max_concurrent_streaming: 6
+    max_concurrent_streaming: 24
     target_p99_ttft_ms: 1500
     target_p99_tpot_ms: 55
 workload:
@@ -54,6 +54,6 @@ workload:
     - name: profiling
       type: poisson
       duration: 10380
-      rate: 0.3
-      concurrency: 6
+      rate: 1.2
+      concurrency: 24
       gracePeriod: 300
