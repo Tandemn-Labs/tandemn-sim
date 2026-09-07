@@ -1,4 +1,4 @@
-"""Materialize one batch job as OpenAI batch JSONL with AIPerf prompts."""
+"""Materialize one benchmark job as OpenAI JSONL with AIPerf prompts."""
 
 from __future__ import annotations
 
@@ -42,11 +42,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_batch_job(path: Path) -> tuple[dict[str, object], dict[str, object]]:
+def _load_job(
+    path: Path,
+) -> tuple[dict[str, object], str, str, str, int, int]:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if document["schedule"]["kind"] != "batch":
-        raise ValueError(f"{path} is not a batch job")
-    return document["spec"]["features"], document["workload"]["dataset"]
+    features = document["spec"]["features"]
+    workload = document["workload"]
+    if document["schedule"]["kind"] == "batch":
+        dataset = workload["dataset"]
+        return (
+            features,
+            str(dataset["id"]),
+            str(dataset["model"]),
+            str(dataset["endpoint"]),
+            int(dataset["seed"]),
+            int(dataset["record_count"]),
+        )
+    if document["schedule"]["kind"] == "online":
+        benchmark = workload["benchmark"]
+        dataset = benchmark["dataset"]
+        return (
+            features,
+            path.stem,
+            str(benchmark["model"]),
+            str(benchmark["endpoint"]["path"]),
+            int(workload["randomSeed"]),
+            int(dataset["entries"]),
+        )
+    raise ValueError(f"{path} is not a batch or online job")
 
 
 @cache
@@ -205,10 +228,8 @@ def generate_dataset(
         raise FileExistsError(
             f"{output_path} already exists; pass --force to replace it"
         )
-    features, dataset = _load_batch_job(job_path)
-    record_count = int(dataset["record_count"])
-    seed = int(dataset["seed"])
-    selected_tokenizer = tokenizer_name or str(dataset["model"])
+    features, dataset_id, model, endpoint, seed, record_count = _load_job(job_path)
+    selected_tokenizer = tokenizer_name or model
     aiperf_random.init(seed)
     tokenizer = Tokenizer.from_pretrained(
         selected_tokenizer,
@@ -222,9 +243,9 @@ def generate_dataset(
     rows = _records(
         features,
         record_count,
-        str(dataset["id"]),
-        str(dataset["model"]),
-        str(dataset["endpoint"]),
+        dataset_id,
+        model,
+        endpoint,
         turn_mode,
         turns_min,
         turns_mean,
