@@ -160,7 +160,7 @@ export OUTPUT="$(
     --baselines "$BASELINE"
 )"
 export TANDEMN_USER_ID="$(
-   /home/user/tandemn-sim/.venv/bin/python -c 'import json, sys; print(json.load(sys.stdin)["bestfit"])' \
+   /home/user/tandemn-sim/.venv/bin/python -c "import json, sys; print(json.load(sys.stdin)[\"$BASELINE\"])" \
     <<<"$OUTPUT"
 )"
 export TANDEMN_POSTGRES_URL="postgresql+psycopg://tandemn:tandemn@localhost:55432/tandemn_${BENCHMARK}_${BASELINE}"
