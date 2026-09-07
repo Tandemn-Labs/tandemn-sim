@@ -62,6 +62,7 @@ class VramPlannerDriverTest(unittest.TestCase):
             {name: len(jobs) for name, jobs in VRAM_REQUIREMENTS_GIB.items()},
             {
                 "real_12h": 28,
+                "real100gpubenchmark": 17,
                 "simulation_12h_homogenous": 37,
                 "15min_real": 2,
                 "simulation_12h": 37,
