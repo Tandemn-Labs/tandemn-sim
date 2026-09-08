@@ -64,7 +64,7 @@ EXPECTED_RESOURCE_MAP_SHAPES = {
     "simulation_12h_homogenous": (1, 400),
     "15min_real": (2, 12),
     "real_12h": (9, 192),
-    "real100gpubenchmark": (5, 120),
+    "real100gpubenchmark": (5, 104),
     "real_life_24h": (9, 192),
 }
 DATABASE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
@@ -72,7 +72,7 @@ LOGGER = logging.getLogger(__name__)
 
 EXPECTED_COUNTS: tuple[tuple[str, type[Any], int], ...] = (
     ("users", UserRow, 1),
-    ("model_catalogs", ModelCatalogRow, 16),
+    ("model_catalogs", ModelCatalogRow, 17),
     ("resource_maps", ResourceMapRow, 1),
     ("hardware_catalogs", HardwareCatalogRow, 3),
     ("jobs", JobRow, 0),
@@ -320,8 +320,8 @@ def load_inputs(args: argparse.Namespace) -> StaticInputs:
     if user_id != CANONICAL_USER_ID:
         raise ValueError(f"benchmark resource map user must be {CANONICAL_USER_ID}")
     catalogs = load_catalogs(args.model_catalog, args.gpu_profiles)
-    if len(catalogs) != 16:
-        raise ValueError("benchmark model catalog must contain 16 models")
+    if len(catalogs) != 17:
+        raise ValueError("benchmark model catalog must contain 17 models")
     aws_catalog = _read_catalog(aws_path)
     azure_catalog = _read_catalog(azure_path)
     gcp_catalog = _read_catalog(gcp_path)
