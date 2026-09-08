@@ -97,6 +97,7 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_12hr_192gpu-690-2": 251.363,
     },
     "real100gpubenchmark": {
+        "job-benchmark_timing_3hr-0-5": 1872.222,
         "job-benchmark_timing_3hr-15-1": 741.768,
         "job-benchmark_timing_3hr-15-3": 613.243,
         "job-benchmark_timing_3hr-85-1": 570.518,
@@ -104,6 +105,8 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real100gpu-0-1": 7.966,
         "job-benchmark_timing_real100gpu-0-2": 171.67,
         "job-benchmark_timing_real100gpu-0-3": 102.824,
+        "job-benchmark_timing_real100gpu-0-6": 493.835,
+        "job-benchmark_timing_real100gpu-0-7": 461.993,
         "job-benchmark_timing_real100gpu-7-1": 102.305,
         "job-benchmark_timing_real100gpu-7-3": 141.678,
         "job-benchmark_timing_real100gpu-32-2": 57.976,
@@ -386,6 +389,14 @@ MODEL_ARCHITECTURES: dict[str, ModelArchitecture] = {
         head_dim=256,
         linear_attention_layers=36,
         linear_cache_elements=557_056,
+    ),
+    "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ": ModelArchitecture(
+        parameter_count=235_093_634_560,
+        hidden_size=4_096,
+        intermediate_size=12_288,
+        attention_layers=94,
+        kv_heads=4,
+        head_dim=128,
     ),
     "zai-org/GLM-4.5-Air": ModelArchitecture(
         parameter_count=110_468_824_832,

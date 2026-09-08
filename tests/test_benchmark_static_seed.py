@@ -142,7 +142,7 @@ class StaticSeedTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(len(inputs.catalogs), 16)
+        self.assertEqual(len(inputs.catalogs), 17)
         self.assertEqual(inputs.gcp_catalog["catalog_version"], GCP_CATALOG_KEY)
         self.assertEqual(
             sum(
