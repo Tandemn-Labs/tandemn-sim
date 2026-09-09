@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CONTEXT="arn:aws:eks:us-east-1:906171432343:cluster/tandemn-control-plan"
+CONTEXT="arn:aws:eks:us-east-1:906171432343:cluster/tandemn-control-plane"
 NAMESPACE="default"
 SERVICE="chunk-manager-rw"
 LOCAL_PORT="60001"
