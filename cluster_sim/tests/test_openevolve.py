@@ -380,7 +380,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(
             namespace["_validate"](payload, keep),
-            {"valid": True, "gpu_footprint": 0},
+            {"valid": True, "gpu_footprint": 0, "hourly_price": 0.0},
         )
         _validate_policy_response(payload, keep)
 
@@ -558,7 +558,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(
             namespace["_validate"](payload, response),
-            {"valid": True, "gpu_footprint": 6},
+            {"valid": True, "gpu_footprint": 6, "hourly_price": 0.0},
         )
         _validate_policy_response(payload, response)
 
@@ -585,7 +585,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
 
         self.assertEqual(
             namespace["_validate"](payload, response),
-            {"valid": True, "gpu_footprint": 16},
+            {"valid": True, "gpu_footprint": 16, "hourly_price": 0.0},
         )
         _validate_policy_response(payload, response)
 
@@ -695,7 +695,7 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         validation = namespace["_validate"](payload, response)
         self.assertEqual(
             validation,
-            {"valid": True, "gpu_footprint": 16},
+            {"valid": True, "gpu_footprint": 16, "hourly_price": 0.0},
         )
 
     def test_prompt_includes_canonical_outcome_feedback_evidence(self) -> None:
@@ -755,16 +755,20 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             prompt["jobs_for_tick"][0]["model_id"],
             "meta-llama/Llama-3.2-1B-Instruct",
         )
+        self.assertEqual(prompt["jobs_for_tick"][0]["priority"], 2)
         self.assertEqual(prompt["outcome_feedback"], [evidence])
 
-    def test_evaluator_uses_matching_outcomes_as_secondary_score(self) -> None:
-        """Prefer measured reward only after preserving waiting-job admission."""
+    def test_evaluator_matches_evox_fitness(self) -> None:
+        """Score a valid placement by priority, outcome, price, and footprint."""
         response = _placement_response(tp=1)
         source = "def compute_placement(payload):\n    return " + repr(response) + "\n"
         rewarded_payload = _payload()
         rewarded_payload["jobs_for_tick"][0].update(
-            {"job_id": "waiting", "model_id": "model"}
+            {"job_id": "waiting", "model_id": "model", "priority": 3}
         )
+        rewarded_payload["tandemn_state"]["resources"]["env|H100"][
+            "price_per_gpu_hour"
+        ] = 2.0
         rewarded_payload["outcome_feedback"] = [
             {
                 "job_id": "waiting",
@@ -780,8 +784,11 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         ]
         neutral_payload = _payload()
         neutral_payload["jobs_for_tick"][0].update(
-            {"job_id": "waiting", "model_id": "model"}
+            {"job_id": "waiting", "model_id": "model", "priority": 3}
         )
+        neutral_payload["tandemn_state"]["resources"]["env|H100"][
+            "price_per_gpu_hour"
+        ] = 2.0
         namespace: dict[str, object] = {}
         rewarded_namespace: dict[str, object] = {}
         exec(_evaluator_source(neutral_payload), namespace)
@@ -792,8 +799,16 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             neutral_score = namespace["evaluate"](policy_path)
             rewarded_score = rewarded_namespace["evaluate"](policy_path)
 
-        self.assertEqual(neutral_score["observed_reward"], 0.0)
-        self.assertEqual(rewarded_score["observed_reward"], 0.8)
+        self.assertEqual(neutral_score["priority_score"], 4.0)
+        self.assertEqual(rewarded_score["priority_score"], 4.0)
+        self.assertEqual(neutral_score["mean_observed_reward"], 0.0)
+        self.assertEqual(rewarded_score["mean_observed_reward"], 0.8)
+        self.assertEqual(rewarded_score["hourly_price"], 2.0)
+        self.assertEqual(rewarded_score["gpu_footprint"], 1.0)
+        self.assertAlmostEqual(
+            rewarded_score["combined_score"],
+            4 * 4 + 0.8 + 1 / 3 + 1 / 2_000,
+        )
         self.assertGreater(
             rewarded_score["combined_score"],
             neutral_score["combined_score"],

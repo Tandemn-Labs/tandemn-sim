@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -25,6 +26,16 @@ from policy import (
 )
 from rank_ids import active_rank_id, rank_id
 from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
+
+_PRIORITY_LEVELS = {
+    "BEST_EFFORT": 1,
+    "LOW": 1,
+    "NORMAL": 2,
+    "STANDARD": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+    "P0": 4,
+}
 
 OPENEOLVE_SYSTEM_PROMPT = """You improve a deterministic placement policy for one
 frozen Tandemn scheduler tick. Modify only compute_placement(payload). The payload
@@ -666,6 +677,7 @@ def _build_user_prompt(
         )
         payload["job_id"] = job.store_job_id
         payload["model_id"] = str(known.get("model_id") or job.model_name)
+        payload["priority"] = _priority(known)
         payload["lifecycle"] = "running" if active_job is not None else "waiting"
         if active_job is not None:
             payload["active_placement"] = _active_placement(active_job)
@@ -1580,28 +1592,42 @@ def evaluate(program_path):
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        result = module.compute_placement(__import__("json").loads(PAYLOAD))
-        validation = _validate(__import__("json").loads(PAYLOAD), result)
+        payload = __import__("json").loads(PAYLOAD)
+        result = module.compute_placement(payload)
+        validation = _validate(payload, result)
     except Exception:
         return {{"combined_score": 0.0, "valid": 0.0}}
     if not validation.get("valid"):
         return {{"combined_score": 0.0, "valid": 0.0}}
     placements = result["placements"]
-    placed = sum(item["decision"] == "place" for item in placements)
+    selected = [
+        (job, placement)
+        for job, placement in zip(payload["jobs_for_tick"], placements)
+        if placement["decision"] in ("place", "swap")
+    ]
+    priority_base = len(payload["jobs_for_tick"]) + 1
+    priority_score = sum(
+        priority_base ** (int(job.get("priority", 2)) - 1)
+        for job, _placement in selected
+    )
     gpu_footprint = validation["gpu_footprint"]
+    hourly_price = validation["hourly_price"]
     observed_reward = _observed_reward(
-        __import__("json").loads(PAYLOAD),
+        payload,
         placements,
     )
     return {{
         "combined_score": float(
-            placed * 1_000_000
+            4 * priority_score
             + observed_reward
-            - min(float(gpu_footprint), 1_000_000.0) / 1_000_000_000.0
+            + (0.0 if not selected else 1 / (1 + hourly_price)
+               + 1 / (1_000 * (1 + gpu_footprint)))
         ),
         "valid": 1.0,
-        "admitted_jobs": float(placed),
-        "observed_reward": float(observed_reward),
+        "admitted_jobs": float(len(selected)),
+        "priority_score": float(priority_score),
+        "mean_observed_reward": float(observed_reward),
+        "hourly_price": float(hourly_price),
         "gpu_footprint": float(gpu_footprint),
     }}
 
@@ -1624,7 +1650,9 @@ def _observed_reward(payload, placements):
         if placement.get("decision") not in ("place", "swap"):
             continue
         key = _selected_outcome_key(payload, job, placement)
-        selected_rewards.append(rewards.get(key, 0.0))
+        reward = rewards.get(key)
+        if reward is not None:
+            selected_rewards.append(reward)
     return (
         0.0
         if not selected_rewards
@@ -1734,6 +1762,7 @@ def _validate(payload, result):
         for value in payload["model_catalog"]
     }}
     total_footprint = 0
+    total_price = 0.0
     for job, placement in zip(jobs, placements):
         if (
             not isinstance(placement, dict)
@@ -1894,7 +1923,37 @@ def _validate(payload, result):
         if pool is not None:
             pool["free"] = int(pool.get("free", 0)) - footprint
         total_footprint += footprint
-    return {{"valid": True, "gpu_footprint": total_footprint}}
+        price_source = pool or resource
+        per_gpu = price_source.get("price_per_gpu_hour")
+        if (
+            isinstance(per_gpu, (int, float))
+            and not isinstance(per_gpu, bool)
+            and math.isfinite(per_gpu)
+            and per_gpu > 0
+        ):
+            total_price += per_gpu * footprint
+        else:
+            per_instance = price_source.get("price_per_instance_hour")
+            if (
+                isinstance(per_instance, (int, float))
+                and not isinstance(per_instance, bool)
+                and math.isfinite(per_instance)
+                and per_instance > 0
+            ):
+                gpus_per_instance = price_source.get("gpus_per_instance")
+                if (
+                    isinstance(gpus_per_instance, bool)
+                    or not isinstance(gpus_per_instance, (int, float))
+                    or not math.isfinite(gpus_per_instance)
+                    or gpus_per_instance <= 0
+                ):
+                    gpus_per_instance = 1.0
+                total_price += per_instance * footprint / gpus_per_instance
+    return {{
+        "valid": True,
+        "gpu_footprint": total_footprint,
+        "hourly_price": total_price,
+    }}
 """
 
 
@@ -2101,6 +2160,15 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _priority(known: Mapping[str, object]) -> int:
+    """Normalize Store priority fields to the shared four-level scale."""
+    explicit = _number(known.get("priority"))
+    if explicit is not None and math.isfinite(explicit):
+        return min(4, max(1, round(explicit)))
+    raw = getattr(known.get("priority_class"), "value", known.get("priority_class"))
+    return _PRIORITY_LEVELS.get(str(raw or "STANDARD").upper(), 2)
 
 
 __all__ = [
