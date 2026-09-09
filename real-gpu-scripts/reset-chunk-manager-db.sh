@@ -14,6 +14,25 @@ fi
 
 JOB_IDS_FILE=$1
 
+ulid_to_uuid() {
+  python3 - "$1" <<'PY'
+import sys
+import uuid
+
+alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+ulid = sys.argv[1]
+
+if len(ulid) != 26 or ulid[0] not in "01234567" or any(char not in alphabet for char in ulid):
+    raise SystemExit(f"Invalid ULID: {ulid}")
+
+value = 0
+for char in ulid:
+    value = value * 32 + alphabet.index(char)
+
+print(uuid.UUID(int=value))
+PY
+}
+
 cleanup() {
   if [[ -n "${PORT_FORWARD_PID:-}" ]]; then
     kill "$PORT_FORWARD_PID" 2>/dev/null || true
@@ -51,8 +70,10 @@ if [[ "$connected" != true ]]; then
 fi
 
 while IFS=: read -r job_id _ || [[ -n "$job_id" ]]; do
+  job_uuid=$(ulid_to_uuid "$job_id")
+
   psql --host 127.0.0.1 --port "$LOCAL_PORT" --username app --dbname app \
-    --set=job_id="$job_id" <<'SQL'
+    --set=job_id="$job_uuid" <<'SQL'
 DELETE FROM chunks WHERE job_id = :'job_id';
 DELETE FROM job_chain_associations WHERE job_id = :'job_id';
 DELETE FROM jobs WHERE job_id = :'job_id';
