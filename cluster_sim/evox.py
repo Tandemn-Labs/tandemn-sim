@@ -6,12 +6,15 @@ import asyncio
 import importlib.util
 import json
 import math
+import multiprocessing
+import os
 import signal
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 from types import ModuleType, SimpleNamespace
 from typing import Any, Protocol, cast
 
@@ -48,6 +51,9 @@ _PRIORITY_LEVELS = {
     "CRITICAL": 4,
     "P0": 4,
 }
+
+_EVOX_TICK_BUDGET_SECONDS = 300.0
+_EVOX_FINALIZATION_RESERVE_SECONDS = 20.0
 
 LAUNCH_FIELDS = (
     "engine_name",
@@ -276,6 +282,7 @@ class EvoxClient(Protocol):
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
         feedback: Mapping[object, Mapping[str, object] | None] | None = None,
+        deadline: float | None = None,
     ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]: ...
 
 
@@ -319,6 +326,11 @@ class OnlineSkyDiscoverEvoxClient:
         self.api_base = api_base
         self.initial_program = EVOX_INITIAL_PROGRAM
         self.tick_number = 0
+        self.timed_out = False
+        self.selection_source = "safe_fallback"
+        self.completed_candidates = 0
+        self.error: str | None = None
+        self.worker_completed = False
 
     def select(
         self,
@@ -326,9 +338,15 @@ class OnlineSkyDiscoverEvoxClient:
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
         feedback: Mapping[object, Mapping[str, object] | None] | None = None,
+        deadline: float | None = None,
     ) -> tuple[Mapping[str, PlacementCandidate], tuple[LlmUsage, ...]]:
         """Evolve, verify, and execute the current tick's winning program."""
-        evaluator = OnlineEvoxEvaluator(problems, capacities, feedback)
+        self.timed_out = False
+        self.selection_source = "safe_fallback"
+        self.completed_candidates = 0
+        self.error = None
+        self.worker_completed = False
+        deadline = deadline or monotonic() + _EVOX_TICK_BUDGET_SECONDS
         payload = build_evox_payload(problems, capacities, feedback)
         catalog_json = json.dumps(
             payload["model_catalog"], sort_keys=True, separators=(",", ":")
@@ -337,30 +355,103 @@ class OnlineSkyDiscoverEvoxClient:
             f"{EVOX_SYSTEM_PROMPT}\n\nFrozen resolved model catalog for this tick:\n"
             f"{catalog_json}"
         )
-        try:
-            result = run_evox_discovery(
-                evaluator.evaluate,
-                self.output_dir / f"tick-{self.tick_number:06d}",
-                model=self.model,
-                iterations=self.iterations,
-                initial_program=self.initial_program,
-                api_base=self.api_base,
-                system_prompt=system_prompt,
-                tick_number=tick_number,
-            )
-            llm_usage = tuple(getattr(result, "llm_usage", ()))
-            best_solution = getattr(result, "best_solution", None)
-        except EvoxDeadlineExceeded as error:
-            best_solution = evaluator.best_solution
-            llm_usage = error.llm_usage
-        if not isinstance(best_solution, str) or not best_solution:
+        search_seconds = deadline - _EVOX_FINALIZATION_RESERVE_SECONDS - monotonic()
+        if search_seconds <= 0:
+            self.timed_out = True
             self.tick_number += 1
-            return {}, llm_usage
-        policy = load_policy_source(best_solution)
-        selected = select_evox_placements(policy, problems, capacities, feedback)
-        self.initial_program = best_solution
+            return {}, ()
+
+        context = multiprocessing.get_context("spawn")
+        messages, worker_messages = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_run_evox_worker,
+            args=(
+                tuple(problems),
+                dict(capacities),
+                {} if feedback is None else dict(feedback),
+                worker_messages,
+                self.output_dir / f"tick-{self.tick_number:06d}",
+                self.model,
+                self.iterations,
+                self.initial_program,
+                self.api_base,
+                system_prompt,
+                tick_number,
+                search_seconds,
+            ),
+        )
+        best: tuple[float, str, dict[str, str]] | None = None
+        llm_usage: list[LlmUsage] = []
+        try:
+            process.start()
+            worker_messages.close()
+        except Exception as error:
+            messages.close()
+            worker_messages.close()
+            self.error = repr(error)
+            self.tick_number += 1
+            return {}, ()
+        try:
+            search_deadline = deadline - _EVOX_FINALIZATION_RESERVE_SECONDS
+            while process.is_alive() and monotonic() < search_deadline:
+                wait = min(0.1, max(0.0, search_deadline - monotonic()))
+                if not messages.poll(wait):
+                    continue
+                try:
+                    message = messages.recv()
+                except (EOFError, OSError) as error:
+                    if not self.timed_out and not self.worker_completed:
+                        self.error = repr(error)
+                    break
+                best = _consume_worker_message(message, best, llm_usage, self)
+
+            if monotonic() >= search_deadline:
+                self.timed_out = True
+            if process.is_alive():
+                process.kill()
+            process.join()
+            while messages.poll():
+                try:
+                    message = messages.recv()
+                except (EOFError, OSError) as error:
+                    if not self.timed_out and not self.worker_completed:
+                        self.error = repr(error)
+                    break
+                best = _consume_worker_message(message, best, llm_usage, self)
+            if (
+                getattr(process, "exitcode", 0) not in {0, None}
+                and not self.timed_out
+                and self.error is None
+            ):
+                self.error = f"EvoX worker exited with code {process.exitcode}"
+        except Exception as error:
+            self.error = repr(error)
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join()
+            messages.close()
+
         self.tick_number += 1
-        return selected, llm_usage
+        if best is None:
+            if self.error is None and not self.timed_out:
+                self.error = "EvoX worker exited without a valid candidate"
+            return {}, tuple(llm_usage)
+
+        _, best_solution, selected_ids = best
+        try:
+            selected = _selected_candidates(problems, selected_ids)
+            validate_selection(problems, selected, capacities)
+        except Exception as error:
+            self.error = repr(error)
+            return {}, tuple(llm_usage)
+        self.initial_program = best_solution
+        self.selection_source = (
+            "evox_best_so_far"
+            if self.timed_out or self.error is not None or not self.worker_completed
+            else "evox_completed"
+        )
+        return selected, tuple(llm_usage)
 
 
 class OnlineEvoxEvaluator:
@@ -371,6 +462,9 @@ class OnlineEvoxEvaluator:
         problems: Sequence[PlacementProblem],
         capacities: Mapping[str, int],
         feedback: Mapping[object, Mapping[str, object] | None] | None = None,
+        on_best: Callable[[float, str, Mapping[str, PlacementCandidate], int], None]
+        | None = None,
+        on_progress: Callable[[int], None] | None = None,
     ) -> None:
         """Freeze the current tick throughout one online evolution run."""
         self.problems = tuple(problems)
@@ -378,6 +472,9 @@ class OnlineEvoxEvaluator:
         self.feedback = {} if feedback is None else feedback
         self.best_solution: str | None = None
         self.best_score = -math.inf
+        self.completed_candidates = 0
+        self.on_best = on_best
+        self.on_progress = on_progress
 
     def evaluate(self, program_path: str) -> dict[str, object]:
         """Return a larger-is-better score after strict plan verification."""
@@ -441,10 +538,150 @@ class OnlineEvoxEvaluator:
             "gpu_footprint": float(footprint),
             "feedback": selected_feedback,
         }
+        self.completed_candidates += 1
+        if self.on_progress is not None:
+            self.on_progress(self.completed_candidates)
         if metrics["combined_score"] > self.best_score:
+            source = Path(program_path).read_text(encoding="utf-8")
+            self.best_solution = source
             self.best_score = metrics["combined_score"]
-            self.best_solution = Path(program_path).read_text(encoding="utf-8")
+            if self.on_best is not None:
+                self.on_best(
+                    self.best_score,
+                    source,
+                    selected,
+                    self.completed_candidates,
+                )
         return metrics
+
+
+def _run_evox_worker(
+    problems: tuple[PlacementProblem, ...],
+    capacities: dict[str, int],
+    feedback: dict[object, Mapping[str, object] | None],
+    messages: Any,
+    output_dir: Path,
+    model: str,
+    iterations: int,
+    initial_program: str,
+    api_base: str | None,
+    system_prompt: str,
+    tick_number: int,
+    search_seconds: float,
+) -> None:
+    """Run SkyDiscover in a process the parent can stop without thread cleanup."""
+    from threading import Event
+
+    from skydiscover.search import default_discovery_controller
+
+    # SkyDiscover uses this only for in-process shutdown checks. A threading
+    # event avoids leaking POSIX semaphores when this worker is hard-killed.
+    default_discovery_controller.mp = SimpleNamespace(Event=Event)
+
+    def publish_best(
+        score: float,
+        source: str,
+        selected: Mapping[str, PlacementCandidate],
+        completed_candidates: int,
+    ) -> None:
+        messages.send(
+            (
+                "best",
+                score,
+                source,
+                {
+                    job_id: candidate.candidate_id
+                    for job_id, candidate in selected.items()
+                },
+                completed_candidates,
+            )
+        )
+
+    evaluator = OnlineEvoxEvaluator(
+        problems,
+        capacities,
+        feedback,
+        on_best=publish_best,
+        on_progress=lambda count: messages.send(("progress", count)),
+    )
+    try:
+        run_evox_discovery(
+            evaluator.evaluate,
+            output_dir,
+            model=model,
+            iterations=iterations,
+            initial_program=initial_program,
+            api_base=api_base,
+            system_prompt=system_prompt,
+            tick_number=tick_number,
+            time_budget_seconds=search_seconds,
+            usage_callback=lambda usage: messages.send(("usage", usage)),
+        )
+        messages.send(("completed", evaluator.completed_candidates))
+    except EvoxDeadlineExceeded:
+        messages.send(("timeout", evaluator.completed_candidates))
+    except BaseException as error:
+        messages.send(("error", repr(error), evaluator.completed_candidates))
+    finally:
+        messages.close()
+
+
+def _consume_worker_message(
+    message: tuple[object, ...],
+    best: tuple[float, str, dict[str, str]] | None,
+    llm_usage: list[LlmUsage],
+    client: OnlineSkyDiscoverEvoxClient,
+) -> tuple[float, str, dict[str, str]] | None:
+    """Retain one worker's usage and latest fully validated best result."""
+    kind = message[0]
+    if kind == "best":
+        score, source, selected_ids, completed = message[1:]
+        if (
+            isinstance(score, (int, float))
+            and isinstance(source, str)
+            and isinstance(selected_ids, dict)
+            and isinstance(completed, int)
+        ):
+            client.completed_candidates = max(client.completed_candidates, completed)
+            candidate = (float(score), source, selected_ids)
+            if best is None or candidate[0] > best[0]:
+                return candidate
+    elif kind == "usage" and isinstance(message[1], LlmUsage):
+        llm_usage.append(message[1])
+    elif kind == "completed" and isinstance(message[1], int):
+        client.worker_completed = True
+        client.completed_candidates = max(client.completed_candidates, message[1])
+    elif kind == "progress" and isinstance(message[1], int):
+        client.completed_candidates = max(client.completed_candidates, message[1])
+    elif kind == "timeout":
+        client.timed_out = True
+        if isinstance(message[1], int):
+            client.completed_candidates = max(client.completed_candidates, message[1])
+    elif kind == "error":
+        client.error = str(message[1])
+        if isinstance(message[2], int):
+            client.completed_candidates = max(client.completed_candidates, message[2])
+    return best
+
+
+def _selected_candidates(
+    problems: Sequence[PlacementProblem],
+    selected_ids: Mapping[str, str],
+) -> dict[str, PlacementCandidate]:
+    """Resolve worker-selected IDs without executing generated source again."""
+    problem_by_id = {problem.job_id: problem for problem in problems}
+    selected = {}
+    for job_id, candidate_id in selected_ids.items():
+        try:
+            problem = problem_by_id[job_id]
+            selected[job_id] = next(
+                candidate
+                for candidate in problem.candidates
+                if candidate.candidate_id == candidate_id
+            )
+        except (KeyError, StopIteration) as error:
+            raise ValueError("EvoX worker returned an invalid candidate") from error
+    return selected
 
 
 class EvoxPlannerDriver:
@@ -506,7 +743,9 @@ class EvoxPlannerDriver:
         output_dir = Path(
             _optional_text(settings.get("output_dir")) or "outputs/evox-online"
         )
-        api_base = _optional_text(settings.get("api_base"))
+        api_base = _optional_text(
+            settings.get("api_base") or os.getenv("OPENAI_BASE_URL")
+        )
         postgres = postgres_client or PostgresClient()
         driver = cls(
             user_id=user_id,
@@ -536,16 +775,29 @@ class EvoxPlannerDriver:
         """Read one Store snapshot, persist one plan, and return its identity."""
         self._tick_number = tick_number
         self._llm_usage: tuple[LlmUsage, ...] = ()
+        self._deadline = monotonic() + _EVOX_TICK_BUDGET_SECONDS
+        selection_source = None
+        timed_out = False
+        completed_candidates = 0
         try:
             self.feedback.observe(logical_time)
             self._feedback_window_start = logical_time
             snapshot = self._read_store_snapshot()
             actions = self._build_actions(snapshot)
+            selection_source = getattr(self.client, "selection_source", None)
+            timed_out = bool(getattr(self.client, "timed_out", False))
+            completed_candidates = int(
+                getattr(self.client, "completed_candidates", 0)
+            )
+            client_error = getattr(self.client, "error", None)
             if not actions:
                 return PlannerResult(
                     tick_number=tick_number,
                     plans=(),
                     llm_usage=self._llm_usage,
+                    timed_out=timed_out,
+                    selection_source=selection_source,
+                    completed_candidates=completed_candidates,
                 )
 
             from tandemn_system_data.models import Plan
@@ -557,6 +809,7 @@ class EvoxPlannerDriver:
                     self.method_name,
                     tick_number,
                     actions,
+                    selection_source,
                 ),
                 actions=actions,
             )
@@ -565,7 +818,16 @@ class EvoxPlannerDriver:
             return PlannerResult(
                 tick_number=tick_number,
                 plans=(CreatedPlan(plan_id=plan.plan_id),),
+                degraded=(
+                    timed_out
+                    or selection_source == "safe_fallback"
+                    or client_error is not None
+                ),
+                error=client_error,
                 llm_usage=self._llm_usage,
+                timed_out=timed_out,
+                selection_source=selection_source,
+                completed_candidates=completed_candidates,
             )
         except Exception as error:
             return PlannerResult(
@@ -573,6 +835,10 @@ class EvoxPlannerDriver:
                 plans=(),
                 degraded=True,
                 error=repr(error),
+                llm_usage=self._llm_usage,
+                timed_out=timed_out,
+                selection_source=selection_source,
+                completed_candidates=completed_candidates,
             )
 
     def _read_store_snapshot(self) -> StoreSnapshot:
@@ -666,6 +932,11 @@ class EvoxPlannerDriver:
     ) -> Mapping[str, PlacementCandidate]:
         """Evolve and validate the current tick's placement response."""
         if not problems:
+            if isinstance(self.client, OnlineSkyDiscoverEvoxClient):
+                self.client.timed_out = False
+                self.client.selection_source = "no_active_jobs"
+                self.client.completed_candidates = 0
+                self.client.error = None
             return {}
         feedback = self._candidate_feedback(problems)
         selected, self._llm_usage = self.client.select(
@@ -673,6 +944,7 @@ class EvoxPlannerDriver:
             problems,
             capacities,
             feedback,
+            deadline=getattr(self, "_deadline", None),
         )
         return selected
 
@@ -1376,6 +1648,19 @@ def load_policy_source(source: str) -> EvoxPolicy:
     return cast(EvoxPolicy, policy)
 
 
+class _UsageBuffer(list[LlmUsage]):
+    """Retain completed calls locally and publish them before worker termination."""
+
+    def __init__(self, callback: Callable[[LlmUsage], None] | None) -> None:
+        super().__init__()
+        self.callback = callback
+
+    def append(self, usage: LlmUsage) -> None:
+        super().append(usage)
+        if self.callback is not None:
+            self.callback(usage)
+
+
 def run_evox_discovery(
     evaluator: str | Path | Callable[[str], Mapping[str, object]],
     output_dir: str | Path,
@@ -1387,6 +1672,7 @@ def run_evox_discovery(
     system_prompt: str = EVOX_SYSTEM_PROMPT,
     tick_number: int = 0,
     time_budget_seconds: float = 300,
+    usage_callback: Callable[[LlmUsage], None] | None = None,
 ) -> object:
     """Run SkyDiscover EvoX online for one frozen control-tick snapshot."""
     if iterations < 1:
@@ -1404,6 +1690,8 @@ def run_evox_discovery(
     model_config: dict[str, object] = {"name": model, "weight": 1.0}
     if api_base is not None:
         model_config["api_base"] = api_base
+    if api_key := os.getenv("OPENAI_API_KEY"):
+        model_config["api_key"] = api_key
     config = Config.from_dict(
         {
             "language": "python",
@@ -1430,7 +1718,7 @@ def run_evox_discovery(
             },
         }
     )
-    llm_usage: list[LlmUsage] = []
+    llm_usage: list[LlmUsage] = _UsageBuffer(usage_callback)
 
     class TrackedOpenAILLM(OpenAILLM):
         def __init__(self, model_config: object) -> None:
@@ -1652,6 +1940,7 @@ def _tick_rationale(
     method_name: str,
     tick_number: int,
     actions: Sequence[Mapping[str, object]],
+    selection_source: str | None = None,
 ) -> str:
     """Summarize one EvoX action set deterministically."""
     counts = {"place": 0, "defer": 0, "keep": 0, "preempt": 0}
@@ -1659,11 +1948,14 @@ def _tick_rationale(
         action_type = action.get("type")
         if action_type in counts:
             counts[action_type] += 1
-    return (
+    rationale = (
         f"{method_name} cluster simulator tick {tick_number}: "
         f"place={counts['place']}, defer={counts['defer']}, "
         f"keep={counts['keep']}, preempt={counts['preempt']}."
     )
+    if selection_source is not None:
+        rationale += f" selection_source={selection_source}."
+    return rationale
 
 
 def _positive_number(value: object) -> float | None:

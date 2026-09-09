@@ -118,6 +118,9 @@ class PlannerResult:
     degraded: bool = False
     error: str | None = None
     llm_usage: tuple[LlmUsage, ...] = ()
+    timed_out: bool = False
+    selection_source: str | None = None
+    completed_candidates: int = 0
 
 
 @dataclass(frozen=True)

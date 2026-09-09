@@ -8,8 +8,10 @@ import sys
 import tempfile
 import time
 import unittest
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -74,6 +76,46 @@ class EvoxPlannerDriverTest(unittest.TestCase):
             ],
         )
 
+    def test_timeout_persists_one_safe_fallback_plan(self) -> None:
+        """Persist keep/defer when EvoX reaches its deadline without a winner."""
+        plans = []
+        client = FallbackClient()
+        driver = object.__new__(EvoxPlannerDriver)
+        driver.user_id = "user"
+        driver.benchmark_name = "test"
+        driver.benchmark_job_ids = {}
+        driver._job_is_batch = {}
+        driver.backend = "fallback"
+        driver.config_policy = load_config_policy()
+        driver.client = client
+        driver.plan_store = SimpleNamespace(create=plans.append)
+        driver.feedback = SimpleNamespace(
+            observe=lambda _logical_time: None,
+            has_pending_batch=lambda _job_id: False,
+            for_fingerprint=lambda _placement: None,
+            record=lambda **_kwargs: None,
+        )
+        driver._read_store_snapshot = lambda: StoreSnapshot(
+            _resources(),
+            ({"job_id": "running"},),
+            (_store_job(),),
+            (),
+            (),
+            _catalogs(),
+        )
+
+        result = driver.create_plans(3, datetime(2026, 1, 1, tzinfo=UTC))
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(
+            [action.type for action in plans[0].actions],
+            ["keep", "defer"],
+        )
+        self.assertEqual(len(result.plans), 1)
+        self.assertTrue(result.timed_out)
+        self.assertTrue(result.degraded)
+        self.assertEqual(result.selection_source, "safe_fallback")
+
     def test_snapshot_reads_each_relevant_model_catalog_once(self) -> None:
         """Freeze waiting and running model catalogs once for one tick."""
         requested = []
@@ -125,17 +167,24 @@ class EvoxPlannerDriverTest(unittest.TestCase):
             output_dir=Path("outputs/test-evox"),
         )
 
-        with patch(
-            "evox.run_evox_discovery",
-            return_value=SimpleNamespace(
-                best_solution=EVOX_INITIAL_PROGRAM,
-                llm_usage=(LlmUsage(5, 60, 15, "model-used"),),
-            ),
-        ) as discovery:
+        def discovery_side_effect(evaluator, *_args, **_kwargs):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "program.py"
+                path.write_text(EVOX_INITIAL_PROGRAM, encoding="utf-8")
+                evaluator(path)
+            return SimpleNamespace(best_solution=EVOX_INITIAL_PROGRAM)
+
+        with (
+            patch("evox.multiprocessing.get_context", return_value=SyncContext()),
+            patch(
+                "evox.run_evox_discovery",
+                side_effect=discovery_side_effect,
+            ) as discovery,
+        ):
             selected, usage = client.select(5, problems, capacities)
 
         self.assertEqual(selected, {"waiting": candidate})
-        self.assertEqual(usage, (LlmUsage(5, 60, 15, "model-used"),))
+        self.assertEqual(usage, ())
         self.assertEqual(discovery.call_args.kwargs["tick_number"], 5)
         self.assertEqual(discovery.call_args.kwargs["iterations"], 2)
         self.assertEqual(
@@ -537,14 +586,18 @@ class EvoxPlannerDriverTest(unittest.TestCase):
             output_dir=Path("outputs/test-evox"),
         )
 
-        with patch(
-            "evox.run_evox_discovery",
-            side_effect=EvoxDeadlineExceeded((usage,)),
+        with (
+            patch("evox.multiprocessing.get_context", return_value=SyncContext()),
+            patch(
+                "evox.run_evox_discovery",
+                side_effect=EvoxDeadlineExceeded((usage,)),
+            ),
         ):
             selected, actual_usage = client.select(5, problems, capacities)
 
         self.assertEqual(selected, {})
-        self.assertEqual(actual_usage, (usage,))
+        self.assertEqual(actual_usage, ())
+        self.assertTrue(client.timed_out)
         self.assertEqual(client.initial_program, EVOX_INITIAL_PROGRAM)
         self.assertEqual(client.tick_number, 1)
 
@@ -568,11 +621,41 @@ class EvoxPlannerDriverTest(unittest.TestCase):
                 evaluator(path)
             raise EvoxDeadlineExceeded
 
-        with patch("evox.run_evox_discovery", side_effect=timeout_after_valid):
+        with (
+            patch("evox.multiprocessing.get_context", return_value=SyncContext()),
+            patch("evox.run_evox_discovery", side_effect=timeout_after_valid),
+        ):
             selected, _ = client.select(5, problems, capacities)
 
         self.assertEqual(selected, {"waiting": problems[0].candidates[0]})
         self.assertEqual(client.initial_program, evolved)
+        self.assertTrue(client.timed_out)
+        self.assertEqual(client.selection_source, "evox_best_so_far")
+
+    def test_hard_deadline_uses_published_best_and_kills_worker(self) -> None:
+        """Return a validated candidate without waiting for a hung child."""
+        policy = load_config_policy()
+        resources = _resources()
+        problems = build_placement_problems(
+            (_store_job(),), resources, "test", {}, policy, _catalogs()
+        )
+        capacities = capacity_limits(resources)
+        context = HangingContext(problems[0].candidates[0])
+        client = OnlineSkyDiscoverEvoxClient("model-test", 8, Path("outputs/test"))
+
+        with patch("evox.multiprocessing.get_context", return_value=context):
+            selected, _ = client.select(
+                0,
+                problems,
+                capacities,
+                deadline=monotonic() + 20.01,
+            )
+
+        self.assertEqual(selected, {"waiting": problems[0].candidates[0]})
+        self.assertTrue(context.process.killed)
+        self.assertTrue(client.timed_out)
+        self.assertEqual(client.selection_source, "evox_best_so_far")
+        self.assertIsNone(client.error)
 
     def test_discovery_enforces_total_and_request_timeouts(self) -> None:
         """Interrupt discovery at its wall budget while allowing long LLM calls."""
@@ -619,6 +702,118 @@ def _driver(policy) -> EvoxPlannerDriver:
     driver.backend = "fallback"
     driver.config_policy = policy
     return driver
+
+
+class FallbackClient:
+    timed_out = True
+    selection_source = "safe_fallback"
+    completed_candidates = 0
+    error = None
+
+    def select(self, *_args, **_kwargs):
+        return {}, ()
+
+
+class PipeState:
+    """Hold process messages for synchronous worker tests."""
+
+    def __init__(self) -> None:
+        self.messages: deque[tuple[object, ...]] = deque()
+
+
+class ReceivePipe:
+    def __init__(self, state: PipeState) -> None:
+        self.state = state
+
+    def poll(self, _timeout: float = 0.0) -> bool:
+        return bool(self.state.messages)
+
+    def recv(self) -> tuple[object, ...]:
+        return self.state.messages.popleft()
+
+    def close(self) -> None:
+        pass
+
+
+class SendPipe:
+    def __init__(self, state: PipeState) -> None:
+        self.state = state
+
+    def send(self, message: tuple[object, ...]) -> None:
+        self.state.messages.append(message)
+
+    def close(self) -> None:
+        pass
+
+
+class SyncProcess:
+    """Run one process target inline for protocol tests."""
+
+    def __init__(self, target, args) -> None:
+        self.target = target
+        self.args = args
+
+    def start(self) -> None:
+        self.target(*self.args)
+
+    def is_alive(self) -> bool:
+        return False
+
+    def join(self) -> None:
+        pass
+
+    def kill(self) -> None:
+        pass
+
+
+class SyncContext:
+    def Pipe(self, *, duplex: bool) -> tuple[ReceivePipe, SendPipe]:
+        assert not duplex
+        state = PipeState()
+        return ReceivePipe(state), SendPipe(state)
+
+    def Process(self, target, args) -> SyncProcess:
+        return SyncProcess(target, args)
+
+
+class HangingProcess:
+    """Publish one best candidate and remain alive until killed."""
+
+    def __init__(self, args, candidate) -> None:
+        self.messages = args[3]
+        self.candidate = candidate
+        self.killed = False
+
+    def start(self) -> None:
+        self.messages.send(
+            (
+                "best",
+                1.0,
+                EVOX_INITIAL_PROGRAM,
+                {self.candidate.job_id: self.candidate.candidate_id},
+                1,
+            )
+        )
+
+    def is_alive(self) -> bool:
+        return not self.killed
+
+    def join(self) -> None:
+        pass
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class HangingContext(SyncContext):
+    def __init__(self, candidate) -> None:
+        self.candidate = candidate
+        self.process = None
+
+    def Process(self, target, args) -> HangingProcess:
+        del target
+        self.process = HangingProcess(args, self.candidate)
+        return self.process
 
 
 def _store_job(job_id: str = "waiting") -> dict[str, object]:

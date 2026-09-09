@@ -101,6 +101,9 @@ def planner_finished(
     planned_job_ids: tuple[str, ...],
     timed_out: bool,
     error: str | None,
+    degraded: bool = False,
+    selection_source: str | None = None,
+    completed_candidates: int = 0,
 ) -> dict[str, object]:
     """Build one planner outcome event for a completed control tick."""
     suggested_action_count = 0
@@ -122,6 +125,9 @@ def planner_finished(
         "plans": plans,
         "planned_job_ids": list(planned_job_ids),
         "timed_out": timed_out,
+        "degraded": degraded,
+        "selection_source": selection_source,
+        "completed_candidates": completed_candidates,
         "suggested_action_count": suggested_action_count,
         "error": error,
     }

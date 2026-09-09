@@ -613,6 +613,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
                 tick,
                 (CreatedPlan("plan-1"),),
                 llm_usage=(LlmUsage(tick, 100, 20, "model-used"),),
+                timed_out=tick == 0,
             )
         )
         simulator.clock = LogicalClock(datetime(2026, 1, 1, tzinfo=UTC))
@@ -722,6 +723,7 @@ class RunnerDataPlaneTest(unittest.TestCase):
             events[2]["planner_finished_at"], "2026-08-19T21:30:15+00:00"
         )
         self.assertEqual(events[2]["decision_time_ms"], 14_000)
+        self.assertTrue(events[2]["timed_out"])
         self.assertEqual(events[2]["plans"][0]["actions"][0]["job_id"], "job-a")
         self.assertEqual(events[2]["planned_job_ids"], ["job-a"])
         self.assertEqual(events[3]["kind"], "job_admitted")

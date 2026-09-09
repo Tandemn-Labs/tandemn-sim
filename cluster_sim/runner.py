@@ -353,8 +353,11 @@ class ClusterSimulator:
                     decision_time_ms,
                     plans,
                     planned_job_ids,
-                    False,
+                    result.timed_out,
                     result.error,
+                    result.degraded,
+                    result.selection_source,
+                    result.completed_candidates,
                 ),
             )
         apply_pending_plans(self.user_id, self.postgres)
