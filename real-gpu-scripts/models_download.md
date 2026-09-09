@@ -81,13 +81,13 @@ Make sure you have `nfs-common` package
 sudo mkdir -p /mnt/filestore-llm
 sudo mount -t nfs \
   -o rw,vers=3,tcp,hard,timeo=600,retrans=3,rsize=524288,wsize=524288,resvport,async,nconnect=2 \
-  10.128.15.236:/llm /mnt/filestore-llm
+  10.202.0.42:/llm /mnt/filestore-llm
 
 # Short validations
-findmnt -T /mnt/filestore-llm
-df -hT /mnt/filestore-llm
-sudo ls -la /mnt/filestore-llm
-test_file=$(sudo mktemp /mnt/filestore-llm/.filestore-write-test.XXXXXX)
+findmnt -T /mnt/filestore-llm2
+df -hT /mnt/filestore-llm2
+sudo ls -la /mnt/filestore-llm2
+test_file=$(sudo mktemp /mnt/filestore-llm2/.filestore-write-test.XXXXXX)
 sudo rm "$test_file"
 ```
 
