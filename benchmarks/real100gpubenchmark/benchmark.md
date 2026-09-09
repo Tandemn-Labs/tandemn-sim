@@ -47,7 +47,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
   "drain_minutes": 30,
   "workloads": [
     {
-      "job_id": "job-benchmark_timing_3hr-85-1",
+      "job_id": "job-benchmark_timing_3hr-85-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-calibration-probe.yaml",
       "kind": "batch",
       "driver": "external_mock_data",
@@ -92,7 +92,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_3hr-15-1",
+      "job_id": "job-benchmark_timing_3hr-15-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-mini-nightly-eval.yaml",
       "kind": "batch",
       "driver": "external_mock_data",
@@ -137,7 +137,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_3hr-15-3",
+      "job_id": "job-benchmark_timing_3hr-15-3-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-phi4-quant-probe.yaml",
       "kind": "batch",
       "driver": "external_mock_data",
@@ -182,7 +182,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_3hr-0-5",
+      "job_id": "job-benchmark_timing_3hr-0-5-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-qwen3-235b-large.yaml",
       "kind": "batch",
       "driver": "external_mock_data",
@@ -227,7 +227,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_3hr-125-2",
+      "job_id": "job-benchmark_timing_3hr-125-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-sales-reports.yaml",
       "kind": "batch",
       "driver": "external_mock_data",
@@ -272,7 +272,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-0-1",
+      "job_id": "job-benchmark_timing_real100gpu-0-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/chat-free-core.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -310,7 +310,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-0-2",
+      "job_id": "job-benchmark_timing_real100gpu-0-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/chat-premium-core.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -348,7 +348,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-0-3",
+      "job_id": "job-benchmark_timing_real100gpu-0-3-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/code-autocomplete-core.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -386,7 +386,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-32-2",
+      "job_id": "job-benchmark_timing_real100gpu-32-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/enterprise-chat.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -424,7 +424,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-67-2",
+      "job_id": "job-benchmark_timing_real100gpu-67-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/frontier-reasoning-glm.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -462,7 +462,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-135-1",
+      "job_id": "job-benchmark_timing_real100gpu-135-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/legal-finance-review.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -500,7 +500,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-125-1",
+      "job_id": "job-benchmark_timing_real100gpu-125-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/meeting-summary.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -538,7 +538,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-67-3",
+      "job_id": "job-benchmark_timing_real100gpu-67-3-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/moe-routing-qwen3.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -576,7 +576,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-7-1",
+      "job_id": "job-benchmark_timing_real100gpu-7-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/phi4-long-context-chat.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -614,7 +614,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-49-1",
+      "job_id": "job-benchmark_timing_real100gpu-49-1-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/product-launch-chat.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -652,7 +652,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-49-2",
+      "job_id": "job-benchmark_timing_real100gpu-49-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/product-launch-moderation.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -690,7 +690,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-0-7",
+      "job_id": "job-benchmark_timing_real100gpu-0-7-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/qwen3-235b-online-bursty.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -728,7 +728,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-0-6",
+      "job_id": "job-benchmark_timing_real100gpu-0-6-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/qwen3-235b-online-core.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -766,7 +766,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-100-2",
+      "job_id": "job-benchmark_timing_real100gpu-100-2-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/safety-p0-live.yaml",
       "kind": "online",
       "driver": "aiperf",
@@ -804,7 +804,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_real100gpu-7-3",
+      "job_id": "job-benchmark_timing_real100gpu-7-3-parallel",
       "file": "benchmarks/real100gpubenchmark/jobs/support-assistant.yaml",
       "kind": "online",
       "driver": "aiperf",

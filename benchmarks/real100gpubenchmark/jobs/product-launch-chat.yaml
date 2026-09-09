@@ -1,12 +1,12 @@
 schema_version: benchmark-job/v1
-job_id: job-benchmark_timing_real100gpu-49-1
+job_id: job-benchmark_timing_real100gpu-49-1-parallel
 schedule:
   enabled: true
   kind: online
   driver: aiperf
   service_id: service-benchmark_timing_real100gpu-49-1
   operation: additive_stream
-  parent_job_id: job-benchmark_timing_real100gpu-0-1
+  parent_job_id: job-benchmark_timing_real100gpu-0-1-parallel
   start_at_offset_minutes: 49
   stop_at_offset_minutes: 109
 spec:
