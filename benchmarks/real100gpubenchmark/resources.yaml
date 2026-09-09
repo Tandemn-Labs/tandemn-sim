@@ -1,50 +1,51 @@
 schema_version: "resource-map/v1"
 
+# Mirror of the real100gpubenchmark entry in ../resource_map_benchmarking.jsonl.
 resources:
-  - id: a100-pcie-40gb
+  - id: a2-highgpu-8g
     accelerator: A100-40GB
     total_devices: 16
     devices_per_node: 8
     memory_gb: 40
     aic_system: null
     unsupported_reason: AIC 0.11 only defines the A100-80GB PCIe system
-    markets: {reserved: 16, on_demand: 0}
+    markets: {reserved: 16}
     regions: {us-central1: 16}
 
-  - id: rtx-pro-6000-blackwell-96gb-4gpu
+  - id: g4-standard-192
     accelerator: RTXPRO6000
     total_devices: 8
     devices_per_node: 4
     memory_gb: 96
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
-    markets: {reserved: 8, on_demand: 0}
+    markets: {reserved: 8}
     regions: {us-central1: 8}
 
-  - id: h100-sxm-80gb
+  - id: a3-highgpu-8g
     accelerator: H100
-    total_devices: 32
+    total_devices: 24
     devices_per_node: 8
     memory_gb: 80
     aic_system: h100_sxm
-    markets: {reserved: 32, on_demand: 0}
-    regions: {europe-west2: 32}
+    markets: {reserved: 24}
+    regions: {europe-west2: 24}
 
-  - id: a100-sxm-80gb
+  - id: a2-ultragpu-8g
     accelerator: A100-80GB
     total_devices: 16
     devices_per_node: 8
     memory_gb: 80
     aic_system: a100_sxm
-    markets: {reserved: 16, on_demand: 0}
+    markets: {reserved: 16}
     regions: {us-east5: 16}
 
-  - id: rtx-pro-6000-blackwell-96gb-8gpu
+  - id: g4-standard-384
     accelerator: RTXPRO6000
-    total_devices: 48
+    total_devices: 40
     devices_per_node: 8
     memory_gb: 96
     aic_system: null
     unsupported_reason: AIC 0.11 has no RTXPRO6000 system model
-    markets: {reserved: 48, on_demand: 0}
-    regions: {us-east5: 48}
+    markets: {reserved: 40}
+    regions: {us-east5: 40}

@@ -7,8 +7,8 @@ schedule:
   service_id: service-benchmark_timing_real100gpu-49-1
   operation: additive_stream
   parent_job_id: job-benchmark_timing_real100gpu-0-1
-  start_at_offset_minutes: 49
-  stop_at_offset_minutes: 109
+  start_at_offset_minutes: 75
+  stop_at_offset_minutes: 135
 spec:
   user_id: tenant_chat_free
   optimization_goal: latency

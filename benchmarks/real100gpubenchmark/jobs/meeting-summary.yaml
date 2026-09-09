@@ -6,8 +6,8 @@ schedule:
   driver: aiperf
   service_id: service-benchmark_timing_real100gpu-125-1
   operation: base_service
-  start_at_offset_minutes: 125
-  stop_at_offset_minutes: 170
+  start_at_offset_minutes: 135
+  stop_at_offset_minutes: 180
 spec:
   user_id: tenant_meeting_summary
   optimization_goal: latency

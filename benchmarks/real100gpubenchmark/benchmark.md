@@ -2,24 +2,24 @@
 
 Benchmark ID: `real100gpubenchmark`
 
-This executable real-hardware benchmark runs a 180-minute workload followed by a 30-minute drain on an exact 120-GPU, 16-node reserved fleet. No on-demand capacity is available.
+This executable real-hardware benchmark runs a 180-minute workload followed by a 30-minute drain on an exact 104-GPU, 14-node reserved fleet. No on-demand capacity is available. The `real100gpubenchmark` entry in `benchmarks/resource_map_benchmarking.jsonl` is the canonical fleet definition.
 
 ## Fleet
 
-| Accelerator | Node shape | Nodes | Region | Total GPUs |
-|---|---:|---:|---|---:|
-| `A100-40GB` | 8 x 40 GB | 2 | `us-central1` | 16 |
-| `RTXPRO6000` | 4 x 96 GB | 2 | `us-central1` | 8 |
-| `H100` | 8 x 80 GB | 4 | `europe-west2` | 32 |
-| `A100-80GB` | 8 x 80 GB | 2 | `us-east5` | 16 |
-| `RTXPRO6000` | 8 x 96 GB | 6 | `us-east5` | 48 |
-| **Total** |  | **16** |  | **120** |
+| GCP machine pool | Accelerator | GPUs/node | GPU memory | Nodes | Region | Interconnect | Price/node-hour | Total GPUs |
+|---|---|---:|---:|---:|---|---|---:|---:|
+| `a2-highgpu-8g` | `A100-40GB` | 8 | 40 GB | 2 | `us-central1` | PCIe | $5.91582 | 16 |
+| `g4-standard-192` | `RTXPRO6000` | 4 | 96 GB | 2 | `us-central1` | PCIe | $13.61712 | 8 |
+| `a3-highgpu-8g` | `H100` | 8 | 80 GB | 3 | `europe-west2` | NVSwitch | $55.04 | 24 |
+| `a2-ultragpu-8g` | `A100-80GB` | 8 | 80 GB | 2 | `us-east5` | NVLink | $8.79698 | 16 |
+| `g4-standard-384` | `RTXPRO6000` | 8 | 96 GB | 5 | `us-east5` | PCIe | $29.95766 | 40 |
+| **Total** |  |  |  | **14** |  |  |  | **104** |
 
 ## Workload
 
-The manifest contains 15 online jobs and 5 batch campaigns. The selected batch campaigns are Mini Nightly Eval, Phi-4 Quant Probe, Calibration Probe, Sales Reports, and the Qwen3-235B large batch, totaling 126,200 records across 306 shards. Their definitions are unchanged from `simulation_3h` except for the added Qwen3-235B campaign; the external pipeline owns batch dataset staging.
+The manifest contains 15 online jobs and 4 batch campaigns. The selected batch campaigns are Mini Nightly Eval, Phi-4 Quant Probe, Calibration Probe, and Sales Reports, totaling 26,200 records across 106 shards. Their definitions are unchanged from `simulation_3h`; the external pipeline owns batch dataset staging.
 
-Existing online traffic retains the original `simulation_3h` phase rates and concurrency caps with fixed rates; the two Qwen3-235B workloads add 40 concurrent streams. The maximum simultaneous online declaration is 432 streams at T+100. Product Launch Chat and Product Launch Moderation run through T+109, while Legal/Finance Review runs from T+135 through T+180, so cold starts do not consume their measurement windows. Online traffic stops at minute 180 and in-flight work drains through the hard stop at minute 180.
+Existing online traffic retains the original `simulation_3h` phase rates and concurrency caps with fixed rates, but arrivals are staggered across the run to reduce early placement pressure. The two Qwen3-235B online workloads add 40 concurrent streams. The maximum simultaneous online declaration is 432 streams at T+120. Product Launch Chat and Product Launch Moderation run from T+75 through T+135, while Legal/Finance Review runs from T+145 through T+180, so cold starts do not consume their measurement windows. Online traffic stops at minute 180 and in-flight work drains through the hard stop at minute 180.
 
 ## Model Allowlist
 
@@ -32,11 +32,11 @@ Existing online traffic retains the original `simulation_3h` phase rates and con
 - `zai-org/GLM-4.5-Air`
 - `QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ`
 
-`QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ` is used by the Qwen3-235B batch and online campaigns.
+`QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ` is used by the Qwen3-235B online campaigns.
 
 ## Difficulty Contract
 
-All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 arrival waves create persistent code, product-launch, high-priority safety, and Qwen3 placement pressure. Completion of every batch campaign before its deadline is not guaranteed. Sales Reports intentionally creates late deadline pressure. A plan-only preflight is required before a live run to confirm admission contention on the exact fleet.
+All 104 GPUs remain schedulable. The T+15, T+30, T+45, T+60, T+75, T+90, T+105, T+120, T+135, and T+145 arrival waves create a gradual ramp into code, product-launch, high-priority safety, and Qwen3 placement pressure. Completion of every batch campaign before its deadline is not guaranteed. Sales Reports intentionally creates late deadline pressure. A plan-only preflight is required before a live run to confirm admission contention on the exact fleet.
 
 ## Workload Overview (JSON)
 
@@ -182,51 +182,6 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       }
     },
     {
-      "job_id": "job-benchmark_timing_3hr-0-5",
-      "file": "benchmarks/real100gpubenchmark/jobs/batch-qwen3-235b-large.yaml",
-      "kind": "batch",
-      "driver": "external_mock_data",
-      "user_id": "tenant_large_model_eval",
-      "model": "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ",
-      "precision": "fp16",
-      "start_at_offset_minutes": 0,
-      "priority_class": "LOW",
-      "input_tokens": {
-        "avg": 4000,
-        "min": 1000,
-        "max": 12000
-      },
-      "output_tokens": {
-        "avg": 1200,
-        "min": 300,
-        "max": 4000
-      },
-      "deadline_at_offset_minutes": 180,
-      "hard_stop_at_offset_minutes": 180,
-      "campaign_id": "campaign-benchmark_timing_3hr-0-5",
-      "completion_policy": "stop_when_complete",
-      "request_pattern": {
-        "type": "Constant",
-        "peak_to_mean_ratio": 1
-      },
-      "workload_features": {
-        "peak_to_mean_ratio": 1,
-        "prefix_concentration": 0,
-        "multi_turn_ratio": 0,
-        "shared_prefix_length_avg": 1,
-        "session_affinity": false,
-        "total_token_budget": 520000000
-      },
-      "dataset": {
-        "id": "qwen3_235b_large_batch",
-        "record_count": 100000,
-        "seed": 209,
-        "shard_count": 200,
-        "requests_per_shard": 500,
-        "max_in_flight_requests": 64
-      }
-    },
-    {
       "job_id": "job-benchmark_timing_3hr-125-2",
       "file": "benchmarks/real100gpubenchmark/jobs/batch-sales-reports.yaml",
       "kind": "batch",
@@ -317,7 +272,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_chat_premium",
       "model": "meta-llama/Llama-3.3-70B-Instruct",
       "precision": "bf16",
-      "start_at_offset_minutes": 0,
+      "start_at_offset_minutes": 30,
       "priority_class": "HIGH",
       "input_tokens": {
         "avg": 1200,
@@ -338,7 +293,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 0.183,
         "concurrency": 24,
-        "duration_seconds": 10800
+        "duration_seconds": 9000
       },
       "workload_features": {
         "prefix_concentration": 0.5,
@@ -355,7 +310,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_code_autocomplete",
       "model": "Qwen/Qwen2.5-Coder-32B-Instruct",
       "precision": "fp16",
-      "start_at_offset_minutes": 0,
+      "start_at_offset_minutes": 15,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1800,
@@ -376,7 +331,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 0.974,
         "concurrency": 32,
-        "duration_seconds": 10800
+        "duration_seconds": 9900
       },
       "workload_features": {
         "prefix_concentration": 0,
@@ -393,7 +348,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_enterprise_chat",
       "model": "microsoft/phi-4",
       "precision": "fp16",
-      "start_at_offset_minutes": 32,
+      "start_at_offset_minutes": 45,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1500,
@@ -405,7 +360,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 105,
         "max": 1200
       },
-      "stop_at_offset_minutes": 152,
+      "stop_at_offset_minutes": 165,
       "operation": "base_service",
       "request_pattern": {
         "type": "Diurnal",
@@ -431,7 +386,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_frontier_glm",
       "model": "zai-org/GLM-4.5-Air",
       "precision": "bf16",
-      "start_at_offset_minutes": 67,
+      "start_at_offset_minutes": 105,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1800,
@@ -443,7 +398,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 625,
         "max": 9000
       },
-      "stop_at_offset_minutes": 142,
+      "stop_at_offset_minutes": 180,
       "operation": "base_service",
       "request_pattern": {
         "type": "Bursty",
@@ -469,7 +424,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_legal_finance",
       "model": "meta-llama/Llama-3.3-70B-Instruct",
       "precision": "bf16",
-      "start_at_offset_minutes": 135,
+      "start_at_offset_minutes": 145,
       "priority_class": "HIGH",
       "input_tokens": {
         "avg": 3000,
@@ -490,7 +445,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 1.431,
         "concurrency": 16,
-        "duration_seconds": 2700
+        "duration_seconds": 2100
       },
       "workload_features": {
         "prefix_concentration": 0,
@@ -507,7 +462,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_meeting_summary",
       "model": "Qwen/Qwen3-Next-80B-A3B-Thinking",
       "precision": "bf16",
-      "start_at_offset_minutes": 125,
+      "start_at_offset_minutes": 135,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 24000,
@@ -519,7 +474,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 300,
         "max": 4000
       },
-      "stop_at_offset_minutes": 170,
+      "stop_at_offset_minutes": 180,
       "operation": "base_service",
       "request_pattern": {
         "type": "Bursty",
@@ -545,7 +500,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_moe_routing",
       "model": "Qwen/Qwen3-Next-80B-A3B-Thinking",
       "precision": "bf16",
-      "start_at_offset_minutes": 67,
+      "start_at_offset_minutes": 105,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1200,
@@ -557,7 +512,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 225,
         "max": 3000
       },
-      "stop_at_offset_minutes": 142,
+      "stop_at_offset_minutes": 180,
       "operation": "base_service",
       "request_pattern": {
         "type": "Bursty",
@@ -583,7 +538,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_phi4_long_context_chat",
       "model": "microsoft/phi-4",
       "precision": "fp16",
-      "start_at_offset_minutes": 7,
+      "start_at_offset_minutes": 45,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 9000,
@@ -604,7 +559,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "poisson",
         "smoothness": null,
         "concurrency": 24,
-        "duration_seconds": 10380
+        "duration_seconds": 8100
       },
       "workload_features": {
         "prefix_concentration": 0.5,
@@ -621,7 +576,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_chat_free",
       "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
       "precision": "fp16",
-      "start_at_offset_minutes": 49,
+      "start_at_offset_minutes": 75,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 850,
@@ -633,7 +588,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 70,
         "max": 650
       },
-      "stop_at_offset_minutes": 109,
+      "stop_at_offset_minutes": 135,
       "operation": "additive_stream",
       "request_pattern": {
         "type": "Bursty",
@@ -659,7 +614,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_safety_moderation",
       "model": "meta-llama/Llama-3.2-1B-Instruct",
       "precision": "fp16",
-      "start_at_offset_minutes": 49,
+      "start_at_offset_minutes": 75,
       "priority_class": "HIGH",
       "input_tokens": {
         "avg": 320,
@@ -671,7 +626,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 2,
         "max": 32
       },
-      "stop_at_offset_minutes": 109,
+      "stop_at_offset_minutes": 135,
       "operation": "base_service",
       "request_pattern": {
         "type": "Bursty",
@@ -697,7 +652,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_qwen3_online_bursty",
       "model": "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ",
       "precision": "fp16",
-      "start_at_offset_minutes": 0,
+      "start_at_offset_minutes": 90,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1800,
@@ -718,7 +673,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 0.25,
         "concurrency": 16,
-        "duration_seconds": 10800
+        "duration_seconds": 5400
       },
       "workload_features": {
         "prefix_concentration": 0.1,
@@ -735,7 +690,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_qwen3_online_core",
       "model": "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ",
       "precision": "fp16",
-      "start_at_offset_minutes": 0,
+      "start_at_offset_minutes": 75,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 3200,
@@ -756,7 +711,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 0.5,
         "concurrency": 24,
-        "duration_seconds": 10800
+        "duration_seconds": 6300
       },
       "workload_features": {
         "prefix_concentration": 0.35,
@@ -773,7 +728,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_safety_reasoner",
       "model": "microsoft/phi-4",
       "precision": "fp16",
-      "start_at_offset_minutes": 100,
+      "start_at_offset_minutes": 120,
       "priority_class": "HIGH",
       "input_tokens": {
         "avg": 900,
@@ -785,7 +740,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "min": 40,
         "max": 600
       },
-      "stop_at_offset_minutes": 150,
+      "stop_at_offset_minutes": 170,
       "operation": "base_service",
       "request_pattern": {
         "type": "Bursty",
@@ -811,7 +766,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
       "user_id": "tenant_support",
       "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
       "precision": "fp16",
-      "start_at_offset_minutes": 7,
+      "start_at_offset_minutes": 60,
       "priority_class": "STANDARD",
       "input_tokens": {
         "avg": 1400,
@@ -832,7 +787,7 @@ All 120 GPUs remain schedulable. The T+32, T+49, T+67, T+100, T+125, and T+135 a
         "phase_type": "gamma",
         "smoothness": 0.388,
         "concurrency": 64,
-        "duration_seconds": 10380
+        "duration_seconds": 7200
       },
       "workload_features": {
         "prefix_concentration": 0.5,

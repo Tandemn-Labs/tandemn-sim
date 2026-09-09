@@ -6,8 +6,8 @@ schedule:
   driver: aiperf
   service_id: service-benchmark_timing_real100gpu-67-3
   operation: base_service
-  start_at_offset_minutes: 67
-  stop_at_offset_minutes: 142
+  start_at_offset_minutes: 105
+  stop_at_offset_minutes: 180
 spec:
   user_id: tenant_moe_routing
   optimization_goal: latency

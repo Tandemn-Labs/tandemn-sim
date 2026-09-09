@@ -6,7 +6,7 @@ schedule:
   driver: aiperf
   service_id: service-benchmark_timing_real100gpu-135-1
   operation: base_service
-  start_at_offset_minutes: 135
+  start_at_offset_minutes: 145
   stop_at_offset_minutes: 180
 spec:
   user_id: tenant_legal_finance
@@ -53,7 +53,7 @@ workload:
     phases:
     - name: profiling
       type: gamma
-      duration: 2700
+      duration: 2100
       rate: 0.34
       smoothness: 1.431
       concurrency: 16

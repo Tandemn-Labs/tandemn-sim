@@ -97,7 +97,6 @@ VRAM_REQUIREMENTS_GIB: dict[str, dict[str, float]] = {
         "job-benchmark_timing_real_12hr_192gpu-690-2": 251.363,
     },
     "real100gpubenchmark": {
-        "job-benchmark_timing_3hr-0-5": 1872.222,
         "job-benchmark_timing_3hr-15-1": 741.768,
         "job-benchmark_timing_3hr-15-3": 613.243,
         "job-benchmark_timing_3hr-85-1": 570.518,
