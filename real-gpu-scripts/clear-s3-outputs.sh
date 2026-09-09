@@ -9,9 +9,13 @@ command -v aws >/dev/null || {
     exit 1
 }
 
-aws --region "$region" s3 ls "s3://${bucket}/" | while read -r marker prefix; do
-    job_id=${prefix%/}
-    [[ "$marker" == PRE && "$job_id" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]] || continue
+for job_id in \
+    0000000000RTXPS9V40NCX15CX \
+    0000000000QWKV2ZQMRNCDQA0W \
+    0000000000GZQ6NH3WGDFAB181 \
+    0000000000SYGGTBGSR1ANV835 \
+    00000000000K6RCQQS2D8XK2YA
+do
     key_count=$(aws --region "$region" s3api list-objects-v2 \
         --bucket "$bucket" \
         --prefix "${job_id}/output/" \
