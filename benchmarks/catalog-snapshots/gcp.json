@@ -2,7 +2,7 @@
   "catalog_version": "gcp-accelerated-hardware-v1",
   "cloud": "gcp",
   "generated_at": "2026-09-06T01:07:16.425729Z",
-  "instance_type_count": 499,
+  "instance_type_count": 500,
   "region_count": 32,
   "regions": [
     {
@@ -22105,6 +22105,104 @@
             "spot"
           ],
           "vcpu": 96
+        },
+        {
+          "accelerators": [
+            {
+              "canonical_gpu_name": "H100",
+              "count": 8,
+              "cuda_compute_capability": "9.0",
+              "gpu_bandwidth_gbps": 3350,
+              "gpu_generation": "Hopper",
+              "gpu_tflops_fp16": 989.5,
+              "gpu_watts": 700,
+              "k8s_resource_name": "nvidia.com/gpu",
+              "kind": "gpu",
+              "memory_mib_each": 81920,
+              "memory_mib_total": 655360,
+              "name": "H100",
+              "nvlink_bandwidth_gbps": 900,
+              "pcie_bandwidth_gbps": 128,
+              "pricing": {
+                "on_demand_usd_per_gpu_hour": null,
+                "source": "observed-gke-cluster-and-benchmark-resource-map",
+                "spot_usd_per_gpu_hour": null
+              },
+              "vendor": "nvidia"
+            }
+          ],
+          "architecture": [
+            "X86_64"
+          ],
+          "bare_metal": false,
+          "cloud": "gcp",
+          "cpu_manufacturer": null,
+          "family": "a3",
+          "instance_type": "a3-highgpu-8g",
+          "launch_capabilities": {
+            "efa_network_interface_profile": null,
+            "instance_store_policy": null,
+            "k8s_accelerator_resource_names": [
+              "nvidia.com/gpu"
+            ],
+            "recommended_efa_interfaces": 0,
+            "requires_amd_device_plugin": false,
+            "requires_neuron_device_plugin": false,
+            "requires_nvidia_device_plugin": true,
+            "supports_efa_nodeclass": false,
+            "supports_karpenter": false
+          },
+          "memory_mib": 1916928,
+          "network": {
+            "efa_max_interfaces": 0,
+            "efa_supported": false,
+            "ena_srd_supported": false,
+            "ena_support": null,
+            "encryption_in_transit_supported": false,
+            "max_enis": null,
+            "max_network_cards": 5,
+            "network_cards": [
+              {
+                "peak_bandwidth_gbps": 1000
+              }
+            ],
+            "network_performance": 1000
+          },
+          "offerings": [
+            {
+              "capacity_reservation_usd_per_hour": 55.04,
+              "location_type": "availability-zone",
+              "on_demand_usd_per_hour": null,
+              "region": "europe-west2",
+              "source": "observed-gke-cluster-and-benchmark-resource-map",
+              "spot_usd_per_hour": null,
+              "zone_id": "europe-west2-c",
+              "zone_name": "europe-west2-c"
+            }
+          ],
+          "pricing": {
+            "capacity_reservation_usd_per_hour": 55.04,
+            "on_demand_usd_per_hour": null
+          },
+          "storage": {
+            "ebs_bandwidth_mbps": null,
+            "ebs_iops": null,
+            "ebs_nvme_support": null,
+            "ebs_optimized_support": null,
+            "ebs_throughput_mbps": null,
+            "instance_storage_disks": [],
+            "instance_storage_encryption_support": null,
+            "instance_storage_nvme_support": null,
+            "instance_storage_supported": true,
+            "instance_storage_total_gb": 6000,
+            "local_ssd_max_gib": 6000
+          },
+          "supported_boot_modes": [],
+          "supported_usage_classes": [
+            "on-demand",
+            "spot"
+          ],
+          "vcpu": 208
         }
       ],
       "region": "europe-west2"

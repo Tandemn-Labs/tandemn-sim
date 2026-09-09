@@ -8,7 +8,7 @@ schedule:
   start_at_offset_minutes: 15
   deadline_at_offset_minutes: 120
   completion_policy: stop_when_complete
-  hard_stop_at_offset_minutes: 210
+  hard_stop_at_offset_minutes: 181
 spec:
   user_id: tenant_koi_profiling
   optimization_goal: throughput

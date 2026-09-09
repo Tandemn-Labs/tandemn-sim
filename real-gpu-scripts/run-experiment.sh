@@ -205,7 +205,7 @@ start real_scenario \
   --source-cloud gcp \
   --source-region us-central1 \
   --source-zone us-central1-a \
-  --ready-timeout 1200
+  --ready-timeout 2400
 real_scenario_pid=$started_pid
 
 

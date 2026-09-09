@@ -93,7 +93,7 @@ The executable real-hardware benchmark added for the 96-GPU fleet is:
 
 | Benchmark | Duration | Pools | GPUs |
 | --- | ---: | ---: | ---: |
-| `real100gpubenchmark` | 3 hours plus 30-minute drain | 8 | 96 |
+| `real100gpubenchmark` | 3 hours plus one-minute drain | 8 | 96 |
 
 All baseline users must receive the same resource map as the simulation they
 run. The following values must always match:

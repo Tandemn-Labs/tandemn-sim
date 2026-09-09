@@ -9,10 +9,10 @@ benchmark:
   jobs: jobs
   resources: resources.yaml
   clock: time.time
-  drain_minutes: 30
+  drain_minutes: 1
   poll_interval_seconds: 60
   shutdown_grace_seconds: 60
   reoptimization_tick_minutes: 5
   dispatch_at_exact_offset: false
   online_stop_action: stop_new_requests_and_drain_in_flight
-  hard_stop_at_offset_minutes: 210
+  hard_stop_at_offset_minutes: 181

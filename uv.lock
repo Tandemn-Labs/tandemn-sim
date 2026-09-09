@@ -704,10 +704,10 @@ dependencies = [
     { name = "openai" },
     { name = "openevolve" },
     { name = "ortools" },
+    { name = "plotext" },
     { name = "pyyaml" },
     { name = "skydiscover" },
     { name = "sqlalchemy" },
-    { name = "tandemn-orca" },
     { name = "tandemn-store" },
 ]
 
@@ -730,10 +730,10 @@ requires-dist = [
     { name = "openai", specifier = ">=3.3" },
     { name = "openevolve", specifier = ">=0.2.27" },
     { name = "ortools", specifier = ">=9.14" },
+    { name = "plotext", specifier = ">=5.3.2,<6" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "skydiscover", git = "https://github.com/skydiscover-ai/skydiscover.git?rev=59643ef8e7aa9ae071e86028d9ba56849fad0d80" },
     { name = "sqlalchemy", specifier = ">=2.0" },
-    { name = "tandemn-orca", editable = "../tandemn-system" },
     { name = "tandemn-store", editable = "../tandemn-store" },
 ]
 
@@ -796,15 +796,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
-]
-
-[[package]]
-name = "durationpy"
-version = "0.10"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9d/a4/e44218c2b394e31a6dd0d6b095c4e1f32d0be54c2a4b250032d717647bab/durationpy-0.10.tar.gz", hash = "sha256:1fa6893409a6e739c9c72334fc65cca1f355dbdd93405d30f726deb5bde42fba", size = 3335, upload-time = "2025-05-17T13:52:37.26Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/0d/9feae160378a3553fa9a339b0e9c1a048e147a4127210e286ef18b730f03/durationpy-0.10-py3-none-any.whl", hash = "sha256:3b41e1b601234296b4fb368338fdcd3e13e0b4fb5b67345948f4f2bf9868b286", size = 3922, upload-time = "2025-05-17T13:52:36.463Z" },
 ]
 
 [[package]]
@@ -1351,27 +1342,6 @@ wheels = [
 ]
 
 [[package]]
-name = "kubernetes"
-version = "36.0.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "certifi" },
-    { name = "durationpy" },
-    { name = "python-dateutil" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "requests-oauthlib" },
-    { name = "six" },
-    { name = "urllib3" },
-    { name = "websocket-client" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/57/b07b96353f902aa1bdbe00e878e3a12a137977d03a962479785576aa8ec9/kubernetes-36.0.3.tar.gz", hash = "sha256:36993ed25ce59b789c9341473a228fcf268504a2fec7c2b2b1531d73072e5ce7", size = 2337528, upload-time = "2026-07-13T20:38:12.128Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/30/a96d47df739689ac0001ade0afefc16e3b477fc2fb426b568515fdc8afce/kubernetes-36.0.3-py2.py3-none-any.whl", hash = "sha256:8fde9241c4b298e6374a069dcf728359b4e72c2fb29489a975ba4e1c047cf10f", size = 4618066, upload-time = "2026-07-13T20:38:10.172Z" },
-]
-
-[[package]]
 name = "librt"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1790,15 +1760,6 @@ wheels = [
 ]
 
 [[package]]
-name = "oauthlib"
-version = "3.3.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
-]
-
-[[package]]
 name = "openai"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2028,15 +1989,11 @@ wheels = [
 
 [[package]]
 name = "plotext"
-version = "6.0.0"
+version = "5.3.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/73/81/93a8a6c9c7688899c35c16a6d0a747dee7857ffe1fcf603b138f616f1086/plotext-6.0.0.tar.gz", hash = "sha256:d49792c1881a15dfe27a23b1d659660d3962f9e1afaac21250eccc3bbd47581f", size = 289912, upload-time = "2026-08-23T15:45:47.33Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/d7/f75f397af966fe252d0d34ffd3cae765317fce2134f925f95e7d6725d1ce/plotext-5.3.2.tar.gz", hash = "sha256:52d1e932e67c177bf357a3f0fe6ce14d1a96f7f7d5679d7b455b929df517068e", size = 61967, upload-time = "2024-09-24T15:13:37.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/78/c565103f800ad09a947ea90697666b9099800de905dce505970c01bd4239/plotext-6.0.0-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:bbaf4f91fc8d703b98ad8046c52312024cf307b7bf29ebb881eac5c6ea32787e", size = 420862, upload-time = "2026-08-23T15:45:39.42Z" },
-    { url = "https://files.pythonhosted.org/packages/13/0e/ff18580eec2799165b748b2e68436c6bc653e6b4ef7bd9e07a6ae66583cf/plotext-6.0.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:ce03f64e15bc7fceebccf0a8c40135ad99c01e56802716bbaee2e99eac51b042", size = 415665, upload-time = "2026-08-23T15:45:41.024Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/f9/d27e62d84d27bb1d05c788f502d2dbb5da5be930fd4ceb2f5b588d4b38b1/plotext-6.0.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6fa6824488bbce3b683b66837ac7699d21120a31014ef9c5b925bc8463897dd2", size = 472858, upload-time = "2026-08-23T15:45:42.601Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/85/c61807162ce76bee225e2b0ab05da0cc5994d444d8ee24313d6332d5702b/plotext-6.0.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:02cfe2c299da65303a1c2c1a17559b53838d84c2e0f92259f40fa282cf3c9013", size = 473957, upload-time = "2026-08-23T15:45:44.353Z" },
-    { url = "https://files.pythonhosted.org/packages/c1/41/05380b157d8fd3d1d16d34285a8cfc02167cfe893dd7b67120e3db963ce9/plotext-6.0.0-py3-none-win_amd64.whl", hash = "sha256:2742ae506c405118c2ece8b45fe01482b13586f769b682e5c98f32793cfb6427", size = 1009480, upload-time = "2026-08-23T15:45:46.012Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/1e/12fe7c40cd2099a1f454518754ed229b01beaf3bbb343127f0cc13ce6c22/plotext-5.3.2-py3-none-any.whl", hash = "sha256:394362349c1ddbf319548cfac17ca65e6d5dfc03200c40dfdc0503b3e95a2283", size = 64047, upload-time = "2024-09-24T15:13:36.296Z" },
 ]
 
 [[package]]
@@ -2628,19 +2585,6 @@ wheels = [
 ]
 
 [[package]]
-name = "requests-oauthlib"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "oauthlib" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
-]
-
-[[package]]
 name = "retrying"
 version = "1.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3103,30 +3047,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tandemn-orca"
-version = "0.1.0"
-source = { editable = "../tandemn-system" }
-dependencies = [
-    { name = "boto3" },
-    { name = "kubernetes" },
-    { name = "pydantic" },
-    { name = "tandemn-store" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.34" },
-    { name = "kubernetes", specifier = ">=30" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "tandemn-store", editable = "../tandemn-store" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "tandemn-store"
 version = "0.1.0"
 source = { editable = "../tandemn-store" }
@@ -3482,15 +3402,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/34/74/c6428f875774288bec1396f5bfcbc2d925700a4dad61727fd5f2b12f249d/wcwidth-0.8.2.tar.gz", hash = "sha256:91fbef97204b96a3d4d421609b80340b760cf33e26da123ff243d76b1fda8dda", size = 1466253, upload-time = "2026-06-29T18:11:11.601Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/42/3e5985a0a7e57de470b320c6d6a1a67c844f6737a587f3d44dd13d1819e7/wcwidth-0.8.2-py3-none-any.whl", hash = "sha256:d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85", size = 323166, upload-time = "2026-06-29T18:11:09.888Z" },
-]
-
-[[package]]
-name = "websocket-client"
-version = "1.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]
