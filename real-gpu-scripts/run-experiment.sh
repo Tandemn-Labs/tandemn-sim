@@ -139,16 +139,12 @@ git -C /home/user/tandemn-koi pull
 #################### DO ALL THE CLEANUP ####################
 
 ### Reset chunk-manager database
+mapfile -t batch_job_chunks < "$SCRIPT_DIR/batch.txt"
 bash /home/user/tandemn-sim/real-gpu-scripts/reset-chunk-manager-db.sh /home/user/tandemn-sim/real-gpu-scripts/batch.txt
+
 /home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
     --target "$CHUNK_MANAGER_TARGET" \
-    0000000000ZQQJMH7ZKN9JB75S:4 \
-    00000000000000000000000001:50 \
-    0000000000YMCGDM4D6DB1V4P7:36 \
-    0000000000QFWH7DWW55AGZ3SA:18 \
-    0000000000WHY0QMKREDBFD0A5:12 \
-    00000000001VKHT2N8XXD0F22N:40 \
-    0000000000WP6X0BJH6HFZ9AZV:200 \
+    "${batch_job_chunks[@]}"
 
 
 ### Reset tandemn-store and get user id

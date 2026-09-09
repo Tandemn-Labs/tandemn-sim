@@ -9,12 +9,8 @@ command -v aws >/dev/null || {
     exit 1
 }
 
-for job_id in \
-    0000000000WHY0QMKREDBFD0A5 \
-    0000000000YMCGDM4D6DB1V4P7 \
-    0000000000QFWH7DWW55AGZ3SA \
-    00000000001VKHT2N8XXD0F22N
-do
+while IFS=: read -r job_id _; do
+    [[ -n "$job_id" ]] || continue
     key_count=$(aws --region "$region" s3api list-objects-v2 \
         --bucket "$bucket" \
         --prefix "${job_id}/output/" \
@@ -25,4 +21,4 @@ do
     # S3 has no real directories; deleting this recursive prefix removes output/ itself.
     aws --region "$region" s3 rm "s3://${bucket}/${job_id}/output/" --recursive
     printf '%s\n' "$job_id"
-done
+done < "$(dirname -- "${BASH_SOURCE[0]}")/batch.txt"
