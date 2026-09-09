@@ -139,7 +139,7 @@ git -C /home/user/tandemn-koi pull
 #################### DO ALL THE CLEANUP ####################
 
 ### Reset chunk-manager database
-/home/user/chunk-manager/reset-chunk-manager-db.sh
+bash /home/user/tandemn-sim/real-gpu-scripts/reset-chunk-manager-db.sh /home/user/tandemn-sim/real-gpu-scripts/batch.txt
 /home/user/chunk-manager/.venv/bin/python ~/chunk-manager/examples/python/add_job_and_chunks.py \
     --target "$CHUNK_MANAGER_TARGET" \
     0000000000ZQQJMH7ZKN9JB75S:4 \
