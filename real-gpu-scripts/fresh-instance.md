@@ -1,15 +1,18 @@
 # Run on fresh instance
 
+Setup instructions to setup a new machine for serving as the Tandemn experiments' control plane
+
 ## Auxiliary stuff
 
 ### Ubuntu repos
+```bash
 sudo apt update
 sudo apt upgrade
 sudo apt install neovim tree git login cmake \
   postgresql unzip file man-db python3.14-venv \
   nfs-common util-linux-extra python3-pip
+```
 
-alias psql="PGPASSWORD=tandemn psql -h localhost -p 55432 -U tandemn"
 
 ### uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -20,14 +23,44 @@ source $HOME/.local/bin/env
 curl -fsSL https://awscli.amazonaws.com/v2/install.sh | bash
 
 
-### Set up `kubectl` access
+### kubectl
+curl -LO https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl
 
 
+### gcloud 
+`gcloud` should already be installed. Just use it.
+
+```bash
+# This will show a link that you need to open in a browser to login
+gcloud auth login
+```
+
+#### Install the `gke-cloud-auth-plugin` plugin
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates gnupg curl
+
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+  | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+
+sudo apt-get update
+sudo apt-get install -y google-cloud-cli-gke-gcloud-auth-plugin
+```
+
+#### Set up the many K8s contexts
+For each cluster, run this:
+```bash
+gcloud container clusters get-credentials "${CLUSTER_NAME}" \
+  --project="tandemn" \
+  --region="${REGION}"
+```
 
 ### k9s
 curl -fL -o k9s_linux_amd64.deb \
   https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_linux_amd64.deb
-
 sudo apt install ./k9s_linux_amd64.deb
 
 
@@ -39,6 +72,7 @@ uvx hf auth login
 ### opencode
 curl -fsSL https://opencode.ai/install | bash 
 
+
 ### AIPerf
 uv tool install aiperf==0.11.0
 
@@ -48,6 +82,8 @@ curl -fL -o go1.27.1.linux-amd64.tar.gz \
     https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
 rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.27.1.linux-amd64.tar.gz
+
+#### Add this to the .bashrc
 export PATH=$PATH:/usr/local/go/bin
 export PATH="$PATH:$(go env GOPATH)/bin"
 
@@ -136,3 +172,8 @@ cd tandemn-router
 
 #### Build go executable
 go build -o tandemn-router ./cmd/tandemn-router
+
+
+### tandemn-koi
+cd
+git clone git@github.com:Tandemn-Labs/tandemn-koi.git

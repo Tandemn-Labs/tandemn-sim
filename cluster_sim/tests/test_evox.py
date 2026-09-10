@@ -36,6 +36,7 @@ from evox import (
 from llm_usage import LlmUsage
 from outcome_feedback import fingerprint
 from policy import load_config_policy
+from tandemn_system_data.ids import is_valid_id
 
 
 class EvoxPlannerDriverTest(unittest.TestCase):
@@ -321,7 +322,8 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         )
 
         self.assertEqual([action["type"] for action in actions], ["swap", "place"])
-        self.assertEqual(actions[0]["ladder"][0]["rank_id"], "rank-active")
+        replacement_rank_id = actions[0]["ladder"][0]["rank_id"]
+        self.assertEqual(replacement_rank_id, "rank-active")
         self.assertEqual(actions[0]["ladder"][0]["n_replicas"], 2)
 
     def test_null_running_decision_keeps_active_rank(self) -> None:
@@ -360,6 +362,40 @@ class EvoxPlannerDriverTest(unittest.TestCase):
         )
 
         self.assertEqual(actions, [{"job_id": "running", "type": "keep"}])
+
+    def test_parallelism_change_uses_fresh_rank_id(self) -> None:
+        """Rotate identity when the selected per-replica topology changes."""
+        policy = load_config_policy()
+        resources = _resources()
+        running = {
+            **_running_store_job(),
+            "active_ranks": [_active_rank("rank-active", count=2)],
+        }
+        driver = _driver(policy)
+        driver._select_placements = lambda problems, _capacities: {
+            problem.job_id: next(
+                candidate
+                for candidate in problem.candidates
+                if candidate.tp == 1 and candidate.pp == 1 and candidate.dp == 1
+            )
+            for problem in problems
+        }
+
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=resources,
+                running_jobs=(running,),
+                waiting_jobs=(),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        self.assertEqual(actions[0]["type"], "swap")
+        replacement_rank_id = actions[0]["ladder"][0]["rank_id"]
+        self.assertTrue(is_valid_id(replacement_rank_id, "rank"))
+        self.assertNotEqual(replacement_rank_id, "rank-active")
 
     def test_noop_and_multi_rank_running_jobs_are_not_swap_candidates(self) -> None:
         """Refuse no-op and non-single-rank changes while retaining running jobs."""
@@ -855,16 +891,26 @@ def _active_rank(
     """Return one active rank shape for a running-job lifecycle fixture."""
     return {
         "rank_id": rank_id,
+        "role": "aggregate",
         "n_replicas": replicas,
         "shape_json": {
+            **_launch_config(),
             "env": ["reserved", "aws", "us-east", "use1-az1", "H100"],
             "instance_type": None,
             "gpu_type": "H100",
+            "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+            "precision": "fp16",
             "gpu_count": count,
             "count": count,
             "tp": 1,
             "pp": count,
             "dp": replicas,
+            "ep": 1,
+            "sp": 1,
+            "cp": 1,
+            "rank_traffic_share": 1.0,
+            "target_p99_ttft_ms": 700.0,
+            "target_p99_tpot_ms": 55.0,
         },
     }
 

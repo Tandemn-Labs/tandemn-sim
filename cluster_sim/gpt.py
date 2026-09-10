@@ -22,7 +22,7 @@ from policy import (
     ConfigPolicy,
     load_config_policy,
 )
-from rank_ids import active_rank_id, rank_id
+from rank_ids import active_rank_id, rank_id, reconcile_swap_rank_ids
 
 SYSTEM_PROMPT = """You are the placement planner for an AI inference cluster.
 
@@ -40,10 +40,11 @@ For a place or swap decision, select an exact environment key and, when pools ar
 present, an instance_type from that environment. Supply tp, pp, and dp as
 placement choices in configuration. Copy every remaining configuration field
 exactly from the model_catalog entry matching the job's model and selected target
-GPU. A swap replaces the running job's full ladder while retaining its active
-rank ID; choose keep rather than a physically unchanged swap. Capacity is a
-global constraint across every placement decision, including swaps: process jobs
-in order and subtract each replacement before sizing the next one. When a pool's
+GPU. Keep an exactly unchanged running deployment. A swap that changes only DP
+retains the active rank ID; every other swap receives a fresh rank identity.
+Capacity is a global constraint across every placement decision, including
+swaps: process jobs in order and subtract each replacement before sizing the
+next one. When a pool's
 allocation_kind/allocation_unit is absent or is not "gpu",
 a replica consumes one whole instance (gpus_per_instance GPUs), even when TP * PP
 is smaller.
@@ -652,18 +653,7 @@ def _swap_action(
     rank_name = active_rank_id(running)
     if rank_name is None:
         raise ValueError("running job has no sole active rank for swap")
-    if _is_noop_swap(running, rank_name, placement, resources):
-        _placement_ladder(
-            scenario_job,
-            known,
-            placement,
-            resources,
-            catalogs,
-            rank_name,
-            reserve=False,
-        )
-        return {"job_id": job_id, "type": "keep"}
-    return _placement_action(
+    proposed = _placement_action(
         job_id,
         scenario_job,
         known,
@@ -672,6 +662,21 @@ def _swap_action(
         catalogs,
         action_type="swap",
         rank_name=rank_name,
+        reserve=False,
+    )
+    if reconcile_swap_rank_ids(running, proposed):
+        return {"job_id": job_id, "type": "keep"}
+    replacement_rank = proposed["ladder"][0]
+    return _placement_action(
+        job_id,
+        scenario_job,
+        known,
+        placement,
+        resources,
+        catalogs,
+        action_type="swap",
+        rank_name=str(replacement_rank["rank_id"]),
+        reserve=True,
     )
 
 
@@ -685,6 +690,7 @@ def _placement_action(
     *,
     action_type: str,
     rank_name: str,
+    reserve: bool = True,
 ) -> dict[str, object]:
     """Build one full place or swap action from a validated placement."""
     target_tps = _number(known.get("target_tps"))
@@ -704,6 +710,7 @@ def _placement_action(
                 resources,
                 catalogs,
                 rank_name,
+                reserve=reserve,
             )
         ],
     }
@@ -808,54 +815,6 @@ def _placement_ladder(
         "n_replicas": replicas,
         "mechanism_id": known.get("mechanism_id"),
     }
-
-
-def _is_noop_swap(
-    running: Mapping[str, object],
-    rank_name: str,
-    placement: GptPlacement,
-    resources: Mapping[str, Mapping[str, Any]],
-) -> bool:
-    """Return whether a swap would retain the active rank's physical shape."""
-    if placement.environment is None or placement.configuration is None:
-        return False
-    environment = resources.get(placement.environment)
-    if environment is None:
-        return False
-    active_rank = _active_rank(running, rank_name)
-    shape = _mapping(active_rank.get("shape_json"), "active rank shape")
-    pool = _select_pool(environment, placement.instance_type)
-    instance_type = None
-    if pool is not None:
-        instance_type = _text(pool.get("instance_type"), "instance_type")
-    config = placement.configuration
-    try:
-        tp = _positive_int(config.get("tp"), "tp")
-        pp = _positive_int(config.get("pp"), "pp")
-        dp = _positive_int(config.get("dp"), "dp")
-    except ValueError:
-        return False
-    return (
-        _env_key(shape.get("env") or shape.get("pool_id")) == placement.environment
-        and shape.get("instance_type") == instance_type
-        and shape.get("gpu_count", shape.get("count"))
-        == tp * pp
-        and shape.get("tp") == tp
-        and shape.get("pp") == pp
-        and active_rank.get("n_replicas") == dp
-    )
-
-
-def _active_rank(running: Mapping[str, object], rank_name: str) -> dict[str, Any]:
-    """Return the active rank selected by the shared identity helper."""
-    values = running.get("active_ranks")
-    if not isinstance(values, list):
-        raise ValueError("running job active_ranks must be a list")
-    for value in values:
-        rank = _mapping(value, "active rank")
-        if rank.get("rank_id") == rank_name:
-            return rank
-    raise ValueError(f"running job has no active rank {rank_name!r}")
 
 
 def _materialize_launch_config(

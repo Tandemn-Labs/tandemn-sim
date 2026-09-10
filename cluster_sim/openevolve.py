@@ -24,7 +24,7 @@ from policy import (
     ConfigPolicy,
     load_config_policy,
 )
-from rank_ids import active_rank_id, rank_id
+from rank_ids import active_rank_id, rank_id, reconcile_swap_rank_ids
 from vram import _HARDWARE_MEMORY_GIB, VRAM_REQUIREMENTS_GIB, _canonical_hardware
 
 _PRIORITY_LEVELS = {
@@ -558,16 +558,26 @@ class OpenEvolvePlannerDriver:
                 placement is None
                 or placement.decision == "keep"
                 or rank_name is None
-                or _is_noop_swap(
-                    running,
-                    placement,
-                    resources,
-                )
             ):
                 actions.append({"job_id": job_id, "type": "keep"})
                 continue
             if placement.decision != "swap":
                 raise ValueError("running jobs require keep or swap decisions")
+            proposed = _place_action(
+                job_id,
+                running,
+                self.jobs[job_id],
+                placement,
+                resources,
+                snapshot.model_catalogs,
+                action_type="swap",
+                rank_name=rank_name,
+                reserve=False,
+            )
+            if reconcile_swap_rank_ids(running, proposed):
+                actions.append({"job_id": job_id, "type": "keep"})
+                continue
+            replacement_rank = proposed["ladder"][0]
             actions.append(
                 _place_action(
                     job_id,
@@ -577,7 +587,7 @@ class OpenEvolvePlannerDriver:
                     resources,
                     snapshot.model_catalogs,
                     action_type="swap",
-                    existing_rank_id=rank_name,
+                    rank_name=str(replacement_rank["rank_id"]),
                 )
             )
         for waiting in snapshot.waiting_jobs:
@@ -793,13 +803,15 @@ def _place_action(
     resources: dict[str, dict[str, Any]],
     catalogs: Mapping[str, Mapping[str, Any]],
     action_type: str = "place",
-    existing_rank_id: str | None = None,
+    rank_name: str | None = None,
+    *,
+    reserve: bool = True,
 ) -> dict[str, object]:
     """Combine deterministic job fields with one place or swap decision."""
     if action_type not in {"place", "swap"}:
         raise ValueError("OpenEvolve action type must be place or swap")
-    if action_type == "swap" and existing_rank_id is None:
-        raise ValueError("OpenEvolve swaps require the active rank ID")
+    if action_type == "swap" and rank_name is None:
+        raise ValueError("OpenEvolve swaps require a rank ID")
     known = _known_job_fields(store_job, scenario_job)
     target_tps = _number(known.get("target_tps"))
     return {
@@ -817,7 +829,8 @@ def _place_action(
                 placement,
                 resources,
                 catalogs,
-                existing_rank_id,
+                rank_name,
+                reserve=reserve,
             )
         ],
     }
@@ -829,7 +842,9 @@ def _placement_ladder(
     placement: OpenEvolvePlacement,
     resources: dict[str, dict[str, Any]],
     catalogs: Mapping[str, Mapping[str, Any]],
-    existing_rank_id: str | None = None,
+    rank_name: str | None = None,
+    *,
+    reserve: bool = True,
 ) -> dict[str, object]:
     """Validate one placement and reserve its Store resource footprint."""
     if placement.environment is None or placement.configuration is None:
@@ -890,13 +905,14 @@ def _placement_ladder(
     available = int(environment["free"])
     if pool is not None:
         available = min(available, int(pool["free"]))
-    if footprint > available:
-        raise ValueError(
-            f"{placement.environment} has {available} free GPUs, not {footprint}"
-        )
-    environment["free"] = int(environment["free"]) - footprint
-    if pool is not None:
-        pool["free"] = int(pool["free"]) - footprint
+    if reserve:
+        if footprint > available:
+            raise ValueError(
+                f"{placement.environment} has {available} free GPUs, not {footprint}"
+            )
+        environment["free"] = int(environment["free"]) - footprint
+        if pool is not None:
+            pool["free"] = int(pool["free"]) - footprint
 
     rank_config: dict[str, object] = {
         **launch_config,
@@ -914,7 +930,7 @@ def _placement_ladder(
     }
     return {
         "role": known.get("role") or "aggregate",
-        "rank_id": existing_rank_id or rank_id(known),
+        "rank_id": rank_name or rank_id(known),
         "env": placement.environment.split("|"),
         "config": rank_config,
         "n_replicas": dp,
@@ -1064,37 +1080,6 @@ def _active_placement(running_job: Mapping[str, object]) -> dict[str, object]:
             "active rank replicas",
         ),
     }
-
-
-def _is_noop_swap(
-    running_job: Mapping[str, object],
-    placement: OpenEvolvePlacement,
-    resources: Mapping[str, Mapping[str, Any]],
-) -> bool:
-    """Return whether a swap selects the running ladder's same physical shape."""
-    if placement.decision != "swap" or placement.configuration is None:
-        return False
-    active = _active_placement(running_job)
-    config = placement.configuration
-    environment = resources.get(placement.environment)
-    if environment is None:
-        return False
-    pool = _select_pool(environment, placement.instance_type)
-    instance_type = (
-        None
-        if pool is None
-        else _required_text(pool.get("instance_type"), "instance_type")
-    )
-    return (
-        placement.environment == active["environment"]
-        and instance_type == active["instance_type"]
-        and _positive_int(config.get("tp"), "tp")
-        * _positive_int(config.get("pp"), "pp")
-        == active["gpu_count"]
-        and _positive_int(config.get("tp"), "tp") == active["tp"]
-        and _positive_int(config.get("pp"), "pp") == active["pp"]
-        and _positive_int(config.get("dp"), "dp") == active["n_replicas"]
-    )
 
 
 def _model_payload(value: object) -> dict[str, Any]:

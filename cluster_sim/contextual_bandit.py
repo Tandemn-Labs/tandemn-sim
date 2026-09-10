@@ -10,14 +10,14 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from random import Random
 from typing import Any, Protocol
 
 from models import CreatedPlan, PlannerResult, Scenario
 from policy import ConfigPolicy, load_config_policy
-from rank_ids import active_rank_id, rank_id
+from rank_ids import active_rank_id, rank_id, reconcile_swap_rank_ids
 from vram import (
     _HARDWARE_MEMORY_GIB,
     LAUNCH_FIELDS,
@@ -374,13 +374,22 @@ class ContextualBanditPlannerDriver:
                 candidate,
                 snapshot.model_catalogs,
             )
+            if problem.action_type == "swap":
+                if reconcile_swap_rank_ids(problem.store_job, plan):
+                    self._pending.pop(problem.job_id, None)
+                    return None
+                emitted_rank_id = str(plan["ladder"][0]["rank_id"])
+                self._pending[problem.job_id] = replace(
+                    self._pending[problem.job_id],
+                    rank_id=emitted_rank_id,
+                )
             verify_place_plan(
                 plan,
                 candidate,
                 snapshot.model_catalogs,
                 self.config_policy,
                 action_type=problem.action_type,
-                rank_name=problem.rank_id,
+                rank_name=self._pending[problem.job_id].rank_id,
             )
             reserve_vram_placement(
                 candidate.target,
@@ -453,9 +462,10 @@ class ContextualBanditPlannerDriver:
             selected[problem.job_id] = candidate
             known = _known_job_fields(problem.store_job)
             kind = getattr(known.get("kind"), "value", known.get("kind"))
+            planned_rank_id = problem.rank_id or rank_id(known)
             self._pending[problem.job_id] = _PendingObservation(
                 features=features,
-                rank_id=problem.rank_id or rank_id(known),
+                rank_id=planned_rank_id,
                 window_start=self._feedback_start,
                 required_tps=_target_tps(known),
                 is_batch=kind == "batch",
@@ -477,10 +487,7 @@ class ContextualBanditPlannerDriver:
             candidate,
             model_catalogs,
             self.config_policy,
-            rank_name=(
-                getattr(problem, "rank_id", None)
-                or (None if pending is None else pending.rank_id)
-            ),
+            rank_name=(None if pending is None else pending.rank_id),
             action_type=getattr(problem, "action_type", "place"),
         )
 
@@ -626,7 +633,7 @@ def _matches_active_shape(
     candidate: PlacementCandidate,
     active_rank: Mapping[str, Any],
 ) -> bool:
-    """Return whether a candidate would leave the active physical shape unchanged."""
+    """Return whether a candidate leaves the active physical shape unchanged."""
     shape = active_rank.get("shape_json")
     if not isinstance(shape, Mapping):
         return False
@@ -764,7 +771,7 @@ def build_contextual_bandit_plan(
     if action_type not in {"place", "swap"}:
         raise ValueError("contextual bandit action type must be place or swap")
     if action_type == "swap" and rank_name is None:
-        raise ValueError("contextual bandit swaps require the active rank ID")
+        raise ValueError("contextual bandit swaps require a rank ID")
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
     try:
@@ -855,7 +862,7 @@ def verify_place_plan(
     if set(rank) != required_rank_keys:
         raise ValueError("placement ladder rank has incomplete fields")
     if rank_name is not None and rank.get("rank_id") != rank_name:
-        raise ValueError("placement plan does not retain the active rank ID")
+        raise ValueError("placement plan does not use the selected rank ID")
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
     if rank.get("n_replicas") != candidate.dp:

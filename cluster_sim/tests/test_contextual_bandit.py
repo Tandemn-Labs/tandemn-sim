@@ -27,6 +27,7 @@ from contextual_bandit import (
     verify_place_plan,
 )
 from policy import ConfigPolicy, ConfigPolicyRule, load_config_policy
+from tandemn_system_data.ids import is_valid_id
 from vram import ResourceTarget
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
@@ -209,7 +210,7 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         for field, value in _launch_config().items():
             self.assertEqual(config[field], value)
         verify_place_plan(plan, candidate, catalogs, policy)
-        with self.assertRaisesRegex(ValueError, "swaps require the active rank ID"):
+        with self.assertRaisesRegex(ValueError, "swaps require a rank ID"):
             build_contextual_bandit_plan(
                 _store_job("job"),
                 candidate,
@@ -251,8 +252,8 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         self.assertEqual(rank["config"]["count"], 1)
         verify_place_plan(plan, candidate, _catalogs(), policy)
 
-    def test_selected_running_candidate_swaps_with_active_rank_id(self) -> None:
-        """Keep the active rank identity and selected context through a swap."""
+    def test_selected_dp_change_retains_active_rank_id(self) -> None:
+        """Keep rank identity when only the replica count changes."""
         now = datetime(2026, 1, 1, tzinfo=UTC)
         policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1,))})
         running = _running_job("job", "rank-active")
@@ -270,9 +271,10 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
         actions = driver._build_actions(snapshot)
 
         self.assertEqual(actions[0]["type"], "swap")
-        self.assertEqual(actions[0]["ladder"][0]["rank_id"], "rank-active")
+        replacement_rank_id = actions[0]["ladder"][0]["rank_id"]
+        self.assertEqual(replacement_rank_id, "rank-active")
         self.assertEqual(actions[0]["ladder"][0]["n_replicas"], 2)
-        self.assertEqual(driver._pending["job"].rank_id, "rank-active")
+        self.assertEqual(driver._pending["job"].rank_id, replacement_rank_id)
         problem = build_placement_problems(
             (),
             _resources(2),
@@ -281,6 +283,7 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
             policy,
             running_jobs=(running,),
         )[0]
+        self.assertEqual(problem.rank_id, "rank-active")
         candidate = next(
             candidate for candidate in problem.candidates if candidate.dp == 2
         )
@@ -293,6 +296,31 @@ class ContextualBanditPlannerDriverTest(unittest.TestCase):
                 1,
             ),
         )
+
+    def test_parallelism_change_uses_fresh_rank_id(self) -> None:
+        """Rotate identity when the per-replica parallelism changes."""
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        policy = ConfigPolicy({("h100", MODEL_ID): ConfigPolicyRule("bf16", (1, 2))})
+        running = _running_job("job", "rank-active", count=2, tp=2)
+        driver = _planning_driver(policy, now)
+        driver._sample_weight = lambda: (0.0,) * 11
+
+        actions = driver._build_actions(
+            StoreSnapshot(
+                resources=_resources(2),
+                running_jobs=(running,),
+                waiting_jobs=(),
+                paused_jobs=(),
+                finished_jobs=(),
+                model_catalogs=_catalogs(),
+            )
+        )
+
+        replacement_rank_id = actions[0]["ladder"][0]["rank_id"]
+        self.assertEqual(actions[0]["type"], "swap")
+        self.assertTrue(is_valid_id(replacement_rank_id, "rank"))
+        self.assertNotEqual(replacement_rank_id, "rank-active")
+        self.assertEqual(actions[0]["ladder"][0]["config"]["tp"], 1)
 
     def test_unselected_running_candidate_keeps_current_rank(self) -> None:
         """Use keep rather than defer when a running candidate is not selected."""
@@ -463,18 +491,34 @@ def _active_rank(
     dp: int = 1,
 ) -> dict[str, object]:
     """Create one canonical active rank shape for a running Store job."""
+    launch_config = _launch_config()
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        launch_config[field] = "not-selected"
     return {
         "rank_id": rank_id,
+        "role": "aggregate",
         "n_replicas": dp,
         "shape_json": {
+            **launch_config,
             "env": _H100_ENVIRONMENT.split("|"),
             "instance_type": None,
             "gpu_type": "H100",
+            "model_id": MODEL_ID,
+            "precision": "bf16",
             "gpu_count": count,
             "count": count,
             "tp": tp,
             "pp": pp,
             "dp": dp,
+            "ep": 1,
+            "sp": 1,
+            "cp": 1,
+            "rank_traffic_share": 1.0,
         },
     }
 
