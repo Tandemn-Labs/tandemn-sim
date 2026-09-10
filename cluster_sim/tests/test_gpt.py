@@ -30,6 +30,7 @@ from models import OnlineJob, Scenario
 from policy import load_config_policy
 from serving import build_rank_cluster
 from simulation_orca import ladder_to_ranks
+from tandemn_system_data.ids import is_valid_id
 from tandemn_system_data.models import Plan
 
 
@@ -415,8 +416,8 @@ class GptPlannerDriverTest(unittest.TestCase):
         self.assertEqual(rank.shape_json["count"], 2)
         self.assertEqual(rank.n_replicas, 3)
 
-    def test_swap_retains_the_active_rank_id(self) -> None:
-        """Build a full replacement ladder for a changed running job."""
+    def test_swap_uses_a_fresh_replacement_rank_id(self) -> None:
+        """Build a changed running job's replacement with a fresh identity."""
         driver = _driver(("running",))
         environment = "reserved|aws|us-east|use1-az1|H100"
         snapshot = StoreSnapshot(
@@ -454,9 +455,52 @@ class GptPlannerDriverTest(unittest.TestCase):
 
         self.assertEqual(action["type"], "swap")
         self.assertEqual(len(action["ladder"]), 1)
-        self.assertEqual(action["ladder"][0]["rank_id"], _ACTIVE_RANK_ID)
+        replacement_rank_id = action["ladder"][0]["rank_id"]
+        self.assertTrue(is_valid_id(replacement_rank_id, "rank"))
+        self.assertNotEqual(replacement_rank_id, _ACTIVE_RANK_ID)
         self.assertEqual(action["ladder"][0]["config"]["tp"], 2)
         self.assertEqual(action["ladder"][0]["n_replicas"], 1)
+
+    def test_dp_only_swap_retains_the_active_rank_id(self) -> None:
+        """Resize replicas without creating a new deployment identity."""
+        driver = _driver(("running",))
+        environment = "reserved|aws|us-east|use1-az1|H100"
+        snapshot = StoreSnapshot(
+            resources={
+                environment: {
+                    "gpu_type": "H100",
+                    "total": 16,
+                    "free": 8,
+                    "pools": [
+                        {
+                            "allocation_kind": "gpu",
+                            "instance_type": "p5.48xlarge",
+                            "gpus_per_instance": 8,
+                            "total": 16,
+                            "free": 8,
+                        }
+                    ],
+                }
+            },
+            running_jobs=(_running_job("running"),),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+        placement = GptPlacement(
+            lifecycle="running",
+            decision="swap",
+            environment=environment,
+            instance_type="p5.48xlarge",
+            configuration=_configuration(dp=2),
+        )
+
+        action = driver._build_actions(snapshot, (placement,))[0]
+
+        self.assertEqual(action["type"], "swap")
+        self.assertEqual(action["ladder"][0]["rank_id"], _ACTIVE_RANK_ID)
+        self.assertEqual(action["ladder"][0]["n_replicas"], 2)
 
     def test_running_keep_and_waiting_defer_follow_candidate_order(self) -> None:
         """Accept the lifecycle-specific no-op decisions in order."""
@@ -651,16 +695,26 @@ def _running_job(job_id: str = "running") -> dict[str, object]:
         "active_ranks": [
             {
                 "rank_id": _ACTIVE_RANK_ID,
+                "role": "aggregate",
                 "n_replicas": 1,
                 "shape_json": {
+                    **_launch_config(),
                     "env": environment.split("|"),
                     "instance_type": "p5.48xlarge",
                     "gpu_type": "H100",
+                    "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                    "precision": "fp16",
                     "gpu_count": 1,
                     "count": 1,
                     "tp": 1,
                     "pp": 1,
                     "dp": 1,
+                    "ep": 1,
+                    "sp": 1,
+                    "cp": 1,
+                    "rank_traffic_share": 1.0,
+                    "target_p99_ttft_ms": 700.0,
+                    "target_p99_tpot_ms": 55.0,
                 },
             }
         ],

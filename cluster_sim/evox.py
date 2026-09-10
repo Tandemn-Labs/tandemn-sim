@@ -22,7 +22,7 @@ from llm_usage import LlmUsage, OpenAIUsageClient
 from models import BatchJob, CreatedPlan, PlannerResult, Scenario
 from outcome_feedback import OutcomeFeedback, PlacementFingerprint, fingerprint
 from policy import ConfigPolicy, load_config_policy
-from rank_ids import active_rank_id, rank_id
+from rank_ids import active_rank_id, rank_id, reconcile_swap_rank_ids
 from vram import (
     _HARDWARE_MEMORY_GIB,
     MODEL_ARCHITECTURES,
@@ -98,10 +98,11 @@ Return {"placements": [{"job_id": str, "candidate_id": str | null}, ...]} with
 exactly one entry for every input job. A non-null candidate must belong to that
 job. Lifecycle maps the compact protocol to Store actions: a waiting job maps
 candidate/null to place/defer, and a running job maps candidate/null to
-swap/keep. A swap always retains the supplied active_rank_id. Across selected
-candidates, consumption for every capacity key must not exceed its available
-value. The program must be deterministic, self-contained, side-effect free,
-and use no third-party packages or hidden runtime state.
+swap/keep. The active_rank_id identifies the current deployment. Keep an exact
+match, retain that ID when only DP changes, and use a fresh ID for every other
+swap. Across selected candidates, consumption for every capacity key must not
+exceed its available value. The program must be deterministic, self-contained,
+side-effect free, and use no third-party packages or hidden runtime state.
 
 The evaluator rejects malformed or infeasible output and exposes a
 larger-is-better combined_score. Preserve high-priority admission before
@@ -227,7 +228,7 @@ class PlacementProblem:
 
     @property
     def active_rank_id(self) -> str | None:
-        """Return the rank identity which a running-job swap must retain."""
+        """Return the identity of the deployment a swap would replace."""
         return self.rank_id
 
 
@@ -897,13 +898,22 @@ class EvoxPlannerDriver:
             candidate = selected.get(problem.job_id)
             if candidate is None:
                 return None
-            plan = self._build_place_plan(problem, candidate)
+            plan = self._build_place_plan(
+                problem,
+                candidate,
+                rank_name=problem.rank_id,
+            )
+            if problem.action_type == "swap" and reconcile_swap_rank_ids(
+                problem.store_job, plan
+            ):
+                return None
+            emitted_rank_id = str(plan["ladder"][0]["rank_id"])
             verify_place_plan(
                 plan,
                 candidate,
                 self.config_policy,
                 action_type=problem.action_type,
-                rank_name=problem.rank_id,
+                rank_name=emitted_rank_id,
             )
             reserve_vram_placement(
                 candidate.target,
@@ -1013,6 +1023,8 @@ class EvoxPlannerDriver:
         self,
         problem: PlacementProblem,
         candidate: PlacementCandidate,
+        *,
+        rank_name: str | None = None,
     ) -> dict[str, object]:
         """Build EvoX's complete per-job placement or swap plan."""
         return build_evox_plan(
@@ -1021,7 +1033,7 @@ class EvoxPlannerDriver:
             self.backend,
             self.config_policy,
             action_type=problem.action_type,
-            rank_name=problem.rank_id,
+            rank_name=rank_name,
         )
 
 
@@ -1038,7 +1050,7 @@ def build_evox_plan(
     if action_type not in {"place", "swap"}:
         raise ValueError("EvoX action type must be place or swap")
     if action_type == "swap" and rank_name is None:
-        raise ValueError("EvoX swaps require the active rank ID")
+        raise ValueError("EvoX swaps require a rank ID")
     known = _known_job_fields(store_job)
     model_id = _required_text(known.get("model_id"), "model_id")
     rule = config_policy.rule_for(candidate.target.gpu_type, model_id)
@@ -1460,7 +1472,7 @@ def verify_place_plan(
     if rank.get("env") != candidate.target.environment_key.split("|"):
         raise ValueError("placement plan environment does not match its candidate")
     if rank_name is not None and rank.get("rank_id") != rank_name:
-        raise ValueError("swap plan does not retain the active rank ID")
+        raise ValueError("swap plan does not use the selected rank ID")
     if rank.get("n_replicas") != candidate.dp:
         raise ValueError("placement plan has the wrong replica count")
     config = rank.get("config")

@@ -245,8 +245,8 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             self.assertEqual(rank_config[field], value)
         Plan(user_id="tenant", actions=[placed])
 
-    def test_running_candidates_can_swap_with_their_active_rank_id(self) -> None:
-        """Use lifecycle decisions and preserve rank identity across a swap."""
+    def test_running_candidates_swap_with_fresh_replacement_rank_id(self) -> None:
+        """Use active placement context but give its replacement a fresh identity."""
         driver = _driver()
         driver.jobs["running"] = _online_job("running")
         active_rank = _ACTIVE_RANK_ID
@@ -302,8 +302,10 @@ class OpenEvolvePlannerTest(unittest.TestCase):
             "env-a|H100",
         )
         self.assertEqual([action["type"] for action in actions], ["swap", "defer"])
-        self.assertEqual(actions[0]["ladder"][0]["rank_id"], active_rank)
-        with self.assertRaisesRegex(ValueError, "swaps require the active rank ID"):
+        replacement_rank_id = actions[0]["ladder"][0]["rank_id"]
+        self.assertTrue(is_valid_id(replacement_rank_id, "rank"))
+        self.assertNotEqual(replacement_rank_id, active_rank)
+        with self.assertRaisesRegex(ValueError, "swaps require a rank ID"):
             _place_action(
                 "running",
                 snapshot.running_jobs[0],
@@ -350,6 +352,45 @@ class OpenEvolvePlannerTest(unittest.TestCase):
         )
 
         self.assertEqual(actions, [{"job_id": "running", "type": "keep"}])
+
+    def test_dp_only_swap_retains_the_active_rank_id(self) -> None:
+        """Resize replicas without replacing the deployment identity."""
+        driver = _driver()
+        driver.jobs["running"] = _online_job("running")
+        snapshot = StoreSnapshot(
+            resources={
+                "env|H100": {
+                    "gpu_type": "H100",
+                    "total": 3,
+                    "free": 2,
+                    "pools": [],
+                }
+            },
+            running_jobs=(
+                _running_store_job("running", _ACTIVE_RANK_ID, "env|H100"),
+            ),
+            waiting_jobs=(),
+            paused_jobs=(),
+            finished_jobs=(),
+            model_catalogs=_catalogs(),
+        )
+
+        actions = driver._build_actions(
+            snapshot,
+            (
+                OpenEvolvePlacement(
+                    lifecycle="running",
+                    decision="swap",
+                    environment="env|H100",
+                    instance_type=None,
+                    configuration={"tp": 1, "pp": 1, "dp": 2},
+                ),
+            ),
+        )
+
+        self.assertEqual(actions[0]["type"], "swap")
+        self.assertEqual(actions[0]["ladder"][0]["rank_id"], _ACTIVE_RANK_ID)
+        self.assertEqual(actions[0]["ladder"][0]["n_replicas"], 2)
 
     def test_validators_enforce_lifecycle_and_reject_noop_swaps(self) -> None:
         """Accept only running keep or changed swap decisions."""
@@ -1044,11 +1085,26 @@ def _running_store_job(
     job["active_ranks"] = [
         {
             "rank_id": rank_id,
+            "role": "aggregate",
             "n_replicas": 1,
             "shape_json": {
+                **_launch_config(),
                 "env": environment,
                 "instance_type": None,
+                "gpu_type": "H100",
+                "model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                "precision": "fp16",
+                "gpu_count": 1,
                 "count": 1,
+                "tp": 1,
+                "pp": 1,
+                "dp": 1,
+                "ep": 1,
+                "sp": 1,
+                "cp": 1,
+                "rank_traffic_share": 1.0,
+                "target_p99_ttft_ms": 700.0,
+                "target_p99_tpot_ms": 55.0,
             },
         }
     ]
