@@ -306,6 +306,57 @@ from an invalid or interrupted run.
 LLMServingSim uses local precomputed profiles for these benchmarks. A Hugging
 Face token is not required for ordinary simulation runs.
 
+### AIConfigurator MoE Layouts
+
+The `dynamo_aic` baseline evaluates MoE models with expert tensor parallelism
+(`MOE_TP`), attention data parallelism, and context parallelism fixed to one.
+Expert parallelism (`MOE_EP`) equals attention TP, and the selected value is
+passed to LLMServingSim as `ep_size`. Both use the same GPUs: TP splits
+attention work and EP distributes complete experts.
+
+Pipeline parallelism follows the target configuration policy. Independent
+serving replicas are sized from the requested load; total GPUs equal replicas
+times TP times PP. AIC searches these layouts before selecting a configuration.
+Chunked prefill is enabled by default for AIC placements so benchmark prompts
+larger than the per-step token budget can make progress; an explicit stored job
+setting can disable it.
+ServingSim performs runtime memory enforcement through its existing OOM path.
+
+### AIConfigurator Model Proxies
+
+When native AIC estimation is unavailable, `dynamo_aic` uses the independent
+`cluster_sim/aic_proxy.py` selector. It prefers compatible measured profiles
+by model identity, parameter-count distance, dtype, backend, and structural
+distance, using the reference vLLM 0.22.0 / SGLang 0.5.14 inventory. MoE and
+generation models are matched to compatible model types on the same AIC system.
+
+The existing `--llmservingsim-root` supplies local target metadata from
+`configs/model`, including Qwen3-Next architectures unsupported by AIC. Each
+proxy candidate receives separate prefill/decode corrections before latency
+checks, replica sizing, and selection. Deployment still uses the original
+model. Selected configurations include `aic_prediction` metadata with the proxy,
+backend/version, raw/corrected estimates, and correction factors.
+
+Proxy structural estimates follow the Koi-style approximation and do not
+explicitly model Qwen3-Next's linear/full-attention layer mix. ServingSim's
+existing memory enforcement and runtime failure/requeue behavior apply.
+
+To test real AIC selections against the local ServingSim container without
+starting Store or changing evaluator source files:
+
+```bash
+docker start servingsim_docker
+AIC_SERVINGSIM_SMOKE=1 PYTHONDONTWRITEBYTECODE=1 uv run --no-sync python -B \
+  -m unittest cluster_sim.tests.test_aic_servingsim_smoke -v
+```
+
+This opt-in check runs four short requests each for a dense model, native
+Mixtral, and proxy-backed Qwen3-Next. It saves predictions, cluster configs,
+request results, and logs under `artifacts/aic-servingsim-smoke/`. Intermediate
+files stay in isolated container scratch space. It is an execution check, not
+a benchmark score or proof of proxy accuracy; inspect local profile provenance
+before using the resulting timings in comparisons.
+
 ### Koi With Azure Foundry
 
 Set the matching Koi Foundry endpoint and key in the parent process, then pass

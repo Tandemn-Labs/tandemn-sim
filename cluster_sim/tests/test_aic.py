@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,7 +29,10 @@ from aic import (
     _aic_system,
     _evaluate_aic_request,
     _evaluate_job,
+    _normalize_result,
+    _parallelism,
     _policy_hardware_candidates,
+    _runtime_parallelism,
 )
 from models import OnlineJob, Scenario
 from serving import build_rank_cluster
@@ -81,6 +85,7 @@ class AicPlannerDriverTest(unittest.TestCase):
             optimization_goal="latency",
             target_request_rate=1,
             target_concurrency=None,
+            parallelism_candidates=((1, 1),),
         )
 
         context = TimeoutContext()
@@ -106,6 +111,7 @@ class AicPlannerDriverTest(unittest.TestCase):
             optimization_goal="latency",
             target_request_rate=1,
             target_concurrency=None,
+            parallelism_candidates=((1, 1),),
         )
         result = AicResult(
             devices=1,
@@ -127,25 +133,28 @@ class AicPlannerDriverTest(unittest.TestCase):
             [
                 {
                     "parallel": "tp1pp5dp1",
-                    "replicas_needed": 1,
-                    "total_gpus_needed": 5,
+                    "num_total_gpus": 5,
+                    "seq/s": 500,
                     "tokens/s": 500,
+                    "tokens/s/gpu": 100,
+                    "tokens/s/user": 1000,
                     "ttft": 1,
                     "tpot": 1,
                     "bs": 1,
                 },
                 {
                     "parallel": "tp1pp4dp1",
-                    "replicas_needed": 1,
-                    "total_gpus_needed": 4,
+                    "num_total_gpus": 4,
+                    "seq/s": 400,
                     "tokens/s": 400,
+                    "tokens/s/gpu": 100,
+                    "tokens/s/user": 500,
                     "ttft": 2,
                     "tpot": 2,
                     "bs": 1,
                 },
             ]
         )
-        recommendation = SimpleNamespace(best_configs={"agg": frame})
         request = AicRequest(
             model="model",
             system="h100_sxm",
@@ -161,16 +170,161 @@ class AicPlannerDriverTest(unittest.TestCase):
             optimization_goal="latency",
             target_request_rate=1,
             target_concurrency=None,
+            parallelism_candidates=((1, 4),),
         )
 
-        with patch(
-            "aiconfigurator.cli.api.cli_recommend",
-            return_value=recommendation,
-        ) as recommend:
+        with (
+            patch(
+                "aiconfigurator.sdk.utils.get_model_config_from_model_path",
+                return_value={"layers": 32, "num_experts": 0},
+            ),
+            patch("aiconfigurator.sdk.task_v2.Task") as task,
+        ):
+            task.return_value.run.return_value = frame
             result = _evaluate_aic_request(request)
 
         self.assertEqual(result.configuration["parallel"], "tp1pp4dp1")
-        self.assertEqual(recommend.call_args.kwargs["top_n"], 10)
+        self.assertEqual(task.call_args.kwargs["agg_pp_candidates"], [4])
+
+    def test_moe_search_constrains_layout_before_evaluation(self) -> None:
+        """Select a valid expert layout and size independent replicas from load."""
+        request = _moe_request()
+        supported = _moe_row()
+        frame = pd.DataFrame(
+            [
+                {**supported, "moe_tp": 2, "moe_ep": 2, "ttft": 1},
+                {**supported, "dp": 2, "moe_ep": 8, "ttft": 2},
+                {**supported, "cp": 2, "ttft": 3},
+                {**supported, "ttft": 10_000},
+                supported,
+            ]
+        )
+
+        with (
+            patch(
+                "aiconfigurator.sdk.utils.get_model_config_from_model_path",
+                return_value={"layers": 32, "num_experts": 8},
+            ),
+            patch("aiconfigurator.sdk.task_v2.Task") as task,
+        ):
+            task.return_value.run.return_value = frame
+            result = _evaluate_aic_request(request)
+
+        kwargs = task.call_args.kwargs
+        self.assertTrue(kwargs["enable_chunked_prefill"])
+        self.assertEqual(kwargs["agg_moe_tp_candidates"], [1])
+        self.assertEqual(kwargs["agg_dp_candidates"], [1])
+        self.assertEqual(kwargs["agg_cp_candidates"], [1])
+        self.assertEqual(kwargs["agg_tp_candidates"], [4])
+        self.assertEqual(kwargs["agg_moe_ep_candidates"], [4])
+        self.assertEqual(kwargs["agg_pp_candidates"], [1, 2])
+        self.assertEqual(kwargs["agg_num_gpu_candidates"], [4, 8])
+        self.assertEqual(result.configuration["moe_ep"], 4)
+        self.assertEqual(result.configuration["dp"], 1)
+        self.assertEqual(result.replicas, 2)
+        self.assertEqual(result.devices, 8)
+        self.assertEqual(result.throughput_tokens_per_second, 2000)
+        self.assertEqual(result.num_experts, 8)
+
+    def test_moe_concurrency_load_matching_uses_independent_replicas(self) -> None:
+        """Keep concurrent-stream sizing distinct from request-rate sizing."""
+        request = replace(
+            _moe_request(),
+            target_request_rate=None,
+            target_concurrency=17,
+            available_devices=16,
+        )
+        with (
+            patch(
+                "aiconfigurator.sdk.utils.get_model_config_from_model_path",
+                return_value={"layers": 32, "num_experts": 8},
+            ),
+            patch("aiconfigurator.sdk.task_v2.Task") as task,
+        ):
+            task.return_value.run.return_value = pd.DataFrame([_moe_row()])
+            result = _evaluate_aic_request(request)
+
+        self.assertEqual(result.replicas, 3)
+        self.assertEqual(result.devices, 12)
+
+    def test_moe_excludes_nondivisible_expert_layouts_from_search(self) -> None:
+        """Filter expert divisibility and layer count before creating an AIC task."""
+        request = replace(
+            _moe_request(),
+            available_devices=32,
+            parallelism_candidates=((4, 1), (4, 4), (6, 1)),
+        )
+        with (
+            patch(
+                "aiconfigurator.sdk.utils.get_model_config_from_model_path",
+                return_value={"layers": 2, "num_experts": 8},
+            ),
+            patch("aiconfigurator.sdk.task_v2.Task") as task,
+        ):
+            task.return_value.run.return_value = pd.DataFrame([_moe_row()])
+            _evaluate_aic_request(request)
+
+        self.assertEqual(task.call_args.kwargs["agg_tp_candidates"], [4])
+        self.assertEqual(task.call_args.kwargs["agg_pp_candidates"], [1])
+
+    def test_compact_expert_tp_does_not_overwrite_attention_tp(self) -> None:
+        """Parse compact AIC strings without mistaking etp for attention tp."""
+        config = {"parallel": "tp4pp2dp1etp1ep4cp1"}
+        self.assertEqual(_parallelism(config), (4, 2, 1))
+        self.assertEqual(_runtime_parallelism(config, _moe_request(), 8), (4, 2, 1, 4))
+        self.assertEqual(_parallelism({**config, "tp": 2}), (2, 2, 1))
+
+    def test_normalization_rejects_unrepresentable_moe_layouts(self) -> None:
+        """Never silently reinterpret expert TP, grouped DP, or missing EP."""
+        target = ResourceTarget("h100", "H100", None, {"free": 16}, None)
+        hardware = HardwareCandidate("h100_sxm", (target,), 16)
+        invalid = (
+            {**_moe_row(), "moe_tp": 2, "moe_ep": 2},
+            {**_moe_row(), "dp": 2, "moe_ep": 8},
+            {**_moe_row(), "moe_ep": 1},
+            {**_moe_row(), "cp": 2},
+            {**_moe_row(), "num_total_gpus": 8},
+            {"tp": 4, "pp": 1, "dp": 1, "bs": 8},
+        )
+        for config in invalid:
+            with self.subTest(config=config):
+                result = AicResult(4, 1, 10, 5, 100, 1000, config, num_experts=8)
+                with self.assertRaises(AicEvaluationError):
+                    _normalize_result(result, _moe_request(), hardware)
+
+    def test_moe_ep_survives_deployment_and_replica_accounting(self) -> None:
+        """Launch the selected whole-expert layout on each independent replica."""
+        client = FakeAicClient(tp=4, pp=2, replicas=2, num_experts=8)
+        snapshot = _snapshot(waiting=({"job_id": "job_1"},), h100_free=16)
+        snapshot.waiting_jobs[0]["spec_json"]["model_id"] = _moe_request().model
+        snapshot.waiting_jobs[0]["spec_json"]["ep"] = 1
+
+        actions = _driver((_job("job_1"),), client)._build_actions(snapshot)
+
+        rank = actions[0]["ladder"][0]
+        shape = rank["config"]
+        self.assertEqual(shape["ep"], 4)
+        self.assertTrue(shape["chunked_prefill_enable"])
+        self.assertEqual(shape["tp"], 4)
+        self.assertEqual(shape["pp"], 2)
+        self.assertEqual(shape["count"], 8)
+        self.assertEqual(shape["dp"], 2)
+        self.assertEqual(rank["n_replicas"], 2)
+        self.assertEqual(shape["model_id"], _moe_request().model)
+        Plan(user_id="tenant", actions=actions)
+        cluster = build_rank_cluster(
+            SimpleNamespace(
+                rank_name=rank["rank_id"],
+                model_name=shape["model_id"],
+                shape=shape,
+                chains=(object(), object()),
+            ),
+            _SERVINGSIM_HARDWARE,
+        )
+        instances = cluster["nodes"][0]["instances"]
+        self.assertEqual(len(instances), 2)
+        self.assertTrue(all(instance["ep_size"] == 4 for instance in instances))
+        self.assertEqual(sum(instance["num_npus"] for instance in instances), 16)
 
     def test_greedy_jobs_observe_updated_capacity(self) -> None:
         """Reserve the first placement before evaluating the second job."""
@@ -196,6 +350,19 @@ class AicPlannerDriverTest(unittest.TestCase):
         )
         self.assertEqual(client.requests[0].target_request_rate, 2.5)
         self.assertEqual(actions[0]["ladder"][0]["config"]["tp"], 1)
+
+    def test_search_shapes_respect_per_instance_capacity(self) -> None:
+        """A pool's free GPU total cannot enlarge an individual replica."""
+        client = FakeAicClient()
+        _driver((_job("job_1"),), client)._build_actions(
+            _snapshot(
+                waiting=({"job_id": "job_1"},),
+                h100_free=32,
+                h100_instance_pool=True,
+            )
+        )
+        self.assertIn((4, 2), client.requests[0].parallelism_candidates)
+        self.assertNotIn((8, 2), client.requests[0].parallelism_candidates)
 
     def test_unsupported_model_defers_without_stopping_tick(self) -> None:
         """Defer one unsupported model and continue evaluating later jobs."""
@@ -241,6 +408,41 @@ class AicPlannerDriverTest(unittest.TestCase):
         actions = _driver((_job("job_1"),), client)._build_actions(snapshot)
 
         self.assertEqual(actions[0]["ladder"][0]["config"]["max_num_seq"], 32)
+
+    def test_runtime_launch_settings_come_from_target_gpu_catalog(self) -> None:
+        """Use H100 catalog token/chunk settings when Store job has no override."""
+        client = FakeAicClient(batch_size=512)
+        snapshot = _snapshot(waiting=({"job_id": "job_1"},), h100_free=8)
+        snapshot.waiting_jobs[0]["_model_catalog"] = {
+            "chunked_prefill_enable": True,
+            "gpu_mem_util": 0.9,
+            "prefix_cache_enabled": False,
+            "max_num_seq": [{"gpu_type": "H100", "value": 1024}],
+            "max_num_batched_tokens": [{"gpu_type": "H100", "value": 8192}],
+            "block_size": [{"gpu_type": "H100", "value": 32}],
+            "kvcache_dtype": [{"gpu_type": "H100", "value": "fp8"}],
+        }
+
+        action = _driver((_job("job_1"),), client)._build_actions(snapshot)[0]
+        config = action["ladder"][0]["config"]
+
+        self.assertEqual(config["max_num_seq"], 512)
+        self.assertEqual(config["max_num_batched_tokens"], 8192)
+        self.assertTrue(config["chunked_prefill_enable"])
+        self.assertEqual(config["block_size"], 32)
+        self.assertEqual(config["kvcache_dtype"], "fp8")
+
+    def test_explicit_job_chunked_prefill_override_wins_over_catalog(self) -> None:
+        """Preserve an explicit Store job runtime override."""
+        snapshot = _snapshot(waiting=({"job_id": "job_1"},), h100_free=8)
+        waiting = snapshot.waiting_jobs[0]
+        waiting["_traffic_mode"] = "request_rate"
+        waiting["spec_json"]["job_features"]["chunked_prefill_enable"] = False
+        waiting["_model_catalog"] = {"chunked_prefill_enable": True}
+
+        action = _driver((_job("job_1"),), FakeAicClient())._build_actions(snapshot)[0]
+
+        self.assertFalse(action["ladder"][0]["config"]["chunked_prefill_enable"])
 
     def test_unavailable_aic_parallelism_defers(self) -> None:
         """Reject an exact TP/PP/DP footprint that Store cannot provide."""
@@ -451,14 +653,18 @@ class FakeAicClient:
         self,
         *,
         tp: int = 1,
+        pp: int = 1,
         dp: int = 1,
+        num_experts: int = 0,
         batch_size: int = 128,
         replicas: int = 1,
         unsupported_model: str | None = None,
         throughput: dict[str, float] | None = None,
     ) -> None:
         self.tp = tp
+        self.pp = pp
         self.dp = dp
+        self.num_experts = num_experts
         self.batch_size = batch_size
         self.replicas = replicas
         self.unsupported_model = unsupported_model
@@ -474,16 +680,19 @@ class FakeAicClient:
                 "The model's architecture TestModel is not supported"
             )
         return AicResult(
-            devices=self.tp * self.dp * self.replicas,
+            devices=self.tp * self.pp * self.dp * self.replicas,
             replicas=self.replicas,
             ttft_ms=10,
             tpot_ms=5,
             request_latency_ms=100,
             throughput_tokens_per_second=self.throughput[request.system],
             configuration={
-                "parallel": f"tp{self.tp}pp1dp{self.dp}",
+                "parallel": f"tp{self.tp}pp{self.pp}dp{self.dp}",
+                "moe_tp": 1,
+                "moe_ep": self.tp if self.num_experts else 1,
                 "bs": self.batch_size,
             },
+            num_experts=self.num_experts,
         )
 
 
@@ -509,6 +718,49 @@ class FallbackAicClient(FakeAicClient):
             throughput_tokens_per_second=300,
             configuration={"parallel": "tp1pp1dp1", "bs": 128},
         )
+
+
+def _moe_request() -> AicRequest:
+    """Describe a native MoE workload with two supported pipeline layouts."""
+    return AicRequest(
+        model="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        system="h100_sxm",
+        available_devices=8,
+        backend="vllm",
+        backend_version=None,
+        database_mode="HYBRID",
+        serving_mode="agg",
+        input_tokens=1000,
+        output_tokens=100,
+        target_ttft_ms=1000,
+        target_tpot_ms=100,
+        optimization_goal="throughput",
+        target_request_rate=15,
+        target_concurrency=None,
+        parallelism_candidates=((4, 1), (4, 2)),
+    )
+
+
+def _moe_row() -> dict[str, object]:
+    """Return an AIC aggregate worker row before independent load matching."""
+    return {
+        "parallel": "tp4pp1dp1etp1ep4",
+        "tp": 4,
+        "pp": 1,
+        "dp": 1,
+        "cp": 1,
+        "moe_tp": 1,
+        "moe_ep": 4,
+        "num_total_gpus": 4,
+        "seq/s": 10,
+        "tokens/s": 1000,
+        "tokens/s/gpu": 250,
+        "tokens/s/user": 200,
+        "ttft": 10,
+        "tpot": 5,
+        "concurrency": 8,
+        "bs": 8,
+    }
 
 
 def _driver(

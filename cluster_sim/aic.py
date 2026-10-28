@@ -1,7 +1,7 @@
 """Run NVIDIA AIC placement through the cluster simulator planner boundary.
 
 Store owns job identity and lifecycle. AIC evaluates each homogeneous hardware
-system independently and owns only hardware, replica, and TP/PP/DP selection.
+system independently and owns hardware, replica, and parallelism selection.
 All scheduler-visible job fields come from Store; unavailable fields are null.
 """
 
@@ -16,6 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import StringIO
+from pathlib import Path
 from queue import Empty
 from time import monotonic
 from typing import Any, Protocol
@@ -25,8 +26,7 @@ from policy import VALID_PP_DEGREES, load_config_policy, simulation_quantization
 from rank_ids import rank_id
 
 LOGGER = logging.getLogger(__name__)
-_AIC_CANDIDATE_LIMIT = 10
-_AIC_CALL_TIMEOUT_SECONDS = 20.0
+_AIC_CALL_TIMEOUT_SECONDS = 60.0
 _AIC_TICK_TIMEOUT_SECONDS = 280.0
 _AIC_SYSTEM_ALIASES = {
     "h100": "h100_sxm",
@@ -70,6 +70,7 @@ class AicSettings:
     system_mappings: Mapping[str, str]
     call_timeout_seconds: float
     tick_timeout_seconds: float
+    model_configs_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,10 @@ class AicRequest:
     optimization_goal: str
     target_request_rate: float | None
     target_concurrency: float | None
+    parallelism_candidates: tuple[tuple[int, int], ...]
+    model_configs_root: Path | None = None
+    precision: str | None = None
+    chunked_prefill_enable: bool = True
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,7 @@ class AicResult:
     request_latency_ms: float
     throughput_tokens_per_second: float
     configuration: Mapping[str, object]
+    num_experts: int = 0
 
 
 @dataclass(frozen=True)
@@ -145,12 +151,14 @@ class AicPlacement:
     tp: int
     pp: int
     dp: int
+    ep: int
     max_num_seq: int
     devices: int
     ttft_ms: float
     tpot_ms: float
     request_latency_ms: float
     throughput_tokens_per_second: float
+    prediction: Mapping[str, object] | None = None
 
 
 class AicClient(Protocol):
@@ -170,6 +178,12 @@ class JobStoreClient(Protocol):
     def waiting_jobs(self, user_id: str) -> Sequence[object]: ...
 
     def paused_jobs(self, user_id: str) -> Sequence[object]: ...
+
+
+class ModelCatalogStoreClient(Protocol):
+    """Read seeded model launch defaults from Tandemn Store."""
+
+    def get(self, model_id: str) -> object | None: ...
 
 
 class ResourceMap(Protocol):
@@ -206,7 +220,10 @@ class NvidiaAicClient:
             raise AicEvaluationError("AIC tick deadline expired")
         context = multiprocessing.get_context("spawn")
         results = context.Queue(maxsize=1)
-        process = context.Process(target=_run_aic_request, args=(request, results))
+        process = context.Process(
+            target=_run_aic_request,
+            args=(request, results, monotonic() + timeout),
+        )
         process.start()
         process.join(timeout)
         if process.is_alive():
@@ -226,10 +243,12 @@ class NvidiaAicClient:
         raise AicEvaluationError(value)
 
 
-def _run_aic_request(request: AicRequest, results: Any) -> None:
+def _run_aic_request(
+    request: AicRequest, results: Any, deadline: float | None = None
+) -> None:
     """Evaluate one AIC request in a killable child process."""
     try:
-        results.put(("ok", _evaluate_aic_request(request)))
+        results.put(("ok", _evaluate_aic_request(request, deadline)))
     except AicUnavailableError as error:
         results.put(("unavailable", str(error)))
     except AicEvaluationError as error:
@@ -238,13 +257,51 @@ def _run_aic_request(request: AicRequest, results: Any) -> None:
         results.put(("error", str(error)))
 
 
-def _evaluate_aic_request(request: AicRequest) -> AicResult:
-    """Run load matching and normalize AIC's selected result row."""
+def _evaluate_aic_request(
+    request: AicRequest, deadline: float | None = None
+) -> AicResult:
+    """Prefer native AIC coverage, then use corrected same-system model proxies."""
+    deadline = (
+        deadline if deadline is not None else monotonic() + _AIC_CALL_TIMEOUT_SECONDS
+    )
+    if monotonic() >= deadline:
+        raise AicEvaluationError("AIC tick deadline expired")
+    try:
+        frame, num_experts = _sweep_aic_request(request)
+    except AicUnavailableError:
+        raise
+    except AicEvaluationError as error:
+        return _evaluate_proxy_request(request, str(error), deadline)
+    result = _select_aic_result(request, frame, num_experts)
+    return replace(
+        result,
+        configuration={
+            **result.configuration,
+            "aic_prediction": {
+                "mode": "native",
+                "requested_model_id": request.model,
+                "prediction_model_id": request.model,
+                "backend": request.backend,
+                "backend_version": result.configuration.get(
+                    "version", request.backend_version
+                ),
+                "system": request.system,
+                "database_mode": request.database_mode,
+                "prefill_speed_ratio": 1.0,
+                "decode_speed_ratio": 1.0,
+            },
+        },
+    )
+
+
+def _sweep_aic_request(request: AicRequest) -> tuple[Any, int]:
+    """Return constrained per-worker estimates before load matching."""
     if request.serving_mode != "agg":
         raise AicEvaluationError("AIC requires aggregate serving")
     try:
-        from aiconfigurator.cli.api import cli_recommend
-        from aiconfigurator.sdk.picking import pick_optimization_type
+        from aiconfigurator.sdk.common import ARCHITECTURE_TO_MODEL_FAMILY
+        from aiconfigurator.sdk.task_v2 import Task
+        from aiconfigurator.sdk.utils import get_model_config_from_model_path
     except ImportError as error:
         raise AicUnavailableError(
             "AIC is not installed; run `uv sync --group dynamo`"
@@ -254,21 +311,48 @@ def _evaluate_aic_request(request: AicRequest) -> AicResult:
     try:
         logging.disable(logging.CRITICAL)
         with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-            recommendation = cli_recommend(
+            if request.model_configs_root is not None:
+                from aic_proxy import load_model_profile
+
+                profile = load_model_profile(request.model, request.model_configs_root)
+                if profile.architecture not in ARCHITECTURE_TO_MODEL_FAMILY:
+                    raise AicEvaluationError(
+                        f"AIC architecture {profile.architecture} is not supported"
+                    )
+            model = get_model_config_from_model_path(request.model)
+            num_experts = int(model.get("num_experts") or 0)
+            pairs = [
+                (tp, pp)
+                for tp, pp in request.parallelism_candidates
+                if tp * pp <= request.available_devices
+                and pp <= model["layers"]
+                and (not num_experts or num_experts % tp == 0)
+            ]
+            if not pairs:
+                raise AicEvaluationError("AIC has no runtime-compatible layouts")
+            tp_candidates = sorted({tp for tp, _ in pairs})
+            task = Task(
+                serving_mode=request.serving_mode,
                 model_path=request.model,
-                system=request.system,
-                target_request_rate=request.target_request_rate,
-                target_concurrency=request.target_concurrency,
-                backend=request.backend,
+                system_name=request.system,
+                backend_name=request.backend,
                 backend_version=request.backend_version,
+                total_gpus=request.available_devices,
                 database_mode=request.database_mode,
                 isl=request.input_tokens,
                 osl=request.output_tokens,
                 ttft=request.target_ttft_ms,
                 tpot=request.target_tpot_ms,
-                strict_sla=True,
-                top_n=_AIC_CANDIDATE_LIMIT,
+                enable_chunked_prefill=request.chunked_prefill_enable,
+                agg_num_gpu_candidates=sorted({tp * pp for tp, pp in pairs}),
+                agg_tp_candidates=tp_candidates,
+                agg_pp_candidates=sorted({pp for _, pp in pairs}),
+                agg_dp_candidates=[1],
+                agg_cp_candidates=[1],
+                agg_moe_tp_candidates=[1],
+                agg_moe_ep_candidates=tp_candidates if num_experts else [1],
             )
+            frame = task.run()
     except SystemExit as error:
         raise AicEvaluationError(str(error)) from error
     except Exception as error:
@@ -276,21 +360,44 @@ def _evaluate_aic_request(request: AicRequest) -> AicResult:
     finally:
         logging.disable(previous_logging_threshold)
 
-    frame = recommendation.best_configs.get("agg")
     if frame is None or frame.empty:
         raise AicEvaluationError("AIC returned no aggregate configuration")
+    return frame, num_experts
+
+
+def _select_aic_result(request: AicRequest, frame: Any, num_experts: int) -> AicResult:
+    """Apply target SLOs, load matching, capacity, and the baseline objective."""
+    from aiconfigurator.sdk.picking import pick_load_match, pick_optimization_type
+
     try:
-        capacity_frame = frame[frame["total_gpus_needed"] <= request.available_devices]
-        frame = capacity_frame[
-            capacity_frame.apply(
-                lambda row: _parallelism(row.to_dict())[1] in VALID_PP_DEGREES,
-                axis=1,
-            )
+        supported = []
+        for index, row in frame.iterrows():
+            try:
+                _runtime_parallelism(row.to_dict(), request, num_experts)
+            except AicEvaluationError:
+                continue
+            supported.append(index)
+        frame = frame.loc[supported]
+        frame = frame[
+            (frame["ttft"] <= request.target_ttft_ms)
+            & (frame["tpot"] <= request.target_tpot_ms)
         ]
         if frame.empty:
             raise AicEvaluationError(
-                "AIC returned no configuration within capacity and PP limits"
+                "AIC returned no compatible configuration under SLA"
             )
+        matched = pick_load_match(
+            pareto_df=frame,
+            serving_mode=request.serving_mode,
+            target_tpot=request.target_tpot_ms,
+            target_request_rate=request.target_request_rate,
+            target_concurrency=request.target_concurrency,
+            top_n=len(frame),
+        )
+        frame = matched["best_config_df"]
+        frame = frame[frame["total_gpus_needed"] <= request.available_devices]
+        if frame.empty:
+            raise AicEvaluationError("AIC returned no configuration within capacity")
         if request.optimization_goal == "latency":
             selected = frame.sort_values(
                 by=["ttft", "tpot", "total_gpus_needed"],
@@ -342,7 +449,147 @@ def _evaluate_aic_request(request: AicRequest) -> AicResult:
         request_latency_ms=request_latency_ms,
         throughput_tokens_per_second=per_replica_throughput * replicas,
         configuration={str(key): value for key, value in configuration.items()},
+        num_experts=num_experts,
     )
+
+
+def _evaluate_proxy_request(
+    request: AicRequest, native_error: str, deadline: float
+) -> AicResult:
+    """Correct the first usable ranked proxy per layout before choosing a plan."""
+    import pandas as pd
+    from aic_proxy import (
+        MAX_PROXY_SPEED_RATIO,
+        PROXY_ALGORITHM_VERSION,
+        correct_proxy_metrics,
+        load_model_profile,
+        load_supported_profiles,
+        phase_correction_factors,
+        profile_for_aic_row,
+        select_proxy_profiles,
+    )
+
+    try:
+        target = load_model_profile(request.model, request.model_configs_root)
+        if request.precision is not None:
+            runtime_dtype = "fp16" if request.precision == "fp16" else "bf16"
+            target = replace(
+                target,
+                weight_dtype="fp8"
+                if request.precision == "bf16-fp8"
+                else runtime_dtype,
+                activation_dtype=runtime_dtype,
+                kv_dtype=runtime_dtype,
+            )
+        profiles = load_supported_profiles(request.system)
+    except Exception as error:
+        raise AicEvaluationError(f"AIC proxy metadata unavailable: {error}") from error
+    rows = []
+    failures = []
+    for tp, pp in request.parallelism_candidates:
+        matches = select_proxy_profiles(
+            target,
+            profiles,
+            system=request.system,
+            backend=request.backend,
+            tp=tp,
+            pp=pp,
+            input_tokens=request.input_tokens,
+            output_tokens=request.output_tokens,
+            batch_size=1,
+        )
+        found = False
+        for proxy_rank, match in enumerate(matches, start=1):
+            profile = match.profile
+            for mode in ("SILICON", "HYBRID", "EMPIRICAL", "SOL"):
+                if monotonic() >= deadline:
+                    break
+                proxy_request = replace(
+                    request,
+                    model=profile.model.model_id,
+                    backend=profile.backend,
+                    backend_version=profile.backend_version,
+                    database_mode=mode,
+                    parallelism_candidates=((tp, pp),),
+                    target_ttft_ms=request.target_ttft_ms * MAX_PROXY_SPEED_RATIO,
+                    target_tpot_ms=request.target_tpot_ms * MAX_PROXY_SPEED_RATIO,
+                )
+                try:
+                    frame, proxy_experts = _sweep_aic_request(proxy_request)
+                except AicEvaluationError as error:
+                    failures.append(f"{profile.profile_id}/{mode}: {str(error)[:200]}")
+                    continue
+                corrected_rows = []
+                for _, row in frame.iterrows():
+                    raw = row.to_dict()
+                    try:
+                        _runtime_parallelism(raw, proxy_request, proxy_experts)
+                        _runtime_parallelism(raw, request, target.num_experts)
+                        batch = _aic_positive_int(raw.get("bs"), "bs")
+                        prediction_model = profile_for_aic_row(profile.model, raw)
+                        prefill_ratio, decode_ratio = phase_correction_factors(
+                            target,
+                            prediction_model,
+                            system=request.system,
+                            tp=tp,
+                            pp=pp,
+                            input_tokens=request.input_tokens,
+                            output_tokens=request.output_tokens,
+                            batch_size=batch,
+                        )
+                        corrected = correct_proxy_metrics(
+                            raw, prefill_ratio, decode_ratio, request.output_tokens
+                        )
+                    except (AicEvaluationError, ValueError) as error:
+                        failures.append(f"{profile.profile_id}: {str(error)[:200]}")
+                        continue
+                    corrected["aic_prediction"] = {
+                        "mode": "proxy",
+                        "algorithm_version": PROXY_ALGORITHM_VERSION,
+                        "requested_model_id": request.model,
+                        "prediction_model_id": profile.model.model_id,
+                        "backend": profile.backend,
+                        "backend_version": profile.backend_version,
+                        "system": request.system,
+                        "database_mode": mode,
+                        "proxy_rank": proxy_rank,
+                        "selection_distance": match.distance,
+                        "selection_batch_size": 1,
+                        "reasons": match.reasons,
+                        "native_error": native_error[:300],
+                        "prefill_speed_ratio": prefill_ratio,
+                        "decode_speed_ratio": decode_ratio,
+                        "raw_metrics": {
+                            name: raw.get(name)
+                            for name in (
+                                "ttft",
+                                "tpot",
+                                "tokens/s",
+                                "seq/s",
+                                "bs",
+                                "gemm",
+                                "moe",
+                                "kvcache",
+                            )
+                        },
+                        "corrected_metrics": {
+                            name: corrected[name]
+                            for name in ("ttft", "tpot", "tokens/s", "seq/s")
+                        },
+                    }
+                    corrected_rows.append(corrected)
+                if corrected_rows:
+                    rows.extend(corrected_rows)
+                    found = True
+                    break
+            if found or monotonic() >= deadline:
+                break
+        if monotonic() >= deadline:
+            break
+    if not rows:
+        detail = "; ".join(failures[-3:]) or "no compatible supported profiles"
+        raise AicEvaluationError(f"AIC proxy estimates unavailable: {detail}")
+    return _select_aic_result(request, pd.DataFrame(rows), target.num_experts)
 
 
 class AicPlannerDriver:
@@ -359,6 +606,7 @@ class AicPlannerDriver:
         plan_store: PlanStoreClient,
         settings: AicSettings,
         client: AicClient,
+        model_catalog_store: ModelCatalogStoreClient | None = None,
     ) -> None:
         """Keep Store clients and AIC configuration."""
         self.user_id = user_id
@@ -367,6 +615,7 @@ class AicPlannerDriver:
         self.plan_store = plan_store
         self.settings = settings
         self.client = client
+        self.model_catalog_store = model_catalog_store
 
     @classmethod
     def build(
@@ -380,6 +629,7 @@ class AicPlannerDriver:
         """Build AIC with Tandemn Store public clients."""
         from tandemn_system_data.clients import (
             JobStore,
+            ModelCatalogStore,
             PlanStore,
             PostgresClient,
             ResourceMapStore,
@@ -394,6 +644,7 @@ class AicPlannerDriver:
             plan_store=PlanStore(postgres),
             settings=_load_settings(settings),
             client=client or NvidiaAicClient(),
+            model_catalog_store=ModelCatalogStore(postgres),
         )
 
     def create_plans(self, tick_number: int, logical_time: datetime) -> PlannerResult:
@@ -449,10 +700,19 @@ class AicPlannerDriver:
         resource_map = self.resource_map_store.get()
         running = tuple(self.job_store.running_jobs(self.user_id))
         waiting = tuple(self.job_store.waiting_jobs(self.user_id))
+        waiting_payloads = []
+        for job in waiting:
+            payload = _model_payload(job)
+            model_id = _known_job_fields(payload).get("model_id")
+            if self.model_catalog_store is not None and isinstance(model_id, str):
+                catalog = self.model_catalog_store.get(model_id)
+                if catalog is not None:
+                    payload["_model_catalog"] = _model_payload(catalog)
+            waiting_payloads.append(payload)
         return StoreSnapshot(
             resources=_resources_with_free_capacity(resource_map, running),
             running_jobs=tuple(_running_job_payload(job) for job in running),
-            waiting_jobs=tuple(_model_payload(job) for job in waiting),
+            waiting_jobs=tuple(waiting_payloads),
             paused_jobs=(),
             finished_jobs=(),
         )
@@ -629,8 +889,27 @@ def _build_aic_request(
         "target_p99_tpot_ms",
     )
     target_request_rate, target_concurrency = _traffic_targets(known)
+    model_id = _text(known.get("model_id"), "model_id")
+    catalog = _catalog_for_job(known)
+    policy = load_config_policy()
+    pairs = set()
+    precision = None
+    for target in hardware.targets:
+        rule = policy.rule_for(target.gpu_type, model_id)
+        if rule is None:
+            continue
+        precision = rule.precision
+        for tp in rule.allowed_tp:
+            for pp in sorted(VALID_PP_DEGREES):
+                footprint = _target_footprint(target, 1, tp * pp)
+                if (
+                    rule.allows_parallelism(tp, pp)
+                    and footprint is not None
+                    and footprint <= _target_available(target)
+                ):
+                    pairs.add((tp, pp))
     return AicRequest(
-        model=_text(known.get("model_id"), "model_id"),
+        model=model_id,
         system=hardware.system,
         available_devices=hardware.available_devices,
         backend=settings.backend,
@@ -648,6 +927,12 @@ def _build_aic_request(
         optimization_goal=goal,
         target_request_rate=target_request_rate,
         target_concurrency=target_concurrency,
+        parallelism_candidates=tuple(sorted(pairs)),
+        model_configs_root=settings.model_configs_root,
+        precision=precision,
+        chunked_prefill_enable=bool(
+            _known_or_catalog(known, catalog, "chunked_prefill_enable", True)
+        ),
     )
 
 
@@ -658,9 +943,9 @@ def _normalize_result(
 ) -> AicPlacement:
     """Validate AIC parallelism and bind it to one concrete Store target."""
     replicas = _positive_int(result.replicas, "replicas")
-    tp, pp, dp = _parallelism(result.configuration)
-    if pp not in VALID_PP_DEGREES:
-        raise AicEvaluationError(f"AIC PP must be one of {sorted(VALID_PP_DEGREES)}")
+    tp, pp, dp, ep = _runtime_parallelism(
+        result.configuration, request, result.num_experts
+    )
     devices = replicas * tp * pp * dp
     if result.devices != devices:
         raise AicEvaluationError(
@@ -670,23 +955,33 @@ def _normalize_result(
         raise AicEvaluationError("AIC TTFT exceeds the job target")
     if result.tpot_ms > request.target_tpot_ms:
         raise AicEvaluationError("AIC TPOT exceeds the job target")
-    # Canonical Store/ServingSim contract: AIC replicas and DP workers are
-    # independent runtime replicas. Do not fold DP into the per-replica width.
-    target = _select_target(hardware.targets, replicas * dp, tp * pp)
+    policy = load_config_policy()
+    targets = tuple(
+        target
+        for target in hardware.targets
+        if (rule := policy.rule_for(target.gpu_type, request.model)) is not None
+        and rule.allows_parallelism(tp, pp)
+    )
+    target = _select_target(targets, replicas * dp, tp * pp)
     if target is None:
         raise AicEvaluationError("AIC configuration is unavailable in Store")
+    prediction = result.configuration.get("aic_prediction")
+    if prediction is not None and not isinstance(prediction, Mapping):
+        raise AicEvaluationError("AIC prediction metadata must be an object")
     return AicPlacement(
         target=target,
         replicas=replicas,
         tp=tp,
         pp=pp,
         dp=dp,
+        ep=ep,
         max_num_seq=_aic_positive_int(result.configuration.get("bs"), "bs"),
         devices=devices,
         ttft_ms=result.ttft_ms,
         tpot_ms=result.tpot_ms,
         request_latency_ms=result.request_latency_ms,
         throughput_tokens_per_second=result.throughput_tokens_per_second,
+        prediction=prediction,
     )
 
 
@@ -728,10 +1023,23 @@ def _place_action(
     per_replica_gpu_count = placement.tp * placement.pp
     # Keep Store's DP metadata equal to its independently launched replicas.
     effective_dp = placement.replicas * placement.dp
+    catalog = _catalog_for_job(known)
+    catalog_max_num_seq = _catalog_gpu_value(
+        catalog, "max_num_seq", placement.target.gpu_type
+    )
+    max_num_seq = placement.max_num_seq
+    if catalog_max_num_seq is not None:
+        max_num_seq = min(
+            max_num_seq,
+            _positive_int(catalog_max_num_seq, "model catalog max_num_seq"),
+        )
     rank_config: dict[str, object] = {
+        **_catalog_launch_config(catalog, placement.target.gpu_type),
         **simulation_quantization(rule.precision),
         "model_id": model_id,
-        "engine_name": known.get("engine_name") or backend,
+        "engine_name": (
+            known.get("engine_name") or catalog.get("engine_name") or backend
+        ),
         "instance_type": placement.target.instance_type,
         "gpu_type": placement.target.gpu_type,
         "gpu_count": per_replica_gpu_count,
@@ -739,13 +1047,43 @@ def _place_action(
         "tp": placement.tp,
         "pp": placement.pp,
         "dp": effective_dp,
-        "ep": known.get("ep") or 1,
-        "max_num_seq": placement.max_num_seq,
-        "max_num_batched_tokens": known.get("max_num_batched_tokens") or 2048,
-        "gpu_mem_util": known.get("gpu_mem_util"),
-        "prefix_cache_enabled": known.get("prefix_cache_enabled"),
+        "ep": placement.ep,
+        "max_num_seq": max_num_seq,
+        "max_num_batched_tokens": _known_or_catalog(
+            known,
+            catalog,
+            "max_num_batched_tokens",
+            2048,
+            gpu_type=placement.target.gpu_type,
+        ),
+        "chunked_prefill_enable": (
+            bool(
+                _known_or_catalog(
+                    known,
+                    catalog,
+                    "chunked_prefill_enable",
+                    True,
+                )
+            )
+        ),
+        "block_size": _known_or_catalog(
+            known, catalog, "block_size", 16, gpu_type=placement.target.gpu_type
+        ),
+        "kvcache_dtype": _known_or_catalog(
+            known,
+            catalog,
+            "kvcache_dtype",
+            "auto",
+            gpu_type=placement.target.gpu_type,
+        ),
+        "gpu_mem_util": _known_or_catalog(known, catalog, "gpu_mem_util", 0.9),
+        "prefix_cache_enabled": _known_or_catalog(
+            known, catalog, "prefix_cache_enabled", False
+        ),
         "rank_traffic_share": 1.0,
     }
+    if placement.prediction is not None:
+        rank_config["aic_prediction"] = dict(placement.prediction)
     return {
         "job_id": job_id,
         "type": "place",
@@ -826,20 +1164,21 @@ def _policy_hardware_candidates(
     policy = load_config_policy()
     filtered = []
     for candidate in candidates:
-        targets = tuple(
-            target
-            for target in candidate.targets
-            if policy.rule_for(target.gpu_type, model_id) is not None
-        )
-        if not targets:
-            continue
-        filtered.append(
-            replace(
-                candidate,
-                targets=targets,
-                available_devices=max(_target_available(target) for target in targets),
+        by_precision: dict[str, list[ResourceTarget]] = {}
+        for target in candidate.targets:
+            rule = policy.rule_for(target.gpu_type, model_id)
+            if rule is not None:
+                by_precision.setdefault(rule.precision, []).append(target)
+        for targets in by_precision.values():
+            filtered.append(
+                replace(
+                    candidate,
+                    targets=tuple(targets),
+                    available_devices=max(
+                        _target_available(target) for target in targets
+                    ),
+                )
             )
-        )
     return tuple(filtered)
 
 
@@ -954,7 +1293,9 @@ def _parallelism(configuration: Mapping[str, object]) -> tuple[int, int, int]:
     if isinstance(parallel, str):
         parsed = {
             name: int(value)
-            for name, value in re.findall(r"(tp|pp|dp)[=_-]?(\d+)", parallel.lower())
+            for name, value in re.findall(
+                r"(?<![a-z])(tp|pp|dp)[=_-]?(\d+)", parallel.lower()
+            )
         }
     values = []
     for short_name, aliases in (
@@ -968,6 +1309,53 @@ def _parallelism(configuration: Mapping[str, object]) -> tuple[int, int, int]:
         )
         values.append(_aic_positive_int(value, short_name))
     return values[0], values[1], values[2]
+
+
+def _runtime_parallelism(
+    configuration: Mapping[str, object],
+    request: AicRequest,
+    num_experts: int,
+) -> tuple[int, int, int, int]:
+    """Require the expert layout that ServingSim will actually execute."""
+    tp, pp, dp = _parallelism(configuration)
+    if pp not in VALID_PP_DEGREES or (tp, pp) not in request.parallelism_candidates:
+        raise AicEvaluationError("AIC TP/PP is unavailable on the target")
+    parsed = {}
+    parallel = configuration.get("parallel")
+    if isinstance(parallel, str):
+        parsed = {
+            name: int(value)
+            for name, value in re.findall(
+                r"(?<![a-z])(etp|ep|cp)[=_-]?(\d+)", parallel.lower()
+            )
+        }
+    cp = _aic_positive_int(configuration.get("cp", parsed.get("cp", 1)), "cp")
+    if cp != 1:
+        raise AicEvaluationError("AIC context parallelism requires CP=1")
+    moe_tp = _aic_positive_int(
+        configuration.get("moe_tp", parsed.get("etp", None if num_experts else 1)),
+        "moe_tp",
+    )
+    ep = _aic_positive_int(
+        configuration.get("moe_ep", parsed.get("ep", None if num_experts else 1)),
+        "moe_ep",
+    )
+    if num_experts:
+        # shortcut: local whole-expert layouts only; expand with DP-group support.
+        if moe_tp != 1 or dp != 1 or ep != tp or num_experts % ep:
+            raise AicEvaluationError(
+                "AIC MoE requires MOE_TP=1, attention_DP=1, "
+                "and MOE_EP=TP dividing the expert count"
+            )
+    elif moe_tp != 1 or ep != 1:
+        raise AicEvaluationError("AIC dense models require MOE_TP=MOE_EP=1")
+    worker_devices = configuration.get("num_total_gpus")
+    if (
+        worker_devices is not None
+        and _aic_positive_int(worker_devices, "num_total_gpus") != tp * pp * dp
+    ):
+        raise AicEvaluationError("AIC worker GPU count does not match TP/PP/DP")
+    return tp, pp, dp, ep
 
 
 def _resources_with_free_capacity(
@@ -1056,6 +1444,76 @@ def _model_payload(value: object) -> dict[str, Any]:
             "ranks": [_model_payload(rank) for rank in ranks],
         }
     raise TypeError(f"Store value {type(value).__name__} is not serializable")
+
+
+def _catalog_for_job(known: Mapping[str, object]) -> dict[str, Any]:
+    """Return the optional model-catalog payload attached to a Store job."""
+    value = known.get("_model_catalog")
+    return _mapping(value, "model catalog") if isinstance(value, Mapping) else {}
+
+
+def _catalog_gpu_value(
+    catalog: Mapping[str, object], field: str, gpu_type: str
+) -> object | None:
+    """Resolve a model-catalog profile for the actual target GPU."""
+    entries = catalog.get(field)
+    if not isinstance(entries, list):
+        return None
+    target = _hardware_key(gpu_type)
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        if _hardware_key(str(entry.get("gpu_type", ""))) == target:
+            return entry.get("value")
+    return None
+
+
+def _known_or_catalog(
+    known: Mapping[str, object],
+    catalog: Mapping[str, object],
+    field: str,
+    default: object,
+    *,
+    gpu_type: str | None = None,
+) -> object:
+    """Prefer a per-job override, then the seeded model catalog, then a default."""
+    value = known.get(field)
+    if value is not None:
+        return value
+    value = (
+        _catalog_gpu_value(catalog, field, gpu_type)
+        if gpu_type is not None
+        else catalog.get(field)
+    )
+    return default if value is None else value
+
+
+def _catalog_launch_config(
+    catalog: Mapping[str, object], gpu_type: str
+) -> dict[str, object]:
+    """Copy model launch defaults, resolving per-GPU fields without substitution."""
+    result: dict[str, object] = {}
+    for field in (
+        "engine_name",
+        "engine_version",
+        "max_model_len",
+        "chunk_size",
+        "scheduling_policy",
+        "preemption_policy",
+        "router_policy",
+    ):
+        if catalog.get(field) is not None:
+            result[field] = catalog[field]
+    for field in (
+        "max_num_seq",
+        "max_num_batched_tokens",
+        "block_size",
+        "kvcache_dtype",
+    ):
+        value = _catalog_gpu_value(catalog, field, gpu_type)
+        if value is not None:
+            result[field] = value
+    return result
 
 
 def _known_job_fields(
@@ -1192,6 +1650,7 @@ def _load_settings(values: Mapping[str, object]) -> AicSettings:
     version_value = values.get("backend_version")
     versions = _mapping(values.get("backend_versions", {}), "backend_versions")
     mappings = _mapping(values.get("system_mappings", {}), "system_mappings")
+    model_configs_root = values.get("model_configs_root")
     return AicSettings(
         backend=_text(values.get("backend"), "backend"),
         backend_version=(
@@ -1223,6 +1682,11 @@ def _load_settings(values: Mapping[str, object]) -> AicSettings:
         tick_timeout_seconds=_positive_number(
             values.get("tick_timeout_seconds", _AIC_TICK_TIMEOUT_SECONDS),
             "tick_timeout_seconds",
+        ),
+        model_configs_root=(
+            None
+            if model_configs_root is None
+            else Path(_text(model_configs_root, "model_configs_root"))
         ),
     )
 

@@ -25,6 +25,7 @@ class PlannerContext:
     scenario: Scenario
     koi_root: Path | None
     koi_args: list[str]
+    llmservingsim_root: Path | None = None
 
 
 class PlannerDriver(Protocol):
@@ -181,10 +182,15 @@ def _build_aic(context: PlannerContext) -> PlannerDriver:
     """Build the existing Dynamo AIC baseline with its standard backend."""
     from aic import AicPlannerDriver
 
+    settings: dict[str, object] = {"backend": "vllm"}
+    if context.llmservingsim_root is not None:
+        settings["model_configs_root"] = str(
+            context.llmservingsim_root / "configs" / "model"
+        )
     return AicPlannerDriver.build(
         context.user_id,
         context.scenario,
-        {"backend": "vllm"},
+        settings,
         context.postgres,
     )
 

@@ -71,6 +71,7 @@ def main(argv: list[str] | None = None) -> None:
             scenario=scenario,
             koi_root=args.koi_root,
             koi_args=list(args.koi_arg),
+            llmservingsim_root=args.llmservingsim_root,
         ),
     )
     print("[cluster-sim] Preparing workloads", flush=True)
